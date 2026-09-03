@@ -82,6 +82,7 @@ export const CartItem = z.object({
   id: z.string(),
   productId: z.string(),
   variantId: z.string(),
+  handle: z.string().optional(),
   title: z.string(),
   variantTitle: z.string(),
   quantity: z.number().int().positive(),

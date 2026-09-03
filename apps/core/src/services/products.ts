@@ -151,7 +151,9 @@ export async function listProducts(deps: AppDeps, storeId: string, q: Pagination
     q.collectionId ? inArray(products.id, deps.db.select({ id: collectionProducts.productId }).from(collectionProducts).where(eq(collectionProducts.collectionId, q.collectionId))) : undefined,
   );
   const [{ total }] = await deps.db.select({ total: count() }).from(products).where(where);
-  const rows = await deps.db.select().from(products).where(where).orderBy(q.sort === "title" ? asc(products.title) : desc(products.createdAt)).limit(q.pageSize).offset(offsetOf(q));
+  const minPrice = sql<number>`(select min(${productVariants.priceCents}) from ${productVariants} where ${productVariants.productId} = ${products.id})`;
+  const order = q.sort === "title" ? asc(products.title) : q.sort === "price_asc" ? asc(minPrice) : q.sort === "price_desc" ? desc(minPrice) : q.sort === "oldest" ? asc(products.createdAt) : desc(products.createdAt);
+  const rows = await deps.db.select().from(products).where(where).orderBy(order).limit(q.pageSize).offset(offsetOf(q));
   const ids = rows.map((r) => r.id);
   const variants = ids.length ? await deps.db.select().from(productVariants).where(inArray(productVariants.productId, ids)).orderBy(asc(productVariants.sort)) : [];
   const byProduct = new Map<string, typeof variants>();

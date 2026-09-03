@@ -44,11 +44,11 @@ export function assignVariant(exp: { id: string; variants: { key: string }[]; tr
 
 export async function activeAssignments(deps: AppDeps, storeId: string, sessionId: string, target?: string) {
   const running = await deps.db.select().from(experiments).where(and(eq(experiments.storeId, storeId), eq(experiments.status, "running")));
-  const out: Record<string, { variant: string; surface: string; payload: Record<string, unknown> }> = {};
+  const out: Record<string, { variant: string; surface: string; target: string | null; payload: Record<string, unknown> }> = {};
   for (const e of running) {
     if (e.target && target && e.target !== target && !target.startsWith(e.target)) continue;
     const key = assignVariant(e, sessionId);
-    out[e.id] = { variant: key, surface: e.surface, payload: e.variants.find((v) => v.key === key)?.payload ?? {} };
+    out[e.id] = { variant: key, surface: e.surface, target: e.target, payload: e.variants.find((v) => v.key === key)?.payload ?? {} };
   }
   return out;
 }

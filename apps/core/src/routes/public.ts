@@ -28,7 +28,7 @@ import { listArticles, getArticle, rss } from "../services/blog.js";
 import { upsertCustomer, customerLogin } from "../services/customers.js";
 import { listSubscriptions, portalAction } from "../services/subscriptions.js";
 import { signAccessToken, verifyAccessToken } from "../lib/auth.js";
-import { PLANS } from "@kiln/shared";
+import { PLANS, Address } from "@kiln/shared";
 import { CATALOG, catalogCategories } from "@kiln/plugins";
 
 type Vars = { store: NonNullable<Awaited<ReturnType<typeof getStoreBySlugOrHost>>>; sessionId?: string };
@@ -63,13 +63,14 @@ export function publicRoutes(deps: AppDeps) {
     const [cols, plugins, regionsAll, merch] = await Promise.all([listCollections(deps, store.id), storefrontPluginConfig(deps, store.id, envKind === "draft"), listRegions(deps, store.id), listMerch(deps, store.id)]);
     const region = regionForCountry(regionsAll, c.req.header("x-vercel-ip-country") ?? c.req.header("cf-ipcountry"));
     const rds = await deps.db.select().from(redirects).where(eq(redirects.storeId, store.id));
-    return c.json({ id: store.id, name: store.name, slug: store.slug, status: store.status, brand: { ...store.brand, ...env.theme.brand }, theme: env.theme, version: env.version, environment: envKind, url: storefrontUrl(deps, store), collections: cols.map((x) => ({ id: x.id, handle: x.handle, title: x.title, productCount: x.productCount })), plugins, merch: merch.filter((m) => m.enabled), region: region ? { id: region.id, currency: region.currency, countries: region.countries } : null, regions: regionsAll.map((x) => ({ id: x.id, name: x.name, currency: x.currency, countries: x.countries })), redirects: rds.map((x) => ({ from: x.fromPath, to: x.toPath, code: x.code })), stripePublishable: process.env.STRIPE_PUBLISHABLE_KEY ?? null, paymentMode: deps.stripe && store.stripeAccountId ? "stripe" : "test" });
+    return c.json({ id: store.id, name: store.name, slug: store.slug, status: store.status, brand: { ...store.brand, ...env.theme.brand }, theme: env.theme, version: env.version, environment: envKind, url: storefrontUrl(deps, store), collections: cols.map((x) => ({ id: x.id, handle: x.handle, title: x.title, productCount: x.productCount })), plugins, merch: merch.filter((m) => m.enabled), region: region ? { id: region.id, currency: region.currency, countries: region.countries, freeShippingThresholdCents: region.freeShippingThresholdCents, taxRateBps: region.taxRateBps } : null, regions: regionsAll.map((x) => ({ id: x.id, name: x.name, currency: x.currency, countries: x.countries })), redirects: rds.map((x) => ({ from: x.fromPath, to: x.toPath, code: x.code })), stripePublishable: process.env.STRIPE_PUBLISHABLE_KEY ?? null, paymentMode: deps.stripe && store.stripeAccountId ? "stripe" : "test" });
   });
   s.get("/products", async (c) => {
     const col = c.req.query("collection");
     const colId = col ? (await getCollection(deps, st(c).id, col).catch(() => null))?.id : undefined;
     if (col && !colId) return c.json({ items: [], total: 0, page: 1, pageSize: 24 });
-    const r = await listProducts(deps, st(c).id, { page: Number(c.req.query("page") ?? 1), pageSize: Math.min(48, Number(c.req.query("pageSize") ?? 24)), q: c.req.query("q"), status: "published", collectionId: colId, sort: c.req.query("sort") });
+    const ids = (c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    const r = await listProducts(deps, st(c).id, { page: Number(c.req.query("page") ?? 1), pageSize: Math.min(48, Number(c.req.query("pageSize") ?? 24)), q: c.req.query("q"), status: "published", collectionId: colId, sort: c.req.query("sort"), ids: ids.length ? ids : undefined });
     return c.json(r);
   });
   s.get("/products/:handle", async (c) => {
@@ -158,6 +159,12 @@ export function publicRoutes(deps: AppDeps) {
   s.post("/account/login", async (c) => { const b = await parseBody(c, z.object({ email: z.string().email(), password: z.string() })); const customer = await customerLogin(deps, st(c).id, b.email, b.password); return c.json({ token: await signAccessToken(deps.env.jwtSecret, `cus:${customer.id}`), customer: { id: customer.id, email: customer.email, firstName: customer.firstName } }); });
   const customerFrom = async (c: { req: { header: (k: string) => string | undefined } }, storeId: string) => { const h = c.req.header("authorization") ?? ""; const sub = h.startsWith("Bearer ") ? await verifyAccessToken(deps.env.jwtSecret, h.slice(7)) : null; if (!sub?.startsWith("cus:")) throw notFound("Account"); const cu = await deps.db.query.customers.findFirst({ where: and(eq(customers.id, sub.slice(4)), eq(customers.storeId, storeId)) }); if (!cu) throw notFound("Account"); return cu; };
   s.get("/account", async (c) => { const cu = await customerFrom(c, st(c).id); const os = await deps.db.select().from(orders).where(and(eq(orders.storeId, st(c).id), eq(orders.customerId, cu.id))).orderBy(desc(orders.createdAt)).limit(20); return c.json({ customer: { id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, addresses: cu.addresses, acceptsMarketing: cu.acceptsMarketing }, orders: os, subscriptions: await listSubscriptions(deps, st(c).id, cu.id) }); });
+  s.patch("/account", async (c) => {
+    const cu = await customerFrom(c, st(c).id);
+    const b = await parseBody(c, z.object({ firstName: z.string().optional(), lastName: z.string().optional(), phone: z.string().optional(), acceptsMarketing: z.boolean().optional(), addresses: z.array(Address).optional(), password: z.string().min(8).optional() }));
+    const { customer } = await upsertCustomer(deps, st(c).id, { email: cu.email, ...b });
+    return c.json({ customer: { id: customer.id, email: customer.email, firstName: customer.firstName, lastName: customer.lastName, phone: customer.phone, addresses: customer.addresses, acceptsMarketing: customer.acceptsMarketing } });
+  });
   s.post("/account/subscriptions/:id/:action", async (c) => { const cu = await customerFrom(c, st(c).id); const subs = await listSubscriptions(deps, st(c).id, cu.id); if (!subs.some((x) => x.id === c.req.param("id"))) throw notFound("Subscription"); return c.json(await portalAction(deps, st(c).id, c.req.param("id"), c.req.param("action") as never, (await parseBody(c, z.object({ cadence: z.string().optional() }))).cadence)); });
 
   // Brand assets & SEO/GEO files

@@ -34,7 +34,7 @@ export async function addToCart(deps: AppDeps, storeId: string, cartId: string, 
   if (extra.subscriptionCadence && product.subscription?.enabled) unitPriceCents = Math.round(unitPriceCents * (1 - product.subscription.discountPercent / 100));
   if (extra.metadata?.engraving && typeof extra.metadata.engravingFeeCents === "number") unitPriceCents += extra.metadata.engravingFeeCents;
   if (existing) existing.quantity = wanted;
-  else items.push({ id: newId("li"), productId: product.id, variantId, title: product.title, variantTitle: variant.title, quantity, unitPriceCents, imageUrl: variant.imageUrl ?? product.media[0]?.url, subscriptionCadence: extra.subscriptionCadence, metadata: extra.metadata });
+  else items.push({ id: newId("li"), productId: product.id, handle: product.handle, variantId, title: product.title, variantTitle: variant.title, quantity, unitPriceCents, imageUrl: variant.imageUrl ?? product.media[0]?.url, subscriptionCadence: extra.subscriptionCadence, metadata: extra.metadata });
   const [updated] = await deps.db.update(carts).set({ items }).where(eq(carts.id, cartId)).returning();
   return updated!;
 }
