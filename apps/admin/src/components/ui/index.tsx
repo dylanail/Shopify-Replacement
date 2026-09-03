@@ -279,8 +279,8 @@ export function Table({ children, className }: { children: ReactNode; className?
 export function Th({ children, className, right }: { children?: ReactNode; className?: string; right?: boolean }) {
   return <th className={cn("eyebrow whitespace-nowrap border-b border-line px-3 py-2 text-left font-semibold", right && "text-right", className)}>{children}</th>;
 }
-export function Td({ children, className, right, colSpan }: { children?: ReactNode; className?: string; right?: boolean; colSpan?: number }) {
-  return <td colSpan={colSpan} className={cn("border-b border-line px-3 py-2 align-middle", right && "text-right", className)}>{children}</td>;
+export function Td({ children, className, right, colSpan, title }: { children?: ReactNode; className?: string; right?: boolean; colSpan?: number; title?: string }) {
+  return <td colSpan={colSpan} title={title} className={cn("border-b border-line px-3 py-2 align-middle", right && "text-right", className)}>{children}</td>;
 }
 export function Tr({ children, onClick, className }: { children: ReactNode; onClick?: () => void; className?: string }) {
   return <tr onClick={onClick} className={cn(onClick && "cursor-pointer hover:bg-cream/60", className)}>{children}</tr>;
