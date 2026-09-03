@@ -13,6 +13,12 @@ const dir = mkdtempSync(join(tmpdir(), 'amboras-test-'))
 process.env.AMBORAS_DB = join(dir, 'test.db')
 process.env.PORT = '0'
 process.env.AMBORAS_LOG_LEVEL = 'error'
+// main.ts reads a developer's .env at boot. Set the host variables here so the
+// file cannot reach in and change what these assertions are about: anything
+// already in the environment wins over the file, empty string included.
+process.env.AMBORAS_STOREFRONT_HOST = ''
+process.env.AMBORAS_PUBLIC_ORIGIN = ''
+process.env.AMBORAS_ADMIN_HOST = ''
 
 const { server } = await import('../src/main.ts')
 await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())))
@@ -277,8 +283,10 @@ async function upload(path: string, fields: Record<string, string>, file: { fiel
 test('a second store can be started from the admin, with a photo, and both show in the hub', async () => {
   const hub = await call('/admin/stores')
   assert.equal(hub.status, 200)
-  assert.match(hub.text, /Start a new store/)
+  assert.match(hub.text, /New store/)
   assert.match(hub.text, /Ironjaw/)
+  assert.match(hub.text, /orders \/ 30d/, 'the hub says whether each store is a business yet')
+  assert.ok(!/class="rail"/.test(hub.text), 'the hub is the account, not one store: no store rail around it')
 
   const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
   assert.match(decodeURIComponent(built.location), /Marrow Lab is built/)
@@ -435,4 +443,60 @@ test('the scheme a proxy forwards is the scheme the request is seen under', asyn
   assert.equal(fake({ 'x-forwarded-proto': 'https' }).url.origin, 'https://admin.example.com')
   assert.equal(fake({ 'x-forwarded-proto': 'https, http' }).url.origin, 'https://admin.example.com')
   assert.equal(fake({ 'x-forwarded-proto': 'ftp' }).url.origin, 'http://admin.example.com')
+})
+
+test('a signed-in account with no store lands on its own hub, not on a form it cannot leave', async () => {
+  // A second account, with its own cookie jar, so the first one's session is
+  // left alone: this is the moment the owner complained about.
+  const own = new Map<string, string>()
+  const mine = async (path: string, form?: Record<string, string>) => {
+    const response = await fetch(`${base}${path}`, {
+      method: form ? 'POST' : 'GET',
+      headers: {
+        accept: 'text/html',
+        cookie: [...own].map(([name, value]) => `${name}=${value}`).join('; '),
+        ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+      },
+      ...(form ? { body: new URLSearchParams(form).toString() } : {}),
+      redirect: 'manual',
+    })
+    for (const cookie of response.headers.getSetCookie()) {
+      const [pair] = cookie.split(';')
+      const [name, value = ''] = (pair ?? '').split('=')
+      if (name) own.set(name.trim(), decodeURIComponent(value))
+    }
+    return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+  }
+
+  await mine('/register', { email: 'greta@example.com', password: 'a-long-enough-password', name: 'Greta' })
+  await mine('/logout', {})
+
+  const signedIn = await mine('/login', { email: 'greta@example.com', password: 'a-long-enough-password' })
+  assert.equal(signedIn.location, '/admin')
+
+  const dash = await mine('/admin')
+  assert.equal(dash.location, '/admin/stores', 'no store yet means the account hub, never /onboarding')
+
+  const hub = await mine('/admin/stores')
+  assert.equal(hub.status, 200, 'the hub renders for an account with nothing in it')
+  assert.match(hub.text, /No stores yet, Greta/)
+  assert.match(hub.text, /Build your first store/)
+  assert.match(hub.text, /Sign out/)
+
+  // Any store-scoped page falls back to the same place rather than a wizard.
+  assert.equal((await mine('/admin/orders')).location, '/admin/stores')
+
+  // And onboarding always has a way back out of it.
+  const form = await mine('/onboarding')
+  assert.equal(form.status, 200)
+  assert.match(form.text, /href="\/admin\/stores"/, 'onboarding is escapable with no stores on the account')
+})
+
+test('opening a store from the hub can land on a page other than the dashboard, and only inside the admin', async () => {
+  const build = await call('/admin/switch?storeId=&to=%2Fadmin%2Fbuild')
+  assert.equal(build.location, '/admin/build')
+  const away = await call('/admin/switch?to=https%3A%2F%2Felsewhere.example')
+  assert.equal(away.location, '/admin', 'a switch cannot be turned into an open redirect')
+  const protocolRelative = await call('/admin/switch?to=%2F%2Felsewhere.example%2Fadmin')
+  assert.equal(protocolRelative.location, '/admin')
 })

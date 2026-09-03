@@ -37,6 +37,7 @@ import { onboard } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
 import { shell } from './shell.ts'
 import { authPage, onboardingPage } from './auth-pages.ts'
+import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
 import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
@@ -165,7 +166,7 @@ export function adminRouter(): Router {
 
   router.get('/onboarding', (ctx) => {
     const user = requireUser(db(), ctx)
-    return html(onboardingPage(user.name || user.email, ctx.query.get('error'), listStores(db(), user.id).length > 0))
+    return html(onboardingPage(user.name || user.email, ctx.query.get('error'), listStores(db(), user.id).length))
   })
 
   router.post('/onboarding', async (ctx) => {
@@ -206,9 +207,27 @@ export function adminRouter(): Router {
     return page(ctx, current, 'dashboard', 'Dashboard', pages.dashboard(ctxFor(current, ctx), range(ctx)))
   })
 
+  /**
+   * The account's own page, not a store's: it has to answer for a user with
+   * no stores at all, so it deliberately does not go through session().
+   */
   router.get('/admin/stores', (ctx) => {
-    const current = session(ctx)
-    return page(ctx, current, 'stores', 'Your stores', pages.storesPage(ctxFor(current, ctx), current.stores))
+    const user = requireUser(db(), ctx)
+    const stores = listStores(db(), user.id)
+    const name = user.name || user.email.split('@')[0] || 'there'
+    return html(
+      accountShell({
+        userName: name,
+        title: 'Your stores',
+        body: storesHub({
+          db: db(),
+          stores,
+          userName: name,
+          origin: process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin,
+          ...(ctx.query.get('flash') ? { flash: ctx.query.get('flash') as string } : {}),
+        }),
+      }),
+    )
   })
 
   router.get('/admin/research', (ctx) => {
@@ -581,7 +600,10 @@ export function adminRouter(): Router {
   router.get('/admin/switch', (ctx) => {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
-    return redirect('/admin')
+    // `to` lets the hub open a store straight onto a page — Build, say — but it
+    // is a path on this admin and nothing else.
+    const to = ctx.query.get('to') ?? ''
+    return redirect(/^\/admin(\/|$)/.test(to) && !to.startsWith('//') ? to : '/admin')
   })
 
   router.get('/admin/ai', (ctx) => {

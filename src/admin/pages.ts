@@ -27,7 +27,6 @@ import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
-import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
@@ -741,27 +740,6 @@ export function paymentsPage(ctx: Ctx): string {
 }
 
 /* --------------------------------------------------------------- stores hub */
-
-export function storesPage(ctx: Ctx, stores: Store[]): string {
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Your stores</h1>
-    <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}. Each one is its own catalog, customers, orders, brand and address.</p></div>
-    <a class="btn primary" href="/onboarding">+ Start a new store</a></div>
-  <div class="grid3">${stores.map((store) => {
-    const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
-    const sales = salesSummary(ctx.db, store.id, 30)
-    return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
-      <div class="row" style="justify-content:space-between;align-items:flex-start">
-        <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
-          <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
-        <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
-      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)}</div>
-      <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
-      <div class="row" style="margin-top:.4rem">
-        <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
-        <a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">Storefront ↗</a></div>
-    </div>`
-  }).join('')}</div>`
-}
 
 /* ------------------------------------------------------------- research page */
 

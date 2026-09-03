@@ -1,3 +1,5 @@
+// First, before any module that reads its settings at import time.
+import './lib/env.ts'
 import { createServer } from 'node:http'
 import { getDb } from './lib/db.ts'
 import { HttpError, makeCtx, Raw, redirect, send, sendError, type Ctx } from './lib/http.ts'
@@ -116,8 +118,10 @@ const server = createServer(async (req, res) => {
     }
     throw new HttpError(404, 'Nothing here')
   } catch (error) {
+    // Signing in with no store yet is an account with nothing in it, not a
+    // wizard: the hub says so and offers the one button that fixes it.
     if (error instanceof NoStores) {
-      await send(res, redirect('/onboarding'))
+      await send(res, redirect('/admin/stores'))
       return
     }
     if (error instanceof HttpError && error.status === 401 && wantsHtml) {

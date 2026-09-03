@@ -61,9 +61,9 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
     <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
 }
 
-export function onboardingPage(name: string, error: string | null, hasStores = false): string {
+export function onboardingPage(name: string, error: string | null, storeCount = 0): string {
   return frame('Build your store', `
-    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin">← Back to your stores</a></p>' : ''}
+    <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${storeCount ? `← Your stores (${storeCount})` : '← Your account'}</a></p>
     <h1>What are you selling?</h1>
     <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Research runs first; then naming, brand, three products with pages and imagery, and the promotions all run at once.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
