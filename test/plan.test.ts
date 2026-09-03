@@ -26,7 +26,8 @@ import { customCatalog, customDefinitions, listCustomBlocks, upsertCustomBlock }
 import { acceptSuggestion } from '../src/creative/briefs.ts'
 import { applyAuthoring } from '../src/agent/directions.ts'
 import { editorPage } from '../src/admin/editor.ts'
-import { getPage } from '../src/pages/store.ts'
+import { getPage, renderPageBody } from '../src/pages/store.ts'
+import { layout } from '../src/storefront/render.ts'
 import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
@@ -551,7 +552,7 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.throws(() => customDefinition({ type: 'strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /type must be "custom-"/)
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /no field "headline"/)
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [{ key: 'width', type: 'string' }], template: '<p>{{width}}</p>' }), /reserved/)
-  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no scripts/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no <script>/)
 
   // Stored, it renders through the same path as the catalog and shows in the editor palette under Custom.
   const block = upsertCustomBlock(db, store.id, { name: 'Ingredient strip', description: 'A row of ingredient chips with a percentage each', fields: [{ key: 'headline', type: 'string', default: 'What is in it' }, { key: 'items', type: 'string', multiline: true, default: 'Amla|100%' }], template: '<h2 class="head">{{headline}}</h2><div class="cols">{{#each items}}<div class="col"><h3>{{0}}</h3><p>{{1}}</p></div>{{/each}}</div>', css: '.chip{color:red}', source: 'model' })
@@ -606,6 +607,47 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'steps', 'footer'])
   assert.equal(written[0]?.settings.text, 'New')
   assert.equal(written[2]?.settings.headline, 'Three steps')
+})
+
+test('css and js can be written for a page, a block, or the whole store', async () => {
+  const { db, store, product } = shop()
+  const actor = { type: 'user' as const, id: 'u' }
+
+  // A block with a script: it runs once per page that uses the block, however many instances there are.
+  const tabs = upsertCustomBlock(db, store.id, { name: 'Tabs', fields: [{ key: 'items', type: 'string', multiline: true, default: 'One|First\nTwo|Second' }], template: '<div class="tabs">{{#each items}}<button type="button" data-tab="{{@index}}">{{0}}</button>{{/each}}</div>', css: '.tabs button{cursor:pointer}', js: 'document.querySelectorAll(".blk--custom-tabs button").forEach(function(b){b.addEventListener("click",function(){b.classList.add("on")})})', source: 'model' })
+  assert.equal(tabs.js?.includes('addEventListener'), true)
+  assert.throws(() => upsertCustomBlock(db, store.id, { name: 'Bad', fields: [], template: '<p>x</p><script>y()</script>' }), /js field/)
+  const page = createPage(db, store.id, { title: 'T', blocks: [{ id: 't1', type: 'custom-tabs', settings: {} }, { id: 't2', type: 'custom-tabs', settings: {} }, { id: 'h', type: 'custom-html', settings: { html: '<p>plain</p>' } }] })
+  const body = renderPageBody(page, blockContextFor(db, store, '/s/x'))
+  assert.equal((body.match(/data-custom-js="custom-tabs"/g) ?? []).length, 1, 'the block script is on the page once')
+  assert.equal((body.match(/<button type="button" data-tab="1">One<\/button>/g) ?? []).length, 2, 'both instances render')
+  assert.ok(!renderPageBody(createPage(db, store.id, { title: 'U', blocks: [] }), blockContextFor(db, store, '/s/x')).includes('data-custom-js'), 'a page without the block carries no script for it')
+
+  // A page can carry its own css and js through the custom-code block, from the suggester or the writer.
+  const accepted = acceptSuggestion({ blocks: [{ type: 'hero', why: 'p' }, { type: 'custom-code', why: 'reveal', css: '.blk{opacity:1}', js: '' }, { type: 'custom-code', why: 'empty', css: '', js: '' }, { type: 'footer', why: 'f' }] }, [], product)
+  assert.deepEqual(accepted.map((entry) => entry.type), ['hero', 'custom-code', 'footer'])
+  assert.equal(accepted[1]?.settings?.css, '.blk{opacity:1}')
+  const written = applyAuthoring([{ id: 'h', type: 'headline', settings: { text: 'x' } }], { blocks: [], additions: [
+    { after: 'h', type: 'custom-code', values: [{ key: 'js', value: 'console.log(1)' }] },
+    { after: 'h', type: 'custom-code', values: [{ key: 'js', value: '<script src="https://evil.example/x.js"></script>' }] },
+    { after: 'h', type: 'custom-code', values: [] },
+  ] })
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-code'])
+  assert.equal(written[1]?.settings.js, 'console.log(1)')
+
+  // Store-wide css and js: on the draft theme through the tool, appended by default, on every page after the theme.
+  await execute('set_store_code', { css: '.btn{border-radius:999px}' }, { db, storeId: store.id, actor, page: 'ai' })
+  await execute('set_store_code', { css: '.head{letter-spacing:.02em}', js: 'document.body.dataset.ready="1"' }, { db, storeId: store.id, actor, page: 'ai' })
+  await assert.rejects(execute('set_store_code', { js: '<script src="https://x.example/a.js"></script>' }, { db, storeId: store.id, actor, page: 'ai' }), /No external scripts/)
+  const theme = environment(db, store.id, 'draft').theme
+  assert.match(theme.customCss ?? '', /999px[\s\S]*letter-spacing/, 'append keeps what was there')
+  const html = layout({ db, store, env: environment(db, store.id, 'draft'), base: '/s/x', preview: true, cart: null, totals: null }, { title: 'T', description: '', body: '<main id="main"></main>' })
+  assert.match(html, /<style data-store-css>\.btn\{border-radius:999px\}/)
+  assert.match(html, /<script data-store-js>document\.body\.dataset\.ready="1"<\/script>/)
+  await execute('set_store_code', { css: 'body{margin:0}', mode: 'replace' }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.equal(environment(db, store.id, 'draft').theme.customCss, 'body{margin:0}')
+  await execute('set_store_code', { clear: true }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.equal(environment(db, store.id, 'draft').theme.customJs, '')
 })
 
 test('behaviour events and funnel split tests are counted per session and judged on revenue per session', () => {

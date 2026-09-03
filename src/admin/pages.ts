@@ -425,6 +425,11 @@ export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): st
           <button class="btn primary" type="submit">Save to draft</button></form></div>
       <div class="card"><h2>Sections</h2><p class="muted" style="font-size:12px">${draft.theme.sections.map((section) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(section)}</span>`).join('')}</p>
         <p class="muted" style="font-size:11.5px;margin-top:.6rem">Ask the assistant to reorder or drop sections — it edits the draft, never the live theme.</p></div>
+      <div class="card" id="code"><h2>Custom code</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">CSS and a script for every page, after the theme. The assistant writes here too (set_store_code); one page gets a custom-code block, one section a block of its own.</p>
+        <form method="post" action="/admin/theme/code">
+          <div class="field"><label>CSS</label><textarea name="customCss" rows="4" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${escapeHtml(draft.theme.customCss ?? '')}</textarea></div>
+          <div class="field"><label>JavaScript (end of every page)</label><textarea name="customJs" rows="4" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${escapeHtml(draft.theme.customJs ?? '')}</textarea></div>
+          <button class="btn primary" type="submit">Save to draft</button></form></div>
       <div class="card"><h2>Build log</h2>${draft.buildLog.slice(-6).reverse().map((entry) => `<p class="muted" style="font-size:11.5px;margin:.2rem 0">${entry.at.slice(11, 19)} — ${escapeHtml(entry.message)}</p>`).join('') || '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
     </div></div>
   <div class="grid2" style="margin-top:1rem"><div>${healthCard(ctx, health)}</div><div>${popupCard(ctx)}${legalCard(ctx)}</div></div>
@@ -673,6 +678,7 @@ function customBlocksCard(ctx: Ctx): string {
       <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|"></textarea></div>
       <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;"></textarea></div>
       <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2"></textarea></div>
+      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2"></textarea></div>
       <button class="btn primary" type="submit">Save the block</button></form></details></div>`
 }
 

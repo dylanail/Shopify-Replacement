@@ -27,6 +27,7 @@ function rowToBlock(row: Row): CustomBlock {
     fields: json<CustomField[]>(row.fields, []),
     template: row.template as string,
     css: (row.css as string) ?? '',
+    js: (row.js as string) ?? '',
     source: (row.source as CustomBlock['source']) ?? 'owner',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -54,17 +55,17 @@ export function slugType(name: string): string {
  */
 export function upsertCustomBlock(db: Db, storeId: string, input: Partial<CustomBlockInput> & { name: string; template: string; source?: CustomBlock['source'] }): CustomBlock {
   const type = input.type?.trim() || slugType(input.name)
-  const candidate: CustomBlockInput = { type, name: input.name, description: input.description ?? '', icon: input.icon ?? '✚', fields: input.fields ?? [], template: input.template, css: input.css ?? '' }
+  const candidate: CustomBlockInput = { type, name: input.name, description: input.description ?? '', icon: input.icon ?? '✚', fields: input.fields ?? [], template: input.template, css: input.css ?? '', js: input.js ?? '' }
   const definition = customDefinition(candidate)
   const defaults = Object.fromEntries(Object.entries(definition.schema).map(([key, field]) => [key, 'default' in field ? field.default : undefined]))
   definition.render(defaults, { storeName: 'Store', base: '', currency: 'USD', brand: {}, products: [], reviews: [], bundles: [] }, { id: 'probe', type, settings: defaults })
   const existing = getCustomBlock(db, storeId, type)
   const timestamp = now()
   if (existing) {
-    db.run('UPDATE custom_blocks SET name = ?, description = ?, icon = ?, fields = ?, template = ?, css = ?, source = ?, updated_at = ? WHERE id = ?', candidate.name, candidate.description, candidate.icon, JSON.stringify(candidate.fields), candidate.template, candidate.css, input.source ?? existing.source, timestamp, existing.id)
+    db.run('UPDATE custom_blocks SET name = ?, description = ?, icon = ?, fields = ?, template = ?, css = ?, js = ?, source = ?, updated_at = ? WHERE id = ?', candidate.name, candidate.description, candidate.icon, JSON.stringify(candidate.fields), candidate.template, candidate.css, candidate.js, input.source ?? existing.source, timestamp, existing.id)
     return getCustomBlock(db, storeId, type) as CustomBlock
   }
-  db.insert('custom_blocks', { id: id('cblk'), store_id: storeId, type, name: candidate.name, description: candidate.description, icon: candidate.icon, fields: candidate.fields, template: candidate.template, css: candidate.css, source: input.source ?? 'owner', created_at: timestamp, updated_at: timestamp })
+  db.insert('custom_blocks', { id: id('cblk'), store_id: storeId, type, name: candidate.name, description: candidate.description, icon: candidate.icon, fields: candidate.fields, template: candidate.template, css: candidate.css, js: candidate.js, source: input.source ?? 'owner', created_at: timestamp, updated_at: timestamp })
   return getCustomBlock(db, storeId, type) as CustomBlock
 }
 

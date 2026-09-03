@@ -52,6 +52,7 @@ export function layout(
 ${metaTags({ title: page.title, description: page.description, url: page.canonical ?? view.base, ...(page.image ? { image: page.image } : {}) })}
 ${fontLink(brand)}
 <style>${themeCss(brand, env.theme)}${BUNDLE_CSS}${PAGE_CSS}</style>
+${env.theme.customCss ? `<style data-store-css>${env.theme.customCss.replace(/<\/style/gi, '')}</style>` : ''}
 ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
@@ -84,6 +85,7 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
 </div></footer>`}
 ${page.bare ? '' : popupHtml(view.base, env.theme.popup)}
 ${view.preview ? '' : trackingScript(view.base)}
+${env.theme.customJs ? `<script data-store-js>${env.theme.customJs.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 </body></html>`
 }

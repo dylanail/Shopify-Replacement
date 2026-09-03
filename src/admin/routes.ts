@@ -334,7 +334,7 @@ export function adminRouter(): Router {
       return { key, label: label || key, type: kind, ...(type === 'text' ? { multiline: true } : {}), ...(fallback ? { default: kind === 'number' ? Number(fallback) : kind === 'boolean' ? fallback === 'true' : fallback } : {}) }
     })
     try {
-      const block = upsertCustomBlock(db(), current.store.id, { type: String(body.type ?? '').trim() || undefined, name: String(body.name ?? '').trim(), description: String(body.description ?? ''), icon: String(body.icon ?? '✚'), fields, template: String(body.template ?? ''), css: String(body.css ?? ''), source: 'owner' })
+      const block = upsertCustomBlock(db(), current.store.id, { type: String(body.type ?? '').trim() || undefined, name: String(body.name ?? '').trim(), description: String(body.description ?? ''), icon: String(body.icon ?? '✚'), fields, template: String(body.template ?? ''), css: String(body.css ?? ''), js: String(body.js ?? ''), source: 'owner' })
       return back(ctx, `Block "${block.name}" saved as ${block.type}. It is in the builder palette under Custom.`)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : String(error)}`)
@@ -719,6 +719,13 @@ export function adminRouter(): Router {
     }, { build: 'Edited from the store designer' })
     updateStore(db(), current.store.id, { brand: { announcement: String(body.announcement ?? '') } })
     return back(ctx, 'Draft saved. Publish to make it live.')
+  })
+
+  router.post('/admin/theme/code', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    setTheme(db(), current.store.id, { customCss: String(body.customCss ?? ''), customJs: String(body.customJs ?? '') }, { build: 'Store-wide css and js edited' })
+    return back(ctx, 'Custom code saved to the draft. Publish to make it live.')
   })
 
   router.post('/admin/publish', (ctx) => {

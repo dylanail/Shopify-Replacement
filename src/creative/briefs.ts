@@ -193,7 +193,7 @@ export type BlockSuggestion = { type: string; why: string; settings?: Record<str
 const CATALOG = BLOCKS.map((block) => ({ type: block.type, name: block.name, description: block.description }))
 
 const SUGGEST_SCHEMA = S.obj({
-  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly; or "custom-html" for a section no block does, with its HTML in html.'), why: S.str('One line: the job this block does at this point on the page.'), html: S.str('Only for custom-html: the section\'s HTML, using the theme classes (head, lead, cols, col, checks, btn, micro). Empty otherwise.') }), 'The page, top to bottom: eight to twenty blocks.'),
+  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly; "custom-html" for a section no block does, with its HTML in html; "custom-code" for css or a script the page needs, in css and js.'), why: S.str('One line: the job this block does at this point on the page.'), html: S.str('Only for custom-html: the section\'s HTML, using the theme classes (head, lead, cols, col, checks, btn, micro). Empty otherwise.'), css: S.str('Only for custom-code: CSS for this page. Empty otherwise.'), js: S.str('Only for custom-code: a script for this page, no external scripts. Empty otherwise.') }), 'The page, top to bottom: eight to twenty blocks.'),
   note: S.str('One sentence on the shape chosen and why.'),
 })
 
@@ -289,13 +289,15 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
  * store's own blocks, and a custom-html section when it wrote one. A
  * buy box is wired to the product; anything unknown is dropped.
  */
-export function acceptSuggestion(parsed: { blocks?: Array<BlockSuggestion & { html?: string }>; note?: string }, custom: CatalogEntry[], product: { id: string } | null): BlockSuggestion[] {
+export function acceptSuggestion(parsed: { blocks?: Array<BlockSuggestion & { html?: string; css?: string; js?: string }>; note?: string }, custom: CatalogEntry[], product: { id: string } | null): BlockSuggestion[] {
   const known = new Set([...CATALOG.map((entry) => entry.type), ...custom.map((entry) => entry.type)])
   return (parsed.blocks ?? [])
-    .filter((entry) => known.has(entry.type) && (entry.type !== 'custom-html' || Boolean(entry.html?.trim())))
-    .map(({ html, ...entry }) => {
+    .filter((entry) => known.has(entry.type))
+    .filter((entry) => (entry.type !== 'custom-html' || Boolean(entry.html?.trim())) && (entry.type !== 'custom-code' || Boolean(entry.css?.trim() || entry.js?.trim())))
+    .map(({ html, css, js, ...entry }) => {
       if (entry.type === 'buy-box' && product) return { ...entry, settings: { productId: product.id, buyNow: true } }
       if (entry.type === 'custom-html') return { ...entry, settings: { html: String(html ?? '') } }
+      if (entry.type === 'custom-code') return { ...entry, settings: { css: String(css ?? ''), js: String(js ?? '') } }
       return entry
     })
 }
@@ -312,7 +314,7 @@ export async function suggestBlocks(choice: ModelChoice | null, input: { goal: P
       input.research ? `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections.map((entry) => entry.objection), competitors: input.research.competitors.map((entry) => entry.name) })}` : '',
       `Blocks available (use the type exactly):\n${JSON.stringify(CATALOG)}`,
       custom.length ? `Blocks this store defined for itself (use these too):\n${JSON.stringify(custom)}` : '',
-      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta. If the page needs a section no block does, add it as type "custom-html" with the section\'s HTML in html, using the theme classes (head, lead, eyebrow, cols, col, checks, btn, micro) so it matches the rest; prefer a catalog block whenever one fits.',
+      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta. If the page needs a section no block does, add it as type "custom-html" with the section\'s HTML in html, using the theme classes (head, lead, eyebrow, cols, col, checks, btn, micro) so it matches the rest; if it needs styling or behaviour no block provides (an animation, a tab switcher, a sticky element), add one "custom-code" block with css and js for this page; prefer a catalog block whenever one fits.',
     ]
       .filter(Boolean)
       .join('\n\n')

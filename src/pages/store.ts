@@ -370,8 +370,11 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
   }
 }
 
+/** The blocks, the runtime, and the script of every custom block the page uses, once each. */
 export function renderPageBody(page: Page, context: BlockContext): string {
-  return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>`
+  const used = new Set(page.blocks.map((block) => block.type))
+  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${definition.js}\n})();</script>`)
+  return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>${scripts.join('')}`
 }
 
 export { BLOCK_RUNTIME }

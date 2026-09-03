@@ -268,8 +268,8 @@ const BLOCKS_SCHEMA = S.obj({
   additions: S.arr(
     S.obj({
       after: S.str('The id of the block this new section goes after; "" puts it first.'),
-      type: S.str('A catalog block type, or "custom-html" for a section no block does.'),
-      values: S.arr(S.obj({ key: S.str('A setting key of that block; "html" for custom-html.'), value: S.str('Its text.') }), 'The settings, as text.'),
+      type: S.str('A catalog block type; "custom-html" for a section no block does; "custom-code" for css and js this page needs.'),
+      values: S.arr(S.obj({ key: S.str('A setting key of that block; "html" for custom-html; "css" and "js" for custom-code.'), value: S.str('Its text.') }), 'The settings, as text.'),
       why: S.str('One line: what this section does that the layout was missing.'),
     }),
     'Sections the layout was missing, if any. Usually empty.',
@@ -297,13 +297,15 @@ export function applyAuthoring(blocks: BlockInstance[], parsed: Authored): Block
     return { ...block, settings }
   })
   for (const addition of parsed.additions ?? []) {
-    if (!addition || typeof addition.type !== 'string' || addition.type === 'custom-code') continue
+    if (!addition || typeof addition.type !== 'string') continue
     const definition = blockDefinition(addition.type)
     if (!definition) continue
     const settings: Record<string, unknown> = {}
     for (const { key, value } of addition.values ?? []) if (typeof key === 'string' && typeof value === 'string' && !NOT_TEXT.test(key) && key in definition.schema) settings[key] = value
     if (addition.type === 'custom-html' && !String(settings.html ?? '').trim()) continue
-    if (/<script\b/i.test(String(settings.html ?? ''))) continue
+    if (addition.type === 'custom-html' && /<script\b/i.test(String(settings.html ?? ''))) continue
+    if (addition.type === 'custom-code' && !String(settings.css ?? '').trim() && !String(settings.js ?? '').trim()) continue
+    if (addition.type === 'custom-code' && /<script\b[^>]*\bsrc=/i.test(String(settings.js ?? ''))) continue
     const block = newBlock(addition.type, settings)
     const at = addition.after ? rewritten.findIndex((entry) => entry.id === addition.after) : -1
     rewritten.splice(at + 1, 0, block)
@@ -334,7 +336,7 @@ export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInst
       `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
       `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
       extra,
-      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), steps "title|text|image URL", timeline stages "when|title|text", alternatives "name|why it fails", cost lines "item|cost", offer items "item|value", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro). Usually additions is empty.',
+      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), steps "title|text|image URL", timeline stages "when|title|text", alternatives "name|why it fails", cost lines "item|cost", offer items "item|value", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro); if the page needs styling or behaviour no block gives (a reveal on scroll, a tab switcher), add one "custom-code" with css and js. Usually additions is empty.',
     ].filter(Boolean).join('\n\n')
     const parsed = await completeJson<Authored>(choice, {
       task: 'pages',

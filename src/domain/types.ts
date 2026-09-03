@@ -208,6 +208,10 @@ export type Theme = {
   slots: Record<string, string[]>
   /** The one popup a store gets. Off unless enabled; never shown over the buy box on a phone. */
   popup?: Popup
+  /** CSS the owner or the assistant wrote for the whole store, inlined after the theme on every page. */
+  customCss?: string
+  /** A script for the whole store, at the end of every page. */
+  customJs?: string
 }
 
 export type Popup = {

@@ -93,7 +93,7 @@ export const pageTools: Tool[] = defineTools([
   {
     name: 'add_block',
     area: 'store',
-    description: 'Insert a section into a page: any catalog block, one of this store\'s own blocks, or, when nothing fits, "custom-html" with settings.html holding the section\'s HTML (the theme\'s classes — head, lead, cols, col, checks, btn — are available). Settings follow the block schema; anything left out takes its default. Position 0 is the top; omitted appends.',
+    description: 'Insert a section into a page: any catalog block, one of this store\'s own blocks, or, when nothing fits, "custom-html" with settings.html holding the section\'s HTML (the theme\'s classes — head, lead, cols, col, checks, btn — are available), or "custom-code" with settings.css and settings.js for styling or behaviour this one page needs (for the whole store use set_store_code). Settings follow the block schema; anything left out takes its default. Position 0 is the top; omitted appends.',
     schema: { pageId: { type: 'string', required: true }, type: { type: 'string', required: true }, settings: { type: 'object' }, position: { type: 'number', integer: true, min: 0 } },
     handler(args, ctx) {
       const type = args.type as string
@@ -113,7 +113,7 @@ export const pageTools: Tool[] = defineTools([
   {
     name: 'create_block',
     area: 'store',
-    description: 'Define a new reusable block for this store when no catalog block does the job (check list_blocks first). Give it fields and an HTML template over them: {{key}} escaped, {{{key}}} raw, {{#if key}}…{{else}}…{{/if}}, {{#each key}}…{{/each}} over the lines of a multiline field with {{0}} {{1}} for its "|" parts and {{.}} for the line, plus {{store.name}}, {{base}}, {{product.title}}, {{product.image}}, {{product.price}}, {{product.handle}}. The theme\'s classes (head, lead, eyebrow, cols, col, checks, btn, micro, rating) style it; add css only for what they do not cover. No scripts. The block then appears in the builder palette and can be placed with add_block.',
+    description: 'Define a new reusable block for this store when no catalog block does the job (check list_blocks first). Give it fields, an HTML template over them, and css and js when it needs them: {{key}} escaped, {{{key}}} raw, {{#if key}}…{{else}}…{{/if}}, {{#each key}}…{{/each}} over the lines of a multiline field with {{0}} {{1}} for its "|" parts and {{.}} for the line, plus {{store.name}}, {{base}}, {{product.title}}, {{product.image}}, {{product.price}}, {{product.handle}}. The theme\'s classes (head, lead, eyebrow, cols, col, checks, btn, micro, rating) style it; add css only for what they do not cover. No scripts. The block then appears in the builder palette and can be placed with add_block.',
     schema: {
       name: { type: 'string', required: true, help: 'What the owner will see in the palette, e.g. "Ingredient strip".' },
       type: { type: 'string', pattern: '^custom-[a-z0-9][a-z0-9-]{1,40}$', help: 'custom-… ; derived from the name when omitted. Reusing an existing type replaces that block.' },
@@ -121,11 +121,12 @@ export const pageTools: Tool[] = defineTools([
       icon: { type: 'string', help: 'One glyph or emoji.' },
       fields: { type: 'array', required: true, of: { type: 'object', fields: { key: { type: 'string', required: true, pattern: '^[a-z][a-zA-Z0-9]{0,30}$' }, label: { type: 'string' }, type: { type: 'string', enum: ['string', 'number', 'boolean'], required: true }, multiline: { type: 'boolean' }, default: { type: 'any' }, help: { type: 'string' } } }, max: 24 },
       template: { type: 'string', required: true, max: 40000 },
-      css: { type: 'string', max: 10000 },
+      css: { type: 'string', max: 10000, help: 'CSS for the block; the theme classes cover most of it.' },
+      js: { type: 'string', max: 20000, help: 'A script the block needs (a tab switcher, a counter). It runs once per page that uses the block; find the instances with document.querySelectorAll(".blk--<type>"). No external scripts.' },
     },
     handler(args, ctx) {
       const fields = (args.fields as CustomField[]).map((field) => ({ ...field, ...(field.default === undefined ? {} : { default: field.default as string | number | boolean }) }))
-      const block = upsertCustomBlock(ctx.db, ctx.storeId, { ...(args.type ? { type: args.type as string } : {}), name: args.name as string, description: (args.description as string) ?? '', icon: (args.icon as string) ?? '✚', fields, template: args.template as string, css: (args.css as string) ?? '', source: 'model' })
+      const block = upsertCustomBlock(ctx.db, ctx.storeId, { ...(args.type ? { type: args.type as string } : {}), name: args.name as string, description: (args.description as string) ?? '', icon: (args.icon as string) ?? '✚', fields, template: args.template as string, css: (args.css as string) ?? '', js: (args.js as string) ?? '', source: 'model' })
       const definition = customDefinition(block)
       return {
         summary: `Defined "${block.name}" as ${block.type} with fields ${fields.map((field) => field.key).join(', ') || '(none)'}. It is in the palette under Custom; place it with add_block.`,

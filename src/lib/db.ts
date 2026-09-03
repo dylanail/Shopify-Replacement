@@ -542,6 +542,15 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (store_id, type));
     `,
   },
+  {
+    name: '011_custom_block_js',
+    sql: `
+    -- A custom block may need a script (a tab switcher, a counter); it runs
+    -- once per page that uses the block. Store-wide css and js live on the
+    -- theme.
+    ALTER TABLE custom_blocks ADD COLUMN js TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ]
 
 function migrate(db: Db) {

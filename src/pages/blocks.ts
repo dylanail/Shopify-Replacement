@@ -57,6 +57,8 @@ export type BlockDefinition = {
   description: string
   schema: Schema
   render: (settings: Record<string, unknown>, context: BlockContext, block: BlockInstance) => string
+  /** A script the block needs, run once per page that uses it (custom blocks). It finds its instances by `.blk--<type>`. */
+  js?: string
 }
 
 /* --------------------------------------------------------------- helpers */
@@ -915,7 +917,7 @@ export function blockGroups(custom: BlockDefinition[] = []): Array<{ group: Bloc
 /* --------------------------------------------------------- custom blocks */
 
 export type CustomField = { key: string; label?: string; type: 'string' | 'number' | 'boolean'; multiline?: boolean; default?: string | number | boolean; help?: string }
-export type CustomBlockInput = { type: string; name: string; description?: string; icon?: string; fields: CustomField[]; template: string; css?: string }
+export type CustomBlockInput = { type: string; name: string; description?: string; icon?: string; fields: CustomField[]; template: string; css?: string; js?: string }
 
 /**
  * The template language a custom block is written in. Small on purpose:
@@ -961,7 +963,7 @@ export function renderTemplate(template: string, settings: Record<string, unknow
   return vars(ifs(eaches(template), {}), {})
 }
 
-const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000 }
+const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000, js: 20_000 }
 
 /** Turns a stored custom block into a definition the renderer, the editor and the tools treat like any catalog block. */
 export function customDefinition(input: CustomBlockInput): BlockDefinition {
@@ -972,7 +974,8 @@ export function customDefinition(input: CustomBlockInput): BlockDefinition {
   if (input.template.length > CUSTOM_LIMITS.template) issues.push(`the template is over ${CUSTOM_LIMITS.template} characters`)
   if ((input.css ?? '').length > CUSTOM_LIMITS.css) issues.push(`the css is over ${CUSTOM_LIMITS.css} characters`)
   if (input.fields.length > CUSTOM_LIMITS.fields) issues.push(`more than ${CUSTOM_LIMITS.fields} fields`)
-  if (/<script\b/i.test(input.template)) issues.push('no scripts in a block template; page scripts belong in a custom-code block')
+  if ((input.js ?? '').length > CUSTOM_LIMITS.js) issues.push(`the js is over ${CUSTOM_LIMITS.js} characters`)
+  if (/<script\b/i.test(input.template)) issues.push('no <script> in a block template; put the block\'s script in its js field, which runs once per page')
   const schema: Schema = {}
   for (const field of input.fields) {
     if (!/^[a-z][a-zA-Z0-9]{0,30}$/.test(field.key)) { issues.push(`field key "${field.key}" must be a camelCase word`); continue }
@@ -989,7 +992,9 @@ export function customDefinition(input: CustomBlockInput): BlockDefinition {
   if (issues.length) throw new Error(`Custom block "${input.type}": ${issues.join('; ')}`)
   const usesProduct = /\{\{\{?\s*product\./.test(input.template)
   const css = (input.css ?? '').replace(/<\/style/gi, '')
+  const js = (input.js ?? '').replace(/<\/script/gi, '<\\/script').trim()
   return {
+    ...(js ? { js } : {}),
     type: input.type,
     name: input.name.trim(),
     group: 'Custom',
