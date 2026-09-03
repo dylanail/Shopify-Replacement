@@ -13,7 +13,7 @@ export type Page = {
   storeId: string
   title: string
   handle: string
-  kind: 'landing' | 'advertorial' | 'product' | 'custom'
+  kind: 'landing' | 'advertorial' | 'product' | 'custom' | 'checkout'
   mode: 'blocks' | 'html'
   blocks: BlockInstance[]
   rawHtml: string
@@ -24,7 +24,8 @@ export type Page = {
   isHome: boolean
   /** A version of a product's page (role 'pdp') or an advertorial for it. */
   productId: string
-  role: 'page' | 'pdp' | 'advertorial' | 'offer'
+  /** 'checkout' makes this page the store's checkout: the most recently updated published one wins. */
+  role: 'page' | 'pdp' | 'advertorial' | 'offer' | 'checkout'
   /** Split-test weight among a product's pdp versions; 0 = not in the test. */
   weight: number
   format: string
@@ -69,6 +70,12 @@ export function getPage(db: Db, storeId: string, idOrHandle: string): Page | nul
 
 export function homePage(db: Db, storeId: string): Page | null {
   const row = db.one("SELECT * FROM pages WHERE store_id = ? AND is_home = 1 AND status = 'published'", storeId)
+  return row ? rowToPage(row) : null
+}
+
+/** The checkout built from blocks, if the store has one. Drafts count in preview, so the editor shows what it is about to publish. */
+export function liveCheckoutPage(db: Db, storeId: string, opts: { preview?: boolean } = {}): Page | null {
+  const row = db.one(`SELECT * FROM pages WHERE store_id = ? AND role = 'checkout' AND mode = 'blocks' ${opts.preview ? '' : "AND status = 'published'"} ORDER BY updated_at DESC LIMIT 1`, storeId)
   return row ? rowToPage(row) : null
 }
 
@@ -256,79 +263,236 @@ export function quizTemplate(input: TemplateInput): BlockInstance[] {
   ]
 }
 
+export function blankTemplate(): BlockInstance[] {
+  return [newBlock('header', {}), newBlock('headline', { level: 'h1', text: 'A new page' }), newBlock('rich-text', {}), newBlock('footer', {})]
+}
+
+function faqFrom(input: TemplateInput, headline = 'Questions'): BlockInstance {
+  return newBlock('faq', { headline, ...(input.research?.objections.length ? { items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') } : {}) })
+}
+
+function comparisonFrom(input: TemplateInput): BlockInstance[] {
+  return input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : []
+}
+
+function offerFrom(input: TemplateInput, opts: { buyNow?: boolean } = {}): BlockInstance {
+  return input.product ? newBlock('buy-box', { productId: input.product.id, buyNow: opts.buyNow ?? true, background: 'raise' }) : newBlock('offer-box', {})
+}
+
 /**
- * The long-form sales page, the Funnelish shape read from the reference
- * funnels (docs/knowledge/reference-pages.md): the buy box at the top with
- * its bullets, ship line, chips and guarantee; then the persuasion for the
- * scroller — the problem as image scenes, the reframe, the mechanism in
- * three verbs, the timeline, the expert, the dream outcomes, the audience,
- * proof, the steps, the offer stack, the comparison, the objections, the
- * guarantee — and the sticky button. Every CTA anchors to the buy box.
+ * The Shopify-style product page as blocks, in the order the GemPages product
+ * pages run: rating under the header, the buy box with its bundle, the trust
+ * row and delivery date, the guarantee, then the education — benefits with
+ * pictures, the steps, the specs, the comparison, an expert, reviews with the
+ * star breakdown, customer photos, questions.
+ */
+export function productTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  const triggers = input.research?.triggers ?? []
+  return [
+    newBlock('announcement-bar', {}),
+    newBlock('header', { showNav: true }),
+    newBlock('rating-strip', { ...(product ? { productId: product.id } : {}) }),
+    offerFrom(input, { buyNow: false }),
+    newBlock('trust-badges', { padding: 'none' }),
+    ...(product ? [newBlock('delivery-estimate', { productId: product.id, padding: 'small', width: 'narrow' })] : []),
+    newBlock('guarantee', { padding: 'small', width: 'narrow' }),
+    newBlock('multicolumn', { headline: 'Why this one', ...(triggers.length >= 3 ? { columns: triggers.slice(0, 4).map((trigger) => `✓|${trigger}|Say what happens, in one line.`).join('\n'), perRow: Math.min(4, triggers.length) } : {}) }),
+    ...(product ? [newBlock('image-with-text', { image: product.image, eyebrow: 'The mechanism', headline: `What ${product.title} does differently`, text: 'How it creates the result, in two sentences an eleven-year-old follows.' })] : []),
+    ...(product ? [newBlock('image-with-text', { image: product.image, imageSide: 'right', eyebrow: 'Built for it', headline: 'Made where the load goes', text: 'Doubled where it matters. Name the material, the maker, the run size.' })] : []),
+    newBlock('how-it-works', { headline: 'How to use it' }),
+    newBlock('specs', {}),
+    ...comparisonFrom(input),
+    newBlock('expert-quote', {}),
+    newBlock('review-wall', { headline: 'Verified customer reviews', histogram: true, count: 6, ...(product ? { productId: product.id } : {}) }),
+    newBlock('ugc-gallery', { ...(product ? { productId: product.id } : {}) }),
+    faqFrom(input, 'Common questions'),
+    ...(product ? [newBlock('product-qa', { productId: product.id })] : []),
+    newBlock('sticky-cta', { label: product ? `Get ${product.title}` : 'Get yours', href: '#offer' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/**
+ * The science page: the mechanism, the evidence, then the offer. Hero with
+ * the rating, the numbers buyers reported, the icon bullets, how it works,
+ * the studies, what to expect and when, the comparison, video reviews, a
+ * note from the specialist, the value stack and the buy box.
+ */
+export function scienceTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  return [
+    newBlock('header', { cta: 'Get the offer', ctaHref: '#offer' }),
+    newBlock('hero', { eyebrow: 'Designed by people who measure it', headline: product ? `${product.title}: the mechanism, the evidence, the offer` : `How ${input.storeName} works`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'See the evidence', ctaHref: '#evidence', cta2: 'Get the offer', cta2Href: '#offer', height: 'medium' }),
+    newBlock('rating-strip', { ...(product ? { productId: product.id } : {}) }),
+    newBlock('stats', { headline: 'What buyers reported', source: 'Say where the numbers come from, and when. Delete this block if you have none.' }),
+    newBlock('multicolumn', { headline: 'What is different about it', perRow: 3 }),
+    ...(product ? [newBlock('image-with-text', { image: product.image, eyebrow: 'How it works', headline: 'The mechanism, in plain words', text: 'One cause, one intervention, one result. Name the part that does the work.' })] : []),
+    newBlock('how-it-works', { headline: 'Step by step' }),
+    newBlock('headline', { level: 'h2', eyebrow: 'Peer-reviewed evidence', text: 'The research behind it', width: 'narrow', padding: 'small' }),
+    newBlock('custom-html', { html: '<a id="evidence"></a>', padding: 'none' }),
+    newBlock('studies', { eyebrow: '', headline: '' }),
+    newBlock('timeline', { headline: 'What to expect, and when' }),
+    ...comparisonFrom(input),
+    newBlock('video-wall', { headline: 'Watch unfiltered reviews' }),
+    newBlock('letter', { eyebrow: 'A note from the designer', headline: 'Why we built it this way' }),
+    newBlock('value-stack', { headline: 'Try it risk-free: here is what you get' }),
+    offerFrom(input),
+    newBlock('guarantee', {}),
+    faqFrom(input, 'Before you decide'),
+    newBlock('sticky-cta', { label: 'Get the offer', href: '#offer' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/**
+ * The story landing page: a first-person headline, the pain in pictures, the
+ * real cause, the product introduced as the answer, relief hour by hour, the
+ * three things it does, a letter from the specialist, buyers in their own
+ * words, the offer with a deadline.
+ */
+export function storyTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  return [
+    newBlock('countdown', { text: 'Today only: the launch price ends in', minutes: 60 * 12, padding: 'small', background: 'ink' }),
+    newBlock('header', { cta: 'Get the offer', ctaHref: '#offer' }),
+    newBlock('hero', { headline: product ? `The one that finally worked: ${product.title}` : 'The one that finally worked', sub: 'Write it the way a customer would say it: what stopped, what came back, what they can do again.', image: product?.image ?? '', cta: 'Get the offer', ctaHref: '#offer', height: 'medium' }),
+    newBlock('trust-badges', { padding: 'small' }),
+    newBlock('multicolumn', { headline: 'If this has become the worst part of your day, you are not imagining it', columns: '|By mid-afternoon|Say where it hurts and when.\n|On the drive home|The moment it gets worse.\n|By the weekend|What they have stopped doing because of it.\n|At night|What it costs them in sleep.', perRow: 4 }),
+    newBlock('headline', { level: 'h2', eyebrow: 'The real cause', text: 'It was never you. It was the gap.', sub: 'Name the mechanism nobody told them about.', width: 'narrow' }),
+    newBlock('rich-text', { text: 'Three ways the usual fix fails, in one line each. Then the arrow: finally, something that works the second you use it.' }),
+    ...(product ? [newBlock('image-with-text', { image: product.image, eyebrow: 'Introducing', headline: product.title, text: product.subtitle || 'Built to end it at the source.', cta: 'Get the offer', ctaHref: '#offer' })] : []),
+    newBlock('timeline', { headline: 'What relief feels like, hour by hour', steps: '30 seconds|Sit down|What changes at once.\n1 week|The habit|What they notice by the end of the week.\n4 weeks|The pattern|What has stopped happening.\n3 months|Forgotten|They forget it is there.', note: 'Individual results vary.' }),
+    newBlock('how-it-works', { headline: 'It takes one second', steps: 'Offload|Takes the weight off the part that hurts.|\nAlign|Puts the rest where it should be.|\nHold|Stays that way all day.|' }),
+    newBlock('letter', { eyebrow: 'Meet the specialist behind it', headline: 'Twenty years of watching the same mistake', name: 'The designer', title: 'Say who they are and why they are qualified.' }),
+    newBlock('review-wall', { headline: 'People who refuse to go back', count: 3, ...(product ? { productId: product.id } : {}) }),
+    ...(product ? [newBlock('bundle-offer', { productId: product.id, headline: 'Claim the offer while stock lasts', background: 'raise' })] : [newBlock('offer-box', {})]),
+    newBlock('guarantee', {}),
+    faqFrom(input),
+    newBlock('sticky-cta', { label: 'Get the offer', href: '#offer' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/**
+ * The long-form sales page, the way a Checkout Champ funnel's "sp" step runs:
+ * the gallery and a customer's words above the headline, the check bullets,
+ * the delivery date and the first button, the guarantee, the accordions, then
+ * the long argument — the problem, the numbers, what it replaces, the promise
+ * row, the timeline, the comparison, the steps, the value stack, the doctor,
+ * the reviews with the star breakdown — and the offer twice.
  */
 export function salesTemplate(input: TemplateInput): BlockInstance[] {
   const product = input.product
-  const triggers = (input.research?.triggers ?? []).slice(0, 4)
-  const name = product?.title ?? input.storeName
+  const triggers = input.research?.triggers ?? []
   return [
-    newBlock('announcement-bar', { text: 'LIMITED-TIME OFFER · FREE SHIPPING TODAY' }),
-    newBlock('header', { cta: 'Get the offer', ctaHref: '#offer' }),
-    newBlock('rating-line', { ...(product ? { productId: product.id } : {}) }),
-    newBlock('headline', { level: 'h1', eyebrow: 'Tired of fixes that come with side effects, need a prescription, or do nothing?', text: `${name}: the one that works the first time you use it`, sub: product?.subtitle ?? '', align: 'center', padding: 'small' }),
-    ...(product
-      ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise', bullets: (triggers.length ? triggers : ['Holds up at hour 8', 'Works anywhere', 'No routine to keep']).map((line) => `${line}|`).join('\n'), offerLabel: 'Limited time offer', cta: 'Buy now & save', chips: '🚚|Free shipping\n⛨|90-day money-back guarantee\n🔒|Secure checkout', guaranteeHeadline: 'Feel the difference or it is free', guaranteeText: 'Use it every day for 90 days. If it is not what you hoped, email us and we refund every penny.' })]
-      : [newBlock('offer-box', {})]),
-    newBlock('review-wall', { headline: '', count: 1, ...(product ? { productId: product.id } : {}), padding: 'small' }),
+    newBlock('announcement-bar', { text: 'SPECIAL OFFER NOW: SAVE ON YOUR FIRST ORDER' }),
+    newBlock('header', {}),
+    ...(product?.image ? [newBlock('gallery', { images: product.image, alt: product.title, width: 'narrow' })] : []),
+    newBlock('pull-quote', { quote: 'I tried everything for this. This is the one that finally worked.', who: 'A customer, verified — replace with a real one or delete' }),
+    newBlock('headline', { level: 'h1', text: product ? `Tired of fixes that come with side effects, cost a fortune, or do nothing at all?` : `Tired of fixes that do nothing?`, sub: product?.subtitle ?? '', width: 'narrow', padding: 'small' }),
+    newBlock('multicolumn', { columns: (triggers.length >= 3 ? triggers.slice(0, 4) : ['It works from the first use', 'Nothing to learn', 'Made properly', 'Backed for 90 days']).map((line) => `✓|${line}|`).join('\n'), perRow: 2, width: 'narrow', padding: 'small' }),
+    ...(product ? [newBlock('delivery-estimate', { productId: product.id, width: 'narrow', padding: 'small' })] : []),
+    newBlock('button', { label: 'Buy now & save', href: '#offer', style: 'wide', note: 'In stock · 90-day money-back guarantee' }),
+    newBlock('guarantee', { days: 90, headline: 'Feel the difference or it is free', text: 'If it is not what you hoped within 90 days, we refund you in full. No hassle, no questions.', width: 'narrow', padding: 'small' }),
+    newBlock('faq', { headline: '', items: 'How does it work?|The mechanism, in three sentences.\nWhen will I see results?|First days, first weeks, ongoing.\nWho is it for?|Say who, and who should skip it.\nHow long until I get it?|Ships in one to three days; delivered in five to nine.', width: 'narrow', padding: 'small' }),
+    newBlock('headline', { level: 'h2', text: 'This is not a life sentence. You just have not found the right support yet.', width: 'narrow' }),
+    newBlock('rich-text', { text: 'The problem, in the reader\'s words. What they have tried. Why each one failed.' }),
     newBlock('image-grid', { headline: 'If this has become the worst part of your day, you are not imagining it', sub: 'The moments customers described to us before they found it.', items: '|By mid-afternoon it turns into a deep ache.\n|Long drives leave it on fire.\n|Getting up takes a brace and a deep breath.\n|You shift and shift and never get comfortable.', perRow: 4, bridge: 'Here is what nobody told you: it was never you. It is the gap the usual fix leaves.' }),
-    newBlock('headline', { level: 'h2', eyebrow: 'The root cause', text: 'It was never your fault. It is the gap the usual fix leaves.', sub: 'Name the mechanism: what actually creates the result, in two sentences an eleven-year-old follows.' }),
     newBlock('alternatives', {}),
-    ...(product ? [newBlock('image-with-text', { image: product.image, eyebrow: 'Introducing', headline: `${name}: built to fix it at the source`, text: 'Say what it does that the alternatives cannot, and the one number that proves it.', cta: 'Get the offer', ctaHref: '#offer' })] : []),
-    newBlock('multicolumn', { headline: 'It takes one second — here is how', columns: '1|Offload|The first thing it does, the moment it is used.\n2|Align|The second thing, and why that matters.\n3|Hold|Why it is still doing it at 5 p.m., not just at 9 a.m.' }),
-    newBlock('timeline', { headline: 'What relief feels like, week by week' }),
-    newBlock('expert-quote', {}),
-    newBlock('benefit-bullets', { headline: 'Get your life back, one day at a time', items: 'Sit through the whole drive|no stops to stretch\nMake it to 5 p.m.|without the lockup\nTake the long trip|to see the grandkids' }),
-    newBlock('image-grid', { headline: 'And it goes everywhere you go', items: '|In the car\n|At the desk\n|On the porch\n|On the go', perRow: 4 }),
+    newBlock('stats', { headline: 'What customers reported', source: 'Results from a voluntary, self-reported survey; say when and how many. Delete if you have none.' }),
+    newBlock('cost-comparison', { headline: 'One thing, instead of all of this' }),
+    newBlock('testimonials', { headline: 'Why it is loved daily' }),
+    newBlock('trust-badges', { items: '✓|Whole, named ingredients\n✓|Made in a registered facility\n✓|Third-party tested\n✓|Nothing artificial', padding: 'small' }),
+    newBlock('timeline', { headline: 'What to expect from consistent use' }),
     newBlock('audience', {}),
-    newBlock('review-wall', { headline: 'From people who bought it', count: 6, ...(product ? { productId: product.id } : {}) }),
-    newBlock('steps', { headline: 'Three seconds to set up' }),
-    newBlock('offer-stack', { headline: 'Special offer on now', items: `${name}|\n90-day money-back guarantee|\nFree priority shipping|\nThe quick-start guide|[confirm value]`, totalValue: '', price: '', cta: 'Claim the offer', href: '#offer' }),
-    ...(input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : [newBlock('comparison', {})]),
-    newBlock('cost-stack', {}),
-    ...(input.research?.objections.length ? [newBlock('faq', { headline: 'Before you decide', items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') })] : [newBlock('faq', {})]),
-    newBlock('guarantee', { days: 90, headline: 'Your order is protected by a 90-day guarantee' }),
+    ...comparisonFrom(input),
+    newBlock('how-it-works', { headline: 'How to use it' }),
+    newBlock('value-stack', { eyebrow: 'Special offer on now', headline: 'Act now and you get' }),
+    newBlock('expert-quote', { headline: 'Reviewed by a professional' }),
+    newBlock('payment-icons', {}),
+    newBlock('review-wall', { headline: 'What customers say', histogram: true, count: 8, ...(product ? { productId: product.id } : {}) }),
+    product ? newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise', bullets: (triggers.length >= 3 ? triggers.slice(0, 4) : ['It works from the first use', 'Nothing to learn', 'Made properly']).map((line) => `${line}|`).join('\n'), offerLabel: 'Limited time offer', cta: 'Buy now & save', chips: '🚚|Free shipping\n⛨|90-day money-back guarantee\n🔒|Secure checkout', guaranteeHeadline: 'Feel the difference or it is free', guaranteeText: 'Use it every day for 90 days. If it is not what you hoped, email us and we refund every penny.' }) : newBlock('offer-box', {}),
+    faqFrom(input, 'Frequently asked questions'),
     newBlock('sticky-cta', { label: 'Buy now & save', href: '#offer', ...(product ? { productId: product.id } : {}) }),
-    newBlock('disclaimer', { text: 'Individual results vary. Statements on this page have not been evaluated by a regulator and the product is not intended to diagnose, treat, cure or prevent any disease. Any person shown is a model unless stated.' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/** The single-product home page: the promise, the press, the film, two benefits, the numbers, the catalog, the proof, the list. */
+export function homeTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  return [
+    newBlock('announcement-bar', {}),
+    newBlock('header', { showNav: true }),
+    newBlock('hero', { headline: 'People do not believe it. Until they try it.', sub: product?.subtitle ?? input.storeName, image: product?.image ?? '', cta: 'Shop now', ctaHref: product ? `/products/${product.id}` : '/collections/all', height: 'large' }),
+    newBlock('logos', {}),
+    newBlock('video', { url: '', caption: 'Thirty seconds of it being used.' }),
+    ...(product ? [newBlock('image-with-text', { image: product.image, headline: 'The first thing it fixes', text: 'One benefit, one picture, one line of proof.' })] : []),
+    ...(product ? [newBlock('image-with-text', { image: product.image, imageSide: 'right', headline: 'The second thing it fixes', text: 'One benefit, one picture, one line of proof.' })] : []),
+    newBlock('stats', { headline: 'The one that pays for itself' }),
+    newBlock('featured-products', { headline: 'What we make' }),
+    newBlock('review-wall', { count: 6 }),
+    newBlock('email-signup', { headline: 'Get the next drop first', text: 'No spam. Offers and news only.' }),
     newBlock('footer', {}),
   ]
 }
 
 /**
- * The home page of a store, from Flovir, Honex and SlideBelts: announcement
- * with the offer in one line, navigation, the hero with three bullets, the
- * press, one idea and one number per section, the catalog, proof, the offer
- * restated, the list, and a footer with real contact details.
+ * The funnel checkout, the way Funnelish and Checkout Champ lay one out: logo
+ * and a secure line, the steps, a reservation timer, the form with the summary
+ * beside it and the bump before payment, then the reasons to finish — the
+ * guarantee, what buyers said, the marks that say this is a real shop.
  */
-export function homeTemplate(input: TemplateInput): BlockInstance[] {
+export function checkoutTemplate(input: TemplateInput): BlockInstance[] {
   const product = input.product
   return [
-    newBlock('announcement-bar', { text: 'FREE SHIPPING ON EVERY ORDER · 30-DAY RETURNS' }),
-    newBlock('header', { showNav: true, cta: 'Shop now', ctaHref: product ? '#offer' : '/collections/all' }),
-    newBlock('hero', { headline: product ? `${product.title}: the one people do not believe until they try it` : `Welcome to ${input.storeName}`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'Shop now', ctaHref: product ? '#offer' : '/collections/all', height: 'large' }),
-    newBlock('benefit-bullets', { headline: '', items: 'The first thing it does|in one line\nThe second|in one line\nThe guarantee|in one line', align: 'center' }),
-    newBlock('logos', {}),
-    newBlock('rating-line', {}),
-    ...(product ? [newBlock('image-with-text', { image: product.image, headline: 'One idea, one number', text: 'Every section on a home page carries one idea and one number: "14 days in a carry-on", "$75 saved on the first trip".', cta: 'See it', ctaHref: '#offer' })] : []),
-    newBlock('featured-products', { headline: 'Best sellers', count: 3 }),
-    newBlock('review-wall', { headline: 'What people say', count: 3 }),
-    newBlock('trust-badges', {}),
-    ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: false, background: 'raise', showImage: true, cta: 'Add to cart' })] : []),
-    newBlock('faq', { headline: 'Questions' }),
-    newBlock('email-signup', { headline: '0% spam. 100% offers.', text: 'Join the list for the next offer first.' }),
+    newBlock('header', { cta: '', showNav: false }),
+    newBlock('checkout-steps', { steps: 'Cart\nInformation\nPayment', current: 2 }),
+    newBlock('countdown', { text: 'Limited stock: your cart is reserved for', minutes: 10, padding: 'small' }),
+    newBlock('rating-strip', { text: 'Rated {rating}/5 by {count}+ verified buyers', ...(product ? { productId: product.id } : {}) }),
+    ...(product ? [newBlock('delivery-estimate', { productId: product.id, width: 'narrow', padding: 'small' })] : []),
+    newBlock('checkout-form', { layout: 'two-column', showBump: true, buttonLabel: 'Complete order', note: '🔒 Secure 256-bit encrypted checkout · Try it risk-free with the money-back guarantee' }),
+    newBlock('guarantee', { padding: 'small', width: 'narrow' }),
+    newBlock('trust-badges', { items: '🔒|SSL secure payment\n↩|Money-back guarantee\n🚚|Tracked shipping\n💬|Real people on support', padding: 'small' }),
+    newBlock('review-wall', { headline: 'Trusted customer reviews', count: 3, ...(product ? { productId: product.id } : {}) }),
+    newBlock('multicolumn', { headline: 'Why choose us', columns: '✓|Money-back guarantee|Say the days and the terms.\n✓|Orders shipped|Say the real count, or delete.', perRow: 2, width: 'narrow' }),
+    faqFrom(input, 'Questions before you pay'),
+    newBlock('payment-icons', {}),
     newBlock('footer', {}),
   ]
 }
 
-export function blankTemplate(): BlockInstance[] {
-  return [newBlock('header', {}), newBlock('headline', { level: 'h1', text: 'A new page' }), newBlock('rich-text', {}), newBlock('footer', {})]
+/* ------------------------------------------------------ the template list */
+
+export type PageTemplate = {
+  key: string
+  name: string
+  /** One line for the picker: what the page is for and where it came from. */
+  description: string
+  kind: Page['kind']
+  role: Page['role']
+  title: (input: TemplateInput) => string
+  build: (input: TemplateInput) => BlockInstance[]
+}
+
+/** Every template the picker, the assistant's `create_page` tool and the seed can start from. */
+export const PAGE_TEMPLATES: PageTemplate[] = [
+  { key: 'offer', name: 'Offer page', description: 'The funnel landing page, in the order that turned 1.18x into 3.59x.', kind: 'landing', role: 'page', title: (input) => `${input.product?.title ?? input.storeName} — save today`, build: offerTemplate },
+  { key: 'sales', name: 'Long-form sales page', description: 'The Checkout Champ sales page: gallery and a customer above the headline, check bullets, delivery date, guarantee, then the long argument — numbers, what it replaces, timeline, comparison, value stack, the doctor, reviews.', kind: 'landing', role: 'page', title: (input) => `${input.product?.title ?? input.storeName} — the full story`, build: salesTemplate },
+  { key: 'product', name: 'Product page', description: 'The Shopify-style product page as blocks: rating, buy box with the bundle, trust and delivery, benefits with pictures, steps, specs, comparison, an expert, reviews with the star breakdown, questions.', kind: 'product', role: 'page', title: (input) => input.product?.title ?? `${input.storeName} — product page`, build: productTemplate },
+  { key: 'science', name: 'Science page', description: 'The mechanism, the evidence, the offer: numbers, how it works, the studies, what to expect, video reviews, a note from the designer, the value stack.', kind: 'landing', role: 'page', title: (input) => `The science behind ${input.product?.title ?? input.storeName}`, build: scienceTemplate },
+  { key: 'story', name: 'Story landing page', description: 'A first-person headline, the pain in pictures, the real cause, the product as the answer, relief hour by hour, a letter from the specialist, the offer with a deadline.', kind: 'landing', role: 'page', title: (input) => `${input.product?.title ?? input.storeName} — the one that finally worked`, build: storyTemplate },
+  { key: 'advertorial', name: 'Advertorial (listicle)', description: 'Publication bar, numbered reasons, proof, the offer after the reader has learned something.', kind: 'advertorial', role: 'page', title: (input) => `Why people are switching to ${input.product?.title ?? input.storeName}`, build: advertorialTemplate },
+  { key: 'quiz', name: 'Quiz funnel', description: 'One question per screen; the result names the buyer and shows the offer.', kind: 'landing', role: 'page', title: (input) => `Find your ${input.product?.title ?? 'fit'}`, build: quizTemplate },
+  { key: 'landing', name: 'Product landing page', description: 'Banner, benefits, the bundle, proof, questions.', kind: 'landing', role: 'page', title: (input) => `${input.product?.title ?? input.storeName} — offer`, build: landingTemplate },
+  { key: 'home', name: 'Home page', description: 'The single-product home: the promise, the press, the film, two benefits, the numbers, the catalog, the proof, the list. Tick "Home page" in the editor to make it the front door.', kind: 'landing', role: 'page', title: (input) => `${input.storeName} — home`, build: homeTemplate },
+  { key: 'checkout', name: 'Checkout page', description: 'The real checkout form laid out with blocks: steps, a timer, the rating, the delivery date, the bump, the guarantee and proof around it. Publish it and /checkout uses it.', kind: 'checkout', role: 'checkout', title: (input) => `${input.storeName} — checkout`, build: checkoutTemplate },
+  { key: 'blank', name: 'Blank', description: 'A header, a headline, a paragraph, a footer.', kind: 'landing', role: 'page', title: () => 'New page', build: () => blankTemplate() },
+]
+
+export function pageTemplate(key: string): PageTemplate {
+  return PAGE_TEMPLATES.find((template) => template.key === key) ?? (PAGE_TEMPLATES.find((template) => template.key === 'blank') as PageTemplate)
 }
 
 /* ------------------------------------------------------------- rendering */
@@ -465,18 +629,37 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .rating a{text-decoration:none;color:inherit}
 .sticky-product{display:flex;gap:.6rem;align-items:center;min-width:0}.sticky-product img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.sticky-product b{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .scenes .scene{margin:0}.scene img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.scene figcaption{font-size:.9rem;margin-top:.5rem}.bridge{font-family:var(--display);font-size:1.25rem;margin-top:1.4rem}
-.steps{list-style:none;padding:0;margin:1.4rem 0 0;display:grid;gap:1.6rem;grid-template-columns:repeat(3,1fr)}.step img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:var(--radius);margin-bottom:.6rem}.step .num{font-family:var(--display);color:var(--primary);font-size:1.6rem}.step h3{margin:.2rem 0 .3rem}.step p{margin:0;color:var(--muted);font-size:.94rem}
-.timeline{list-style:none;padding:0;margin:1rem 0 0;display:grid;gap:1rem}.timeline li{display:grid;grid-template-columns:7rem 1fr;gap:1rem;border-left:3px solid var(--primary);padding-left:1rem}.timeline .when{font:600 11px/1.4 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--primary);padding-top:.35rem}.timeline h3{margin:0 0 .2rem}.timeline p{margin:0;color:var(--muted);font-size:.94rem}
 .alts{margin:1rem 0 0;display:grid;gap:.9rem}.alts dt{font-weight:600}.alts dd{margin:.15rem 0 0;color:var(--muted)}
-.coststack{width:100%;border-collapse:collapse;margin-top:1rem}.coststack td,.coststack th{padding:.55rem 0;border-bottom:1px solid var(--line);text-align:left}.coststack td:last-child{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.coststack tfoot th{border-bottom:0;padding-top:.8rem;font-family:var(--display);font-size:1.15rem}
-.offerstack{max-width:34rem}.offerstack .checks{text-align:left}.offerstack .price-lg{margin:.4rem 0 .8rem}
 .included{list-style:none;padding:0;margin:1rem 0 .4rem;display:grid;gap:.5rem}.included li{display:flex;gap:.7rem;align-items:center;border:1px solid var(--line);border-radius:var(--radius);padding:.55rem .8rem;background:var(--raise)}.included img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.included i{font-style:normal}.included span{flex:1}.included em{font-style:normal;font-weight:600;color:var(--primary);font-size:.85rem}.included em s{color:var(--muted);font-weight:400}
-.expert{display:flex;gap:1.2rem;align-items:flex-start;margin:0}.expert img{width:96px;height:96px;object-fit:cover;border-radius:999px;flex:0 0 auto}.expert blockquote{margin:.3rem 0 .6rem;font-family:var(--display);font-size:1.2rem;line-height:1.35}.expert figcaption b{display:block}.expert figcaption .micro{display:block}
 .press{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:1rem}.press blockquote{margin:0;border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.1rem;background:var(--raise)}.press p{margin:0 0 .5rem;font-family:var(--display);font-size:1.05rem}.press cite{font-style:normal;font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
-.citations{list-style:none;padding:0;margin:1rem 0;display:grid;gap:1rem;counter-reset:cite}.citations li{border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.1rem;counter-increment:cite}.citations li::before{content:counter(cite,decimal-leading-zero);font:600 11px/1 var(--body);letter-spacing:.14em;color:var(--primary)}.citations h3{margin:.3rem 0 .4rem}.citations blockquote{margin:0 0 .5rem;color:var(--muted);font-size:.94rem;border-left:2px solid var(--line);padding-left:.8rem}.citations a{font-size:.86rem}
 .ingredients img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius);margin-bottom:.5rem}
-.stats{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:1.2rem 0 .6rem}.stats b{display:block;font-family:var(--display);font-size:clamp(2rem,5vw,3rem);line-height:1;color:var(--primary)}.stats span{display:block;margin-top:.4rem;color:var(--muted);font-size:.9rem}
-@media (max-width:820px){.steps{grid-template-columns:1fr}.timeline li{grid-template-columns:1fr;gap:.2rem}.expert{flex-direction:column}}
-@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}}
-@media (max-width:520px){.cols{grid-template-columns:1fr}}
+.ratingline{display:inline-flex;gap:.5rem;align-items:center;text-decoration:none;color:var(--ink);font-size:.92rem}.ratingline .stars{color:#e0a100}
+.histo{display:grid;gap:.3rem;max-width:22rem;margin:.6rem 0 1rem;font-size:.82rem;color:var(--muted)}.histo div{display:grid;grid-template-columns:2.4rem 1fr 2.6rem;gap:.5rem;align-items:center}.histo i{display:block;height:8px;background:var(--line);border-radius:999px;overflow:hidden}.histo b{display:block;height:100%;background:#e0a100}
+.stats{display:grid;gap:1.2rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1rem}.stat b{display:block;font-family:var(--display);font-size:clamp(2rem,4.5vw,3rem);line-height:1;color:var(--primary)}.stat span{display:block;margin-top:.4rem;color:var(--muted);font-size:.92rem}
+.tl{list-style:none;padding:0;margin:0;display:grid;gap:0}.tl li{display:grid;grid-template-columns:7rem 1fr;gap:1rem;padding:.9rem 0;border-bottom:1px solid var(--line)}.tl .when{font:600 11px/1.6 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--primary)}.tl p{margin:.2rem 0 0;color:var(--muted);font-size:.94rem}
+.hiw{display:grid;gap:1.6rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1.2rem}.hiw-step{position:relative}.hiw-step img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:var(--radius);margin-bottom:.8rem}.hiw-step .num{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:999px;background:var(--primary);color:#fff;font-weight:600;font-size:.9rem}.hiw-step h3{margin:.5rem 0 .3rem}.hiw-step p{margin:0;color:var(--muted);font-size:.94rem}
+.vstack{border:2px solid var(--primary);border-radius:var(--radius);padding:1.8rem;background:var(--raise)}.vstack ul{list-style:none;padding:0;margin:1rem 0}.vstack li{display:flex;justify-content:space-between;gap:1rem;padding:.5rem 0;border-bottom:1px solid var(--line)}.vstack li b{color:var(--muted);font-weight:500;white-space:nowrap}
+.vtotal,.vprice{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;padding:.5rem 0}.vtotal s{color:var(--muted)}.vprice b{font-family:var(--display);font-size:2rem;color:var(--primary)}
+.experts{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.expert{border:1px solid var(--line);border-radius:var(--radius);padding:1.2rem;background:var(--raise)}.expert img,.expert .av{width:56px;height:56px;border-radius:999px;object-fit:cover;display:grid;place-items:center;background:var(--primary);color:#fff;font-weight:600;margin-bottom:.8rem}.expert blockquote{margin:0;font-size:1.02rem}.expert .who{margin-top:.8rem;font-size:.85rem}.expert .who span{display:block;color:var(--muted)}
+.letter{display:grid;gap:1.6rem;grid-template-columns:auto 1fr;align-items:start}.letter img{width:120px;height:120px;border-radius:999px;object-fit:cover}.letter .sig{margin-top:1rem;font-family:var(--display);font-size:1.2rem}.letter .sig span{display:block;font:400 .85rem var(--body);color:var(--muted)}
+.costs{display:grid;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.costs div{display:flex;justify-content:space-between;gap:1rem;padding:.7rem 1rem;border-bottom:1px solid var(--line);font-size:.94rem}.costs div:last-child{border-bottom:0}.costs .total{background:var(--raise);font-weight:600}.costs .us{background:color-mix(in srgb,var(--primary) 10%,var(--paper));color:var(--primary);font-weight:600}
+.vwall{display:grid;gap:1rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1rem}.vwall figure{margin:0}.vwall .video{aspect-ratio:9/16}.vwall video.video{aspect-ratio:auto}
+.studies{padding-left:1.2rem;margin:0}.studies li{padding:.8rem 0;border-bottom:1px solid var(--line)}.studies .src{font:600 11px/1.6 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}.studies p{margin:.3rem 0}.studies a{font-size:.85rem}
+.gal .gal-main{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.gal-thumbs{display:flex;gap:.5rem;margin-top:.6rem;overflow-x:auto}.gal-thumbs button{flex:0 0 64px;padding:0;border:2px solid transparent;border-radius:var(--radius);background:none;cursor:pointer}.gal-thumbs button.on{border-color:var(--ink)}.gal-thumbs img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:calc(var(--radius) - 2px);display:block}
+.col .ico img{width:56px;height:56px;object-fit:cover;border-radius:var(--radius)}
+.checkout--blk{min-height:0;gap:2rem}
+.checkout--blk .co-main{padding:0;max-width:none;justify-self:stretch}
+.checkout--blk .co-side{height:auto;max-height:calc(100vh - 2rem);top:1rem;border:1px solid var(--line);border-radius:var(--radius);padding:1.4rem}
+.checkout--stacked{grid-template-columns:1fr}
+.co-h{font-family:var(--body);font-weight:600;font-size:1.05rem;margin:0 0 .8rem}
+.co-sample{border:1px dashed var(--line);border-radius:var(--radius);padding:.5rem .8rem;margin-bottom:1rem}
+.co-summary-blk{border:1px solid var(--line);border-radius:var(--radius);padding:1.2rem;background:var(--raise)}
+.bump-blk .bump{margin-top:.6rem}
+.costeps{display:flex;gap:.4rem;justify-content:center;list-style:none;padding:0;margin:0;font-size:.85rem;color:var(--muted);flex-wrap:wrap}
+.al-left .costeps{justify-content:flex-start}
+.costeps li{display:flex;align-items:center;gap:.4rem}.costeps li+li::before{content:'›';margin-right:.4rem;opacity:.5}
+.costeps span{width:22px;height:22px;border-radius:999px;border:1px solid var(--line);display:grid;place-items:center;font-size:.72rem;font-weight:600}
+.costeps .now{color:var(--ink);font-weight:600}.costeps .now span,.costeps .done span{background:var(--primary);color:#fff;border-color:var(--primary)}
+@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols,.hiw,.vwall{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}.letter{grid-template-columns:1fr}}
+@media (max-width:520px){.cols,.hiw{grid-template-columns:1fr}.tl li{grid-template-columns:1fr;gap:.2rem}}
 `

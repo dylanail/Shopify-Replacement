@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { BLOCKS, blockDefinition, renderBlock, renderBlocks, type BlockContext } from '../src/pages/blocks.ts'
-import { advertorialTemplate, blockContextFor, createPage, getPage, homePage, landingTemplate, newBlock, updatePage } from '../src/pages/store.ts'
+import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, getPage, homePage, landingTemplate, liveCheckoutPage, newBlock, PAGE_TEMPLATES, pageTemplate, productTemplate, salesTemplate, scienceTemplate, updatePage } from '../src/pages/store.ts'
 import { clonePage, extractBlocks } from '../src/pages/clone.ts'
 import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } from '../src/domain/bundles.ts'
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
@@ -76,6 +76,97 @@ test('templates produce a complete advertorial and landing page from research', 
   const landing = landingTemplate({ storeName: 'Test Co', product: { id: 'prod_1', title: 'The Glove', image: '/g.svg', subtitle: 'x' }, research })
   assert.ok(landing.some((block) => block.type === 'bundle-offer'))
   assert.match(renderBlocks(advertorial, context), /Rival/)
+})
+
+test('the blocks from the reference funnels render their content and nothing they were not given', () => {
+  const stats = renderBlock({ id: 'b1', type: 'stats', settings: { items: '76%|Felt steadier\n14 days|To mould', source: 'Survey, 2025' } }, context)
+  assert.match(stats, /<b>76%<\/b><span>Felt steadier<\/span>/)
+  assert.match(stats, /Survey, 2025/)
+  assert.match(renderBlock({ id: 'b2', type: 'timeline', settings: { steps: 'Week 1|Break-in|Stiff at first.' } }, context), /<span class="when">Week 1<\/span><div><strong>Break-in<\/strong>/)
+  const steps = renderBlock({ id: 'b3', type: 'how-it-works', settings: { steps: 'Wrap|Wrap up.|/w.jpg\nLace|Lace up.|' } }, context)
+  assert.match(steps, /<img src="\/w.jpg"/)
+  assert.match(steps, /<span class="num">2<\/span><h3>Lace<\/h3>/)
+  const stack = renderBlock({ id: 'b4', type: 'value-stack', settings: { items: 'Gloves|$340\nRepairs|Included', total: '$383', price: '$289' } }, context)
+  assert.match(stack, /✓ Gloves<\/span><b>\$340<\/b>/)
+  assert.match(stack, /<s>\$383<\/s>/)
+  assert.match(stack, /class="vprice"><span>Today only<\/span><b>\$289<\/b>/)
+  const costs = renderBlock({ id: 'b5', type: 'cost-comparison', settings: { rows: 'Chair|$800', total: '$5,930+', us: '$54' } }, context)
+  assert.match(costs, /<span>Chair<\/span><b>\$800<\/b>/)
+  assert.match(costs, /class="us"><span>One pair, repaired for life<\/span><b>\$54<\/b>/)
+  const gallery = renderBlock({ id: 'b6', type: 'gallery', settings: { images: '/a.jpg\n/b.jpg' } }, context)
+  assert.match(gallery, /data-gallery/)
+  assert.equal((gallery.match(/class="gal-thumbs"/g) ?? []).length, 1)
+  assert.match(gallery, /<button type="button" class="on" data-src="\/a.jpg"/)
+  assert.doesNotMatch(renderBlock({ id: 'b7', type: 'gallery', settings: { images: '/a.jpg' } }, context), /gal-thumbs/, 'one image, no thumbnails')
+  const studies = renderBlock({ id: 'b8', type: 'studies', settings: { items: 'JSS, 2019|Wrist stiffness cut load.|https://example.com/s' } }, context)
+  assert.match(studies, /<div class="src">JSS, 2019<\/div><p>Wrist stiffness cut load.<\/p><a href="https:\/\/example.com\/s"/)
+  assert.match(renderBlock({ id: 'b9', type: 'expert-quote', settings: { quotes: 'Closest to taped.|Marisol|Cutman|' } }, context), /<span class="av">M<\/span><blockquote>Closest to taped.<\/blockquote>/)
+  assert.match(renderBlock({ id: 'b10', type: 'letter', settings: { text: 'One.\n\nTwo.', name: 'Ana' } }, context), /<p>One.<\/p><p>Two.<\/p>.*<strong>Ana<\/strong>/)
+  assert.match(renderBlock({ id: 'b11', type: 'video-wall', settings: { videos: 'https://youtu.be/abc123||Lindsey\n/clip.mp4|/p.jpg|Diana' } }, context), /youtube-nocookie\.com\/embed\/abc123[\s\S]*<video class="video" controls preload="none" poster="\/p.jpg" src="\/clip.mp4">/)
+  assert.match(renderBlock({ id: 'b12', type: 'specs', settings: { rows: 'Weight|14oz' } }, context), /<dt>Weight<\/dt><dd>14oz<\/dd>/)
+  assert.match(renderBlock({ id: 'b13', type: 'multicolumn', settings: { columns: '/i.png|Fast|Ships today' } }, context), /<div class="ico"><img src="\/i.png"/, 'a URL in the icon cell is a picture')
+  assert.match(renderBlock({ id: 'b14', type: 'guarantee', settings: { note: 'Fewer than 1% use it.' } }, context), /Fewer than 1% use it\./)
+  // The rating line and the histogram read real reviews; below the minimum they say nothing.
+  assert.match(renderBlock({ id: 'b15', type: 'rating-strip', settings: { minimum: 1 } }, context), /Rated 5\.0\/5 by 1\+ verified buyers/)
+  assert.match(renderBlock({ id: 'b16', type: 'rating-strip', settings: {} }, context), /^<!-- data-block="b16" rating-strip: 1 reviews -->$/)
+  assert.match(renderBlock({ id: 'b17', type: 'review-wall', settings: { histogram: true } }, context), /class="histo"[\s\S]*<span>5★<\/span><i><b style="width:100%">/)
+  assert.doesNotMatch(renderBlock({ id: 'b18', type: 'review-wall', settings: {} }, context), /class="histo"/)
+})
+
+test('the checkout blocks place the form, summary and bump from the context, and say what they are without it', () => {
+  assert.match(renderBlock({ id: 'c1', type: 'checkout-form', settings: {} }, context), /The checkout form renders here/)
+  assert.match(renderBlock({ id: 'c2', type: 'order-summary', settings: {} }, context), /class="ph"/)
+  assert.match(renderBlock({ id: 'c3', type: 'checkout-steps', settings: { current: 2 } }, context), /<li class="done"[^>]*><span>✓<\/span>Cart<\/li><li class="now" aria-current="step"><span>2<\/span>Information<\/li><li class="" ><span>3<\/span>Payment<\/li>/)
+  const checkout = { formHtml: '<form id="checkout-form"><!--bump--><button><!--pay-label--></button></form>', summaryHtml: '<div class="summary-body">lines</div>', expressHtml: '<div class="express">wallets</div>', bumpHtml: '<label class="bump">Protect my order</label>', totalCents: 12345, itemCount: 2, sample: false }
+  const two = renderBlock({ id: 'c4', type: 'checkout-form', settings: { buttonLabel: 'Complete order' } }, { ...context, checkout })
+  assert.match(two, /<form id="checkout-form"><label class="bump">Protect my order<\/label><button>Complete order<\/button><\/form>/, 'the bump lands at the marker, the label on the button')
+  assert.match(two, /<aside class="co-side"><h2 class="co-h">Your order<\/h2><div class="summary-body">lines<\/div>/, 'two-column carries the summary')
+  assert.match(two, /co-summary-mobile[\s\S]*\$123\.45/)
+  assert.match(two, /class="express"/)
+  const stacked = renderBlock({ id: 'c5', type: 'checkout-form', settings: { layout: 'stacked', showBump: false, showExpress: false } }, { ...context, checkout })
+  assert.doesNotMatch(stacked, /co-side|class="bump"|class="express"/)
+  assert.match(stacked, /checkout--stacked/)
+  assert.match(renderBlock({ id: 'c6', type: 'checkout-form', settings: {} }, { ...context, checkout: { ...checkout, sample: true, error: 'Enter a valid email address' } }), /Sample order[\s\S]*Enter a valid email address/)
+  assert.match(renderBlock({ id: 'c7', type: 'order-summary', settings: {} }, { ...context, checkout }), /co-summary-blk[\s\S]*lines/)
+  assert.match(renderBlock({ id: 'c8', type: 'order-bump', settings: {} }, { ...context, checkout }), /Wait — add this to your order\?[\s\S]*Protect my order/)
+  assert.match(renderBlock({ id: 'c9', type: 'order-bump', settings: {} }, { ...context, checkout: { ...checkout, bumpHtml: '' } }), /^<!-- data-block="c9" order-bump/)
+})
+
+test('every template builds a whole page from the research, and the checkout template is the checkout', () => {
+  const research = { triggers: ['One', 'Two', 'Three', 'Four'], objections: [{ objection: 'Q?', answer: 'A.' }], comparison: { rows: [{ label: 'L', us: 'U', them: 'T' }] }, competitors: [{ name: 'Rival' }] }
+  const input = { storeName: 'Test Co', product: { id: 'prod_1', title: 'The Glove', image: '/g.svg', subtitle: 'x' }, research }
+  for (const template of PAGE_TEMPLATES) {
+    const blocks = template.build(input)
+    assert.ok(blocks.length >= 4, `${template.key} has blocks`)
+    assert.equal(blocks.at(-1)?.type, 'footer', `${template.key} ends with a footer`)
+    assert.ok(blocks.every((block) => blockDefinition(block.type)), `${template.key} uses only known blocks`)
+    assert.ok(template.title(input).length > 0)
+    const html = renderBlocks(blocks, context)
+    assert.ok(!html.includes('Unknown block'), `${template.key} renders`)
+  }
+  const types = (blocks: ReturnType<typeof productTemplate>) => blocks.map((block) => block.type)
+  const product = types(productTemplate(input))
+  for (const expected of ['rating-strip', 'buy-box', 'delivery-estimate', 'how-it-works', 'specs', 'comparison', 'expert-quote', 'review-wall', 'product-qa', 'sticky-cta']) assert.ok(product.includes(expected), `product page has ${expected}`)
+  assert.equal(productTemplate(input).find((block) => block.type === 'buy-box')?.settings.buyNow, false, 'a product page adds to cart')
+  assert.equal(productTemplate(input).find((block) => block.type === 'review-wall')?.settings.histogram, true)
+  const sales = types(salesTemplate(input))
+  for (const expected of ['gallery', 'pull-quote', 'stats', 'cost-comparison', 'timeline', 'value-stack', 'expert-quote', 'payment-icons', 'buy-box']) assert.ok(sales.includes(expected), `sales page has ${expected}`)
+  assert.ok(sales.indexOf('button') < sales.indexOf('stats'), 'the first button comes before the long argument')
+  const science = types(scienceTemplate(input))
+  for (const expected of ['stats', 'studies', 'timeline', 'video-wall', 'letter', 'value-stack']) assert.ok(science.includes(expected), `science page has ${expected}`)
+  const checkout = checkoutTemplate(input)
+  assert.equal(checkout.filter((block) => block.type === 'checkout-form').length, 1)
+  assert.ok(types(checkout).indexOf('checkout-steps') < types(checkout).indexOf('checkout-form'))
+  assert.equal(pageTemplate('checkout').role, 'checkout')
+  assert.equal(pageTemplate('made-up').key, 'blank', 'an unknown key is the blank page')
+
+  const { db, store } = shop()
+  assert.equal(liveCheckoutPage(db, store.id), null)
+  const draft = createPage(db, store.id, { title: 'Checkout', kind: 'checkout', role: 'checkout', blocks: checkout })
+  assert.equal(liveCheckoutPage(db, store.id), null, 'a draft is not the live checkout')
+  assert.equal(liveCheckoutPage(db, store.id, { preview: true })?.id, draft.id, 'but it is the preview one')
+  updatePage(db, store.id, draft.id, { status: 'published' })
+  assert.equal(liveCheckoutPage(db, store.id)?.id, draft.id)
 })
 
 /* ---------------------------------------------------------------- pages */

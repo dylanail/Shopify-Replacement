@@ -494,23 +494,22 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   // Honesty: survey stats need a source; the rating line renders nothing without reviews.
   assert.match(renderBlock({ id: 'st', type: 'stats', settings: { items: '76%|felt better' } }, context), /need a source/)
   assert.match(renderBlock({ id: 'st2', type: 'stats', settings: { items: '76%|felt better', source: 'Survey of 500 customers, May 2026' } }, context), /76%/)
-  assert.equal(renderBlock({ id: 'r', type: 'rating-line', settings: {} }, context), '')
+  assert.match(renderBlock({ id: 'r', type: 'rating-strip', settings: {} }, context), /^<!-- data-block="r" rating-strip: 0 reviews -->$/)
 
   // The new blocks render their lines.
-  assert.match(renderBlock({ id: 't', type: 'timeline', settings: { items: 'Week 1|Build the habit|Less light.' } }, context), /Build the habit/)
-  assert.match(renderBlock({ id: 'c', type: 'cost-stack', settings: { items: 'Blackout curtains|$400', total: 'Total: $400' } }, context), /<tfoot>/)
   assert.match(renderBlock({ id: 'i', type: 'included', settings: { items: 'The blind||\nThe fitting kit|$19|' } }, context), /1 free gift included/)
-  assert.match(renderBlock({ id: 'o', type: 'offer-stack', settings: { items: 'The blind|\nThe guide|$27', price: 'Today: $79' } }, context), /<s>\$27<\/s> <b>FREE<\/b>/)
   assert.match(renderBlock({ id: 'a', type: 'alternatives', settings: { items: 'curtains|They leak at the edges.' } }, context), /Instead of curtains:/)
-  assert.match(renderBlock({ id: 'ci', type: 'citations', settings: { items: 'Darkness helps|Sleep 2019|Quote|https://example.org' } }, context), /Read the study/)
-  for (const type of ['benefit-bullets', 'image-grid', 'steps', 'expert-quote', 'press-quotes', 'ingredients', 'audience']) assert.ok(blockDefinition(type), `${type} is in the catalog`)
+  assert.match(renderBlock({ id: 'au', type: 'audience', settings: { items: 'Night workers|Sleep at noon.' } }, context), /<dt>Night workers<\/dt>/)
+  assert.match(renderBlock({ id: 'ig', type: 'image-grid', settings: { items: '|At the desk\n|On the drive', bridge: 'It was never you.' } }, context), /<figcaption>At the desk<\/figcaption>[\s\S]*class="bridge"/)
+  for (const type of ['benefit-bullets', 'image-grid', 'press-quotes', 'ingredients', 'audience', 'timeline', 'how-it-works', 'value-stack', 'cost-comparison', 'studies', 'expert-quote', 'rating-strip']) assert.ok(blockDefinition(type), `${type} is in the catalog`)
 
-  // The sales page is the Funnelish shape: buy box near the top, the argument below, the sticky button carrying the product.
+  // The sales page is the Funnelish shape: the first button before the long argument, the pain scenes and the alternatives inside it, the buy box with its bullets and chips, the sticky button carrying the product.
   const sales = salesTemplate({ storeName: store.name, product: shape, research: null })
   const types = sales.map((block) => block.type)
-  assert.ok(types.indexOf('buy-box') < types.indexOf('image-grid'), 'the buy box comes before the persuasion')
-  for (const type of ['timeline', 'alternatives', 'offer-stack', 'cost-stack', 'audience', 'steps', 'sticky-cta', 'disclaimer']) assert.ok(types.includes(type), `sales page has ${type}`)
+  assert.ok(types.indexOf('button') < types.indexOf('image-grid'), 'the first button comes before the persuasion')
+  for (const type of ['timeline', 'alternatives', 'image-grid', 'value-stack', 'cost-comparison', 'audience', 'how-it-works', 'buy-box', 'sticky-cta']) assert.ok(types.includes(type), `sales page has ${type}`)
   assert.equal(sales.find((block) => block.type === 'sticky-cta')?.settings.productId, product.id)
+  assert.match(String(sales.find((block) => block.type === 'buy-box')?.settings.chips), /guarantee/)
   const home = homeTemplate({ storeName: store.name, product: shape, research: null })
   assert.ok(home.some((block) => block.type === 'featured-products') && home.some((block) => block.type === 'email-signup'))
   // A page from the sales template is found by the page plan as the sales page.
@@ -597,14 +596,14 @@ test('a store can define its own blocks, and the model can add sections the cata
   const written = applyAuthoring(blocks, {
     blocks: [{ id: 'h1', values: [{ key: 'text', value: 'New' }] }],
     additions: [
-      { after: 'h1', type: 'steps', values: [{ key: 'headline', value: 'Three steps' }, { key: 'items', value: 'One|First|\nTwo|Second|' }] },
+      { after: 'h1', type: 'how-it-works', values: [{ key: 'headline', value: 'Three steps' }, { key: 'steps', value: 'One|First|\nTwo|Second|' }] },
       { after: 'h1', type: 'custom-html', values: [{ key: 'html', value: '<p>Extra</p>' }] },
       { after: '', type: 'custom-html', values: [{ key: 'html', value: '<script>x()</script>' }] },
       { after: 'f', type: 'nonsense', values: [] },
       { after: 'f', type: 'custom-code', values: [{ key: 'js', value: 'x()' }] },
     ],
   })
-  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'steps', 'footer', 'custom-code'])
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'how-it-works', 'footer', 'custom-code'])
   assert.equal(written[0]?.settings.text, 'New')
   assert.equal(written[2]?.settings.headline, 'Three steps')
   assert.equal(written[4]?.settings.js, 'x()')

@@ -14,6 +14,9 @@ import { tlsAllowed } from './control/domains.ts'
 
 const log = logger('server')
 const PORT = Number(process.env.PORT ?? 4100)
+// Railway hands every service a public hostname; if no origin was configured
+// by hand, that is the one abandoned-cart emails and ad links should carry.
+if (!process.env.AMBORAS_PUBLIC_ORIGIN && process.env.RAILWAY_PUBLIC_DOMAIN) process.env.AMBORAS_PUBLIC_ORIGIN = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
 const ROOT_DOMAIN = process.env.AMBORAS_STOREFRONT_HOST ?? ''
 
 /**

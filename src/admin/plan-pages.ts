@@ -320,7 +320,7 @@ export function suggestCard(ctx: Ctx): string {
   const avatars = listAvatars(ctx.db, ctx.store.id)
   return `<form method="post" action="/admin/pages/suggest" class="card" id="suggest"><h2>Suggest a layout</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">The block order for a kind of page, chosen for this product and avatar from the catalog, with the job each block does. It lands as a draft to edit.</p>
-    <div class="row"><div class="field" style="flex:1"><label>Kind of page</label><select name="goal"><option value="offer">Offer page</option><option value="advertorial">Advertorial</option><option value="quiz">Quiz funnel</option><option value="pdp">Product page</option><option value="home">Home</option></select></div>
+    <div class="row"><div class="field" style="flex:1"><label>Kind of page</label><select name="goal"><option value="offer">Offer page</option><option value="advertorial">Advertorial</option><option value="quiz">Quiz funnel</option><option value="pdp">Product page</option><option value="science">Science page</option><option value="home">Home</option><option value="checkout">Checkout page</option></select></div>
       <div class="field" style="flex:1"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions(ctx)}</select></div></div>
     <div class="row"><div class="field" style="flex:1"><label>Avatar</label><select name="avatarId"><option value="">— the selected avatar —</option>${avatars.map((avatar) => `<option value="${e(avatar.id)}">${e(avatar.name)}</option>`).join('')}</select></div>
       <div class="field" style="flex:1"><label>Direction</label><input name="direction" placeholder="urgent, comparison-led"></div></div>

@@ -1,7 +1,7 @@
 import type { Product, ProductContent } from '../domain/types.ts'
 import type { Research } from './research.ts'
 import type { Brief } from './copy.ts'
-import { newBlock, salesTemplate } from '../pages/store.ts'
+import { newBlock, salesTemplate, scienceTemplate } from '../pages/store.ts'
 import { blockDefinition, type BlockInstance } from '../pages/blocks.ts'
 import { logger } from '../lib/log.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
@@ -207,28 +207,16 @@ export function writePdp(input: WriterInput): BlockInstance[] {
     return blocks
   }
   if (format.id === 'science') {
-    const blocks = [
-      newBlock('header', { cta: tone.cta, ctaHref: '#offer' }),
-      newBlock('rating-line', { productId: product.id }),
-      hero,
-      newBlock('trust-badges', {}),
-      newBlock('benefit-bullets', { headline: 'What it does', items: bullets || 'What it does first|in one line\nWhat it does second|in one line' }),
-      newBlock('steps', { headline: 'How it works', sub: 'The mechanism, in the order it happens.', items: 'Step one|What happens first, and why.|\nStep two|What that makes possible.|\nStep three|The result, stated plainly.|' }),
-      newBlock('image-with-text', { image: product.media[1]?.url ?? product.heroImage, eyebrow: 'The mechanism', headline: `Why ${product.title} works when the others did not`, text: research.positioning, cta: tone.cta, ctaHref: '#offer' }),
-      newBlock('citations', { intro: 'The class of product has been studied for years. The takeaway of each study in plain words, then the study itself.', items: '[confirm] The plain-English takeaway|[confirm] Journal, year|[confirm] The quote|' }),
-      newBlock('expert-quote', {}),
-      newBlock('ingredients', { headline: 'What is in it', lead: 'Every material or ingredient, and what it does. All of them.', items: '[confirm] Material|What it does|' }),
-      newBlock('image-with-text', { image: product.media[2]?.url ?? '', imageSide: 'right', eyebrow: 'Where it is made', headline: '[confirm] Made in …, checked by hand', text: 'One real photo of the line or the final check, with a caption. Left out if there is none.' }),
-      reviews,
-      buy,
-      comparison,
-      guarantee,
-      faq,
-      newBlock('sticky-cta', { label: tone.cta, href: '#offer', productId: product.id }),
-      newBlock('disclaimer', { text: 'Citations refer to the class of product studied and are not endorsements of this product. Individual results vary.' }),
-      newBlock('footer', {}),
-    ]
-    if (direction.urgency) blocks.splice(3, 0, ...urgency)
+    const blocks = scienceTemplate({ storeName: input.store.name, product: { id: product.id, title: product.title, image: product.heroImage, subtitle: product.subtitle }, research: { triggers: research.triggers, objections: research.objections, comparison: { rows: content.comparison?.rows ?? research.comparison.rows }, competitors: research.competitors } })
+    for (const block of blocks) {
+      if (block.type === 'hero') block.settings = { ...block.settings, headline, sub: product.subtitle, cta: tone.cta }
+      if (block.type === 'multicolumn' && bullets) block.settings = { ...block.settings, columns: bullets.split('\n').map((line) => `✓|${line}`).join('\n') }
+      if (block.type === 'sticky-cta') block.settings = { ...block.settings, label: tone.cta, productId: product.id }
+    }
+    // Every ingredient or material, all of them, after the studies; a fact nobody supplied stays marked.
+    const at = blocks.findIndex((block) => block.type === 'timeline')
+    blocks.splice(at < 0 ? blocks.length - 1 : at, 0, newBlock('ingredients', { headline: 'What is in it', lead: 'Every material or ingredient, and what it does. All of them.', items: '[confirm] Material|What it does|' }))
+    if (direction.urgency) blocks.splice(2, 0, ...urgency)
     return blocks
   }
   const blocks = order[format.id] ?? order.benefit!
@@ -254,9 +242,9 @@ export function redirectContent(content: ProductContent, direction: Direction): 
 /* ---------------------------------------------------------------- model */
 
 /** Block types whose settings carry the words a reader sees. */
-const TEXT_BLOCKS = new Set(['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box', 'comparison', 'announcement-bar', 'guarantee', 'byline', 'publication-bar', 'sticky-cta', 'progress-bar', 'countdown', 'review-wall', 'bundle-offer', 'buy-box', 'benefit-bullets', 'image-grid', 'steps', 'timeline', 'alternatives', 'cost-stack', 'offer-stack', 'included', 'audience', 'trust-badges', 'disclaimer'])
+const TEXT_BLOCKS = new Set(['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box', 'comparison', 'announcement-bar', 'guarantee', 'byline', 'publication-bar', 'sticky-cta', 'progress-bar', 'countdown', 'review-wall', 'bundle-offer', 'buy-box', 'stats', 'timeline', 'how-it-works', 'value-stack', 'expert-quote', 'letter', 'cost-comparison', 'studies', 'specs', 'rating-strip', 'checkout-steps', 'trust-badges', 'testimonials', 'benefit-bullets', 'image-grid', 'alternatives', 'included', 'audience', 'press-quotes', 'ingredients', 'disclaimer'])
 /** Setting keys that are addresses, ids or media, never prose. */
-const NOT_TEXT = /^(src|href|image|images|productId|ctaHref|url|id|video|link|collectionId|background|align|width|padding|level|height|overlay|minutes|percent|count|number|showImage|buyNow)$/
+const NOT_TEXT = /^(src|href|image|images|videos|poster|productId|ctaHref|url|id|video|link|collectionId|background|align|width|padding|level|height|overlay|minutes|percent|count|number|showImage|buyNow|minimum|perRow|current|layout|showExpress|showBump|histogram|mode|endsAt)$/
 
 const BLOCKS_SCHEMA = S.obj({
   blocks: S.arr(
@@ -336,7 +324,7 @@ export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInst
       `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
       `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
       extra,
-      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), steps "title|text|image URL", timeline stages "when|title|text", alternatives "name|why it fails", cost lines "item|cost", offer items "item|value", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro); if the page needs styling or behaviour no block gives (a reveal on scroll, a tab switcher), add one "custom-code" with css and js. Usually additions is empty.',
+      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), how-it-works steps "title|text|image URL", timeline steps "when|title|text", alternatives "name|why it fails", cost-comparison rows "what|cost", value-stack items "item|value", stats "number|caption", expert quotes "quote|name|title|image URL", studies "journal, year|finding|URL", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro); if the page needs styling or behaviour no block gives (a reveal on scroll, a tab switcher), add one "custom-code" with css and js. Usually additions is empty.',
     ].filter(Boolean).join('\n\n')
     const parsed = await completeJson<Authored>(choice, {
       task: 'pages',

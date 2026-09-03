@@ -3,7 +3,7 @@ import { badRequest, escapeHtml, html, notFound, redirect, Raw, Router, setCooki
 import { addToCart, applyCode, attachPaymentIntent, createCart, getCart, saveCheckoutDraft, setQuantity, setShipping, totals } from '../domain/cart.ts'
 import { getRegion, defaultRegion } from '../domain/regions.ts'
 import { orderByPaymentIntent, recordUpsell, setPaymentStatus } from '../domain/orders.ts'
-import { getPage, homePage } from '../pages/store.ts'
+import { getPage, homePage, liveCheckoutPage } from '../pages/store.ts'
 import { stripeFor, verifyWebhookSignature } from '../payments/stripe.ts'
 import { upsertCustomer } from '../domain/customers.ts'
 import { logger } from '../lib/log.ts'
@@ -24,7 +24,7 @@ import { companionsFor, sessionFor as analyticsSession, track } from '../analyti
 import { orderContext, sendEmail } from '../email/send.ts'
 import { findRedirect, llmsTxt, robots, sitemap } from '../seo/schema.ts'
 import * as view from './render.ts'
-import type { StoreView } from './render.ts'
+import type { CheckoutInput, StoreView } from './render.ts'
 
 const CART_COOKIE = 'amboras_cart'
 const log = logger('checkout')
@@ -218,9 +218,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     if (!current.cart?.items.length) return redirect(`${current.base}/cart`)
     record(ctx, current, 'checkout.start', { amountCents: current.totals?.totalCents ?? 0 })
-    const stripe = stripeFor(current.db, current.store.id)
-    const funnel = funnelForProducts(current.db, current.store.id, current.cart.items.map((item) => item.productId))
-    return html(view.checkoutPage(current, { totals: current.totals!, region: regionOf(current), stripe: stripe ? { publishableKey: stripe.config.publishableKey } : null, bump: resolveBump(current.db, current.store.id, funnel) }))
+    return html(renderCheckout(current, checkoutInputFor(current)))
   })
 
   /** The no-provider path: the same form, a demo order, then the offer. */
@@ -246,7 +244,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       if (error instanceof CheckoutError) {
         saveCheckoutDraft(current.db, current.store.id, cart.id, draft)
         const refreshed = withTotals({ ...current, cart: getCart(current.db, current.store.id, cart.id) })
-        return html(view.checkoutPage(refreshed, { totals: refreshed.totals!, region: regionOf(current), error: error.message }), 400)
+        return html(renderCheckout(refreshed, checkoutInputFor(refreshed, { stripe: null, error: error.message })), 400)
       }
       throw error
     }
@@ -318,6 +316,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const built = getPage(current.db, current.store.id, slug)
     if (built && (built.status === 'published' || current.preview)) {
       record(ctx, current, 'view.page')
+      if (built.role === 'checkout' && built.mode === 'blocks') {
+        // The checkout page at its own address: the visitor's cart if there is one, a sample line otherwise, so the editor preview is never blank.
+        const sample = !current.cart?.items.length
+        const shown = sample ? withSampleCart(current) : current
+        return html(view.checkoutBlockPage(shown, built, checkoutInputFor(shown), { sample }))
+      }
       return html(built.mode === 'html' ? view.htmlPage(current, built) : view.blockPage(current, built))
     }
     const copy: Record<string, string> = {
@@ -457,7 +461,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (existing) return redirect(`${current.base}/orders/${existing.id}/offer`)
     const intent = await stripe.client.paymentIntents.retrieve(intentId)
     if (intent.status !== 'succeeded' && intent.status !== 'processing') {
-      return html(view.checkoutPage(current, { totals: current.totals!, region: regionOf(current), error: 'The payment did not go through. Try another method.', stripe: { publishableKey: stripe.config.publishableKey } }), 400)
+      return html(renderCheckout(current, checkoutInputFor(current, { error: 'The payment did not go through. Try another method.' })), 400)
     }
     try {
       const order = completeCart(current.db, current.store.id, cart.id, {
@@ -470,7 +474,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       afterOrder(ctx, current, order)
       return redirect(`${current.base}/orders/${order.id}/offer`)
     } catch (error) {
-      if (error instanceof CheckoutError) return html(view.checkoutPage(current, { totals: current.totals!, region: regionOf(current), error: error.message, stripe: { publishableKey: stripe.config.publishableKey } }), 400)
+      if (error instanceof CheckoutError) return html(renderCheckout(current, checkoutInputFor(current, { error: error.message })), 400)
       throw error
     }
   })
@@ -616,6 +620,28 @@ function readCheckoutForm(body: Record<string, unknown>) {
     marketing: body.marketing === 'true',
     address: { name, line1: String(body.line1 ?? '').trim(), city: String(body.city ?? '').trim(), postal: String(body.postal ?? '').trim(), country: String(body.country ?? 'US').trim().toUpperCase(), phone: String(body.phone ?? '').trim() },
   }
+}
+
+/** Everything the checkout renders from, in one place: totals, region, the payment provider and the funnel's bump. */
+function checkoutInputFor(current: StoreView, extra: Partial<CheckoutInput> = {}): CheckoutInput {
+  const stripe = stripeFor(current.db, current.store.id)
+  const funnel = funnelForProducts(current.db, current.store.id, (current.cart?.items ?? []).map((item) => item.productId))
+  return { totals: current.totals!, region: regionOf(current), stripe: stripe ? { publishableKey: stripe.config.publishableKey } : null, bump: resolveBump(current.db, current.store.id, funnel), ...extra }
+}
+
+/** The checkout built from blocks when the store has published one; the built-in page otherwise. */
+function renderCheckout(current: StoreView, input: CheckoutInput): string {
+  const custom = liveCheckoutPage(current.db, current.store.id, { preview: current.preview })
+  return custom ? view.checkoutBlockPage(current, custom, input) : view.checkoutPage(current, input)
+}
+
+/** The cart with one line from the first product, in memory only, so a checkout page can be previewed without buying anything. */
+function withSampleCart(current: StoreView): StoreView {
+  const product = listProducts(current.db, current.store.id, { status: 'published', limit: 1 })[0]
+  const variant = product?.variants[0]
+  if (!product || !variant || !current.cart) return current
+  const cart = { ...current.cart, items: [{ variantId: variant.id, productId: product.id, title: product.title, variantTitle: variant.title, image: variant.image || product.heroImage, unitCents: variant.priceCents, quantity: 1 }] }
+  return { ...current, cart, totals: totals(current.db, current.store.id, cart) }
 }
 
 function regionOf(current: StoreView) {

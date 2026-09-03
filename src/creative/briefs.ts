@@ -185,7 +185,9 @@ export async function queueUgcConcepts(db: Db, storeId: string, product: Product
 
 /* ------------------------------------------------------- block suggestions */
 
-export type PageGoal = 'offer' | 'advertorial' | 'quiz' | 'pdp' | 'home'
+export type PageGoal = 'offer' | 'advertorial' | 'quiz' | 'pdp' | 'home' | 'science' | 'checkout'
+
+export const PAGE_GOALS: PageGoal[] = ['offer', 'advertorial', 'quiz', 'pdp', 'home', 'science', 'checkout']
 export type CatalogEntry = { type: string; name: string; description: string; fields?: string[] }
 
 export type BlockSuggestion = { type: string; why: string; settings?: Record<string, unknown> }
@@ -205,7 +207,7 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
       return [
         { type: 'header', why: 'Brand mark and one button; no navigation out.' },
         { type: 'countdown', why: 'The saving, ending soon.' },
-        { type: 'rating-line', why: 'The rating from real reviews, before any claim.' },
+        { type: 'rating-strip', why: 'The rating from real reviews, before any claim.', settings: product ? { productId: product.id } : {} },
         { type: 'hero', why: 'The promise above the fold with the CTA.' },
         { type: 'trust-badges', why: 'Guarantee, delivery, credential, shipping.' },
         { type: 'image-grid', why: 'The problem as four image scenes with a caption each, then the reframe.' },
@@ -217,7 +219,7 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
         buy,
         { type: 'included', why: 'What is in the box, gifts with their value.' },
         { type: 'comparison', why: 'The mechanism against the category, never a brand.' },
-        { type: 'cost-stack', why: 'What the alternatives cost, added up.' },
+        { type: 'cost-comparison', why: 'What the alternatives cost, added up.' },
         { type: 'faq', why: 'The objections, answered.' },
         { type: 'guarantee', why: 'The risk removed, named and numbered.' },
         { type: 'sticky-cta', why: 'The button follows the reader.' },
@@ -264,21 +266,58 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
         { type: 'email-signup', why: 'The list.' },
         { type: 'footer', why: 'Legal links and real contact details.' },
       ]
+    case 'science':
+      return [
+        { type: 'header', why: 'Brand mark and one button.' },
+        { type: 'hero', why: 'The claim, with the rating under it.' },
+        { type: 'rating-strip', why: 'The rating from real reviews.', settings: product ? { productId: product.id } : {} },
+        { type: 'stats', why: 'The numbers buyers reported, with their source.' },
+        { type: 'multicolumn', why: 'What is different, in icon bullets.' },
+        { type: 'image-with-text', why: 'The mechanism in plain words.' },
+        { type: 'studies', why: 'The peer-reviewed evidence, cited.' },
+        { type: 'timeline', why: 'What to expect and when.' },
+        { type: 'comparison', why: 'Against the usual alternative.' },
+        { type: 'video-wall', why: 'Customers on camera.' },
+        { type: 'letter', why: 'A note from the specialist.' },
+        { type: 'value-stack', why: 'What they get and what it is worth.' },
+        buy,
+        { type: 'guarantee', why: 'Risk removed.' },
+        { type: 'faq', why: 'Objections.' },
+        { type: 'sticky-cta', why: 'The button follows.' },
+        { type: 'footer', why: 'Legal links.' },
+      ]
+    case 'checkout':
+      return [
+        { type: 'header', why: 'The logo, nothing to click away to.' },
+        { type: 'checkout-steps', why: 'Where they are in the process.' },
+        { type: 'countdown', why: 'The cart is reserved for ten minutes.', settings: { text: 'Your cart is reserved for', minutes: 10 } },
+        { type: 'rating-strip', why: 'The rating, right above the form.', settings: product ? { productId: product.id } : {} },
+        { type: 'checkout-form', why: 'The real form with the summary beside it and the bump before payment.' },
+        { type: 'guarantee', why: 'Risk removed at the moment of doubt.' },
+        { type: 'trust-badges', why: 'Secure, tracked, supported.' },
+        { type: 'review-wall', why: 'Three buyers, under the button.', settings: { count: 3, ...(product ? { productId: product.id } : {}) } },
+        { type: 'faq', why: 'The last questions before paying.' },
+        { type: 'payment-icons', why: 'The marks that say it is a real shop.' },
+        { type: 'footer', why: 'Legal links.' },
+      ]
     default:
       return [
         { type: 'announcement-bar', why: 'The offer in one line.' },
         { type: 'header', why: 'Navigation and cart.' },
+        { type: 'rating-strip', why: 'The rating from real reviews.', settings: product ? { productId: product.id } : {} },
         buy,
-        { type: 'multicolumn', why: 'Benefit icons.' },
-        { type: 'image-with-text', why: 'The problem, then the mechanism, with an image each.' },
-        { type: 'steps', why: 'How it works in three steps.' },
-        { type: 'expert-quote', why: 'A named professional, if there is one.' },
-        { type: 'comparison', why: 'The mechanism against the category.' },
-        { type: 'timeline', why: 'What to expect.' },
-        { type: 'review-wall', why: 'Proof.' },
-        { type: 'guarantee', why: 'Risk removed, named and numbered.' },
+        { type: 'trust-badges', why: 'Secure checkout, returns, shipping.' },
+        { type: 'delivery-estimate', why: 'When it arrives.', settings: product ? { productId: product.id } : {} },
+        { type: 'guarantee', why: 'Risk removed, next to the price.' },
+        { type: 'multicolumn', why: 'Benefits with images.' },
+        { type: 'image-with-text', why: 'The mechanism with a picture.' },
+        { type: 'how-it-works', why: 'How to use it, in three steps.' },
+        { type: 'specs', why: 'The facts: size, materials, what is in the box.' },
+        { type: 'comparison', why: 'The mechanism against the usual.' },
+        { type: 'expert-quote', why: 'A professional who uses it.' },
+        { type: 'review-wall', why: 'Proof, with the star breakdown.', settings: { histogram: true, ...(product ? { productId: product.id } : {}) } },
         { type: 'faq', why: 'Objections.' },
-        { type: 'sticky-cta', why: 'The button follows, with the price in it.' },
+        { type: 'sticky-cta', why: 'The button follows.' },
         { type: 'footer', why: 'Legal links.' },
       ]
   }

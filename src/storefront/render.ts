@@ -11,6 +11,7 @@ import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import type { Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
+import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
@@ -554,7 +555,8 @@ export type CheckoutInput = {
  * their own where the device supports them. Without it, the same page places
  * a demo order so the flow can be walked end to end.
  */
-export function checkoutPage(view: StoreView, input: CheckoutInput): string {
+/** The pieces of the checkout, built once from the cart, so the built-in page and a checkout laid out from blocks render the same form. */
+export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string } {
   const { totals, region } = input
   const cart = view.cart
   const draft = cart?.checkout ?? {}
@@ -579,14 +581,9 @@ export function checkoutPage(view: StoreView, input: CheckoutInput): string {
       <td style="text-align:right">${item.unitCents ? money(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
     <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="Discount code" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">Apply</button></form>
     ${totalsBlock(view, totals)}</div>`
-
-  const body = `<div class="checkout" data-base="${escapeHtml(view.base)}">
-  <div class="co-main">
-    <a class="co-logo" href="${view.base}/">${escapeHtml(view.store.name)}</a>
-    ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${escapeHtml(input.error)}</div>` : ''}
-    <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${summary}</details>
-    ${input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''}
-    <form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
+  const bump = input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''
+  const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''
+  const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
       <section class="co-block"><h2>Contact</h2>
         <div class="field"><input name="email" type="email" required autocomplete="email" placeholder="Email" value="${escapeHtml(draft.email ?? '')}" aria-label="Email"></div>
         <label class="micro check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
@@ -600,48 +597,101 @@ export function checkoutPage(view: StoreView, input: CheckoutInput): string {
         <div class="field"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for delivery updates)" value="${escapeHtml(draft.phone ?? '')}" aria-label="Phone"></div></section>
       <section class="co-block"><h2>Shipping method</h2>${arrival ? `<p class="micro" style="margin-top:-.4rem">🚚 Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}</p>` : ''}
         <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : option.listCents ? `<s class="micro">${money(option.listCents, view)}</s> Free` : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
-      ${input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''}
+      <!--bump-->
       <section class="co-block"><h2>Payment</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
         ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
           <p class="micro">No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.</p></div>`}
         <label class="micro check" style="margin-top:.8rem"><input type="checkbox" name="billingSame" value="true" checked> Billing address same as shipping</label></section>
-      <button class="btn btn--wide pay" type="submit" id="pay"><span>Pay now</span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
-      <p class="micro center">🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}</p>
-    </form>
-    <div class="co-proof">
-      <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
-      ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
-    </div>
-  </div>
-  <aside class="co-side">${summary}</aside>
-</div>
-${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}
-<script>
+      <button class="btn btn--wide pay" type="submit" id="pay"><span><!--pay-label--></span> · <b data-pay-total>${money(totals.totalCents, view)}</b></button>
+    </form>`
+  const script = `<script>
 (function(){
-  var base = document.querySelector('.checkout').dataset.base;
+  var base = ${JSON.stringify(view.base)};
   var fmt = ${JSON.stringify({ currency: totals.currency })};
   function money(c){ try { return new Intl.NumberFormat('en-US',{style:'currency',currency:fmt.currency}).format(c/100) } catch(e){ return (c/100).toFixed(2) } }
-  var bump = document.querySelector('.bump input');
-  bump && bump.addEventListener('change', function(){
+  function refresh(t){
+    document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
+    document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
+    if (window.__elements) window.__elements.update({ amount: t.totalCents });
+  }
+  var bumps = document.querySelectorAll('.bump input');
+  bumps.forEach(function(bump){ bump.addEventListener('change', function(){
+    bumps.forEach(function(other){ other.checked = bump.checked });
     fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: bump.value, on: bump.checked }) })
-      .then(function(r){ return r.json() }).then(function(t){
-        document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
-        document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
-        if (window.__elements) window.__elements.update({ amount: t.totalCents });
-      });
-  });
+      .then(function(r){ return r.json() }).then(refresh);
+  })});
   document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
     fetch(base + '/checkout/shipping', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ shippingOptionId: radio.value }) })
-      .then(function(r){ return r.json() }).then(function(t){
-        document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
-        document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
-        if (window.__elements) window.__elements.update({ amount: t.totalCents });
-      });
+      .then(function(r){ return r.json() }).then(refresh);
   })});
 })();
 </script>
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
+  const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
+  const proofHtml = `<div class="co-proof">
+      <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
+      ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
+    </div>`
+  return { summary, form, express, bump, script, note, proof: proofHtml }
+}
+
+/**
+ * The one-page checkout, in Shopify's order: express buttons first, then
+ * contact, delivery, shipping method, payment, one button. The summary sits
+ * on the right on desktop and collapses to one line on a phone. With Stripe
+ * connected the payment block is the Payment Element and the express row is
+ * the Express Checkout Element — Apple Pay, Google Pay and Link appear on
+ * their own where the device supports them. Without it, the same page places
+ * a demo order so the flow can be walked end to end.
+ */
+export function checkoutPage(view: StoreView, input: CheckoutInput): string {
+  const { totals } = input
+  const parts = checkoutParts(view, input)
+  const body = `<div class="checkout">
+  <div class="co-main">
+    <a class="co-logo" href="${view.base}/">${escapeHtml(view.store.name)}</a>
+    ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${escapeHtml(input.error)}</div>` : ''}
+    <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${parts.summary}</details>
+    ${parts.express}
+    ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', 'Pay now')}
+    <p class="micro center">${parts.note}</p>
+    ${parts.proof}
+  </div>
+  <aside class="co-side">${parts.summary}</aside>
+</div>
+${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}
+${parts.script}`
   return layout(view, { title: `Checkout — ${view.store.name}`, description: 'Checkout', body, bare: true })
+}
+
+/**
+ * A checkout laid out from blocks: the same form, summary, express row and
+ * bump as the built-in page, placed by the checkout blocks among whatever
+ * else the page carries — a timer, steps, a guarantee, testimonials. The
+ * scripts that keep the totals live ride along once, after the blocks.
+ */
+export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutInput, opts: { sample?: boolean } = {}): string {
+  const parts = checkoutParts(view, input)
+  const context: BlockContext = {
+    ...blockContextFor(view.db, view.store, view.base),
+    checkout: {
+      formHtml: parts.form,
+      summaryHtml: parts.summary,
+      expressHtml: parts.express,
+      bumpHtml: parts.bump,
+      totalCents: input.totals.totalCents,
+      itemCount: (view.cart?.items ?? []).reduce((sum, item) => sum + item.quantity, 0),
+      ...(input.error ? { error: input.error } : {}),
+      sample: opts.sample ?? false,
+    },
+  }
+  return layout(view, {
+    title: page.seo.title || `Checkout — ${view.store.name}`,
+    description: page.seo.description || 'Checkout',
+    body: `${renderPageBody(page, context)}${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.preview })}${parts.script}`,
+    bare: true,
+    head: page.headHtml,
+  })
 }
 
 function stripeScript(view: StoreView, publishableKey: string, totals: Totals): string {

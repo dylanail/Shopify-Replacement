@@ -28,14 +28,17 @@ const jar = new Map<string, string>()
 
 const flashOf = (location: string) => decodeURIComponent(location.replace(/\+/g, ' '))
 
-async function call(path: string, init: { method?: string; form?: Record<string, string> } = {}) {
+async function call(path: string, init: { method?: string; form?: Record<string, string>; json?: unknown } = {}) {
   const headers: Record<string, string> = { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') }
   let body: string | undefined
   if (init.form) {
     headers['content-type'] = 'application/x-www-form-urlencoded'
     body = new URLSearchParams(init.form).toString()
+  } else if (init.json !== undefined) {
+    headers['content-type'] = 'application/json'
+    body = JSON.stringify(init.json)
   }
-  const response = await fetch(`${base}${path}`, { method: init.method ?? (init.form ? 'POST' : 'GET'), headers, ...(body ? { body } : {}), redirect: 'manual' })
+  const response = await fetch(`${base}${path}`, { method: init.method ?? (init.form || init.json !== undefined ? 'POST' : 'GET'), headers, ...(body ? { body } : {}), redirect: 'manual' })
   for (const cookie of response.headers.getSetCookie()) {
     const [pair] = cookie.split(';')
     const [name, value = ''] = (pair ?? '').split('=')
@@ -175,6 +178,49 @@ test('a visitor can buy something, and the order shows up in the admin', async (
   assert.match(orders.text, /buyer@example.com/)
   const analytics = await call('/admin/analytics')
   assert.match(analytics.text, /checkout.complete/)
+})
+
+test('a checkout laid out from blocks becomes the store\'s checkout once published, and previews with a sample order before', async () => {
+  const created = await call('/admin/pages/new', { form: { template: 'checkout' } })
+  const pageId = /\/admin\/pages\/(page_[a-z0-9]+)\/edit/.exec(created.location)?.[1] ?? ''
+  assert.ok(pageId, 'the template creates a page and opens the editor')
+  const editor = await call(`/admin/pages/${pageId}/edit`)
+  const handle = /"handle":"([^"]+)"/.exec(editor.text)?.[1] ?? ''
+  assert.ok(handle)
+  assert.match((await call('/admin/pages')).text, /checkout<\/span>/, 'the pages list marks it as the checkout')
+
+  const preview = await call(`/preview/${slug}/pages/${handle}`)
+  assert.equal(preview.status, 200)
+  assert.match(preview.text, /Sample order/, 'with nothing in the cart the preview fills the form with a sample line')
+  assert.match(preview.text, /id="checkout-form"/)
+  assert.match(preview.text, /class="costeps"/)
+
+  const collection = await call(`/s/${slug}/collections/all`)
+  const handleOf = /\/products\/([a-z0-9-]+)/.exec(collection.text)?.[1] ?? ''
+  const variantId = /id="pdp-variant" value="(var_[a-z0-9]+)"/.exec((await call(`/s/${slug}/products/${handleOf}`)).text)?.[1] ?? ''
+  await call(`/s/${slug}/cart/add`, { form: { variantId, quantity: '1' } })
+  assert.doesNotMatch((await call(`/s/${slug}/checkout`)).text, /class="checkout checkout--blk/, 'a draft checkout page is not the live checkout')
+
+  const editorPage = JSON.parse(/window\.__PAGE = (\{.*?\});/.exec(editor.text)?.[1] ?? '{}') as { blocks: unknown[] }
+  const saved = await call(`/admin/pages/${pageId}/save`, { json: { title: 'Checkout', mode: 'blocks', blocks: editorPage.blocks, status: 'published' } })
+  assert.match(saved.text, /"ok": ?true/)
+
+  const live = await call(`/s/${slug}/checkout`)
+  assert.equal(live.status, 200)
+  assert.match(live.text, /class="checkout checkout--blk/, 'the published page is the checkout')
+  assert.match(live.text, /Complete order/)
+  assert.match(live.text, /class="bump"/, 'the bump from the funnel is inside the form')
+  assert.doesNotMatch(live.text, /Sample order/)
+
+  const bad = await call(`/s/${slug}/checkout`, { form: { email: 'nope', firstName: 'A' } })
+  assert.equal(bad.status, 400)
+  assert.match(bad.text, /class="checkout checkout--blk[\s\S]*valid email/, 'errors come back on the same page')
+  const placed = await call(`/s/${slug}/checkout`, { form: { email: 'block-buyer@example.com', firstName: 'B', lastName: 'Buyer', line1: '2 Road', city: 'Austin', postal: '78701', country: 'US' } })
+  assert.match(placed.location, /\/orders\/order_[a-z0-9]+\/offer$/, 'the order goes through the block checkout')
+  await call(placed.location.replace(base, ''), { form: { accept: 'no' } })
+
+  const suggested = await call('/admin/pages/suggest', { form: { goal: 'checkout' } })
+  assert.match(suggested.location, /\/admin\/pages\/page_[a-z0-9]+\/edit/, 'the layout suggester knows the checkout as a goal')
 })
 
 test('publishing takes the draft live', async () => {
@@ -379,4 +425,14 @@ test('the storefront serves generated legal pages, takes behaviour beacons, and 
   assert.equal(missing.status, 404)
   const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })
   assert.equal(preview.status, 204, 'preview beacons are accepted and dropped')
+})
+
+test('the scheme a proxy forwards is the scheme the request is seen under', async () => {
+  const { makeCtx } = await import('../src/lib/http.ts')
+  const fake = (headers: Record<string, string>) =>
+    makeCtx({ headers: { host: 'admin.example.com', ...headers }, url: '/admin', socket: {} } as never, {} as never, {})
+  assert.equal(fake({}).url.origin, 'http://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'https' }).url.origin, 'https://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'https, http' }).url.origin, 'https://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'ftp' }).url.origin, 'http://admin.example.com')
 })

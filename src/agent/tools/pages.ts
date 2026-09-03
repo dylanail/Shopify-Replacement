@@ -2,7 +2,7 @@ import { getStore } from '../../control/stores.ts'
 import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { DEFAULT_TIERS, listBundles, upsertBundle, type BundleTier } from '../../domain/bundles.ts'
 import { clonePage } from '../../pages/clone.ts'
-import { advertorialTemplate, blankTemplate, createPage, homeTemplate, landingTemplate, listPages, offerTemplate, quizTemplate, salesTemplate, updatePage } from '../../pages/store.ts'
+import { createPage, listPages, PAGE_TEMPLATES, pageTemplate, updatePage } from '../../pages/store.ts'
 import { blockDefinition, BLOCKS, customDefinition, type CustomField } from '../../pages/blocks.ts'
 import { customCatalog, customDefinitions, deleteCustomBlock, getCustomBlock, upsertCustomBlock } from '../../pages/custom-blocks.ts'
 import { latestResearch } from '../research.ts'
@@ -12,9 +12,9 @@ export const pageTools: Tool[] = defineTools([
   {
     name: 'create_page',
     area: 'store',
-    description: 'Create a page from a template, wired to a product and the research on file: sales (the long funnel page, buy box on top), offer (the short funnel landing page), advertorial (listicle), quiz, landing, home, or blank. Opens as a draft in the page builder.',
+    description: `Create a page from a template, wired to a product and the research on file. Opens as a draft in the page builder. Templates: ${PAGE_TEMPLATES.map((template) => `${template.key} (${template.description})`).join('; ')}`,
     schema: {
-      template: { type: 'string', enum: ['sales', 'offer', 'advertorial', 'quiz', 'landing', 'home', 'blank'], default: 'advertorial' },
+      template: { type: 'string', enum: PAGE_TEMPLATES.map((template) => template.key), default: 'advertorial' },
       title: { type: 'string' },
       productId: { type: 'string', help: 'Defaults to the first published product.' },
       publish: { type: 'boolean', default: false },
@@ -29,15 +29,15 @@ export const pageTools: Tool[] = defineTools([
         ...(product ? { product: { id: product.id, title: product.title, image: product.heroImage, subtitle: product.subtitle } } : {}),
         research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
       }
-      const template = args.template as string
-      const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'sales' ? salesTemplate(input) : template === 'home' ? homeTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
-      const titles: Record<string, string> = { advertorial: `Why people are switching to ${product?.title ?? store.name}`, sales: `${product?.title ?? store.name} — the sales page`, offer: `${product?.title ?? store.name} — save today`, quiz: `Find your ${product?.title ?? 'fit'}`, home: `${store.name} — home` }
+      const template = pageTemplate(args.template as string)
+      const blocks = template.build(input)
       const created = createPage(ctx.db, ctx.storeId, {
-        title: (args.title as string) || titles[template] || `${product?.title ?? store.name} — offer`,
-        kind: template === 'advertorial' ? 'advertorial' : 'landing',
-        ...(template === 'offer' || template === 'sales' ? { role: 'offer' as const } : {}),
+        title: (args.title as string) || template.title(input),
+        kind: template.kind,
+        role: template.role,
         blocks,
         status: args.publish ? 'published' : 'draft',
+        ...(product && template.role !== 'checkout' ? { productId: product.id } : {}),
       })
       return {
         summary: `Created "${created.title}" with ${blocks.length} blocks${args.publish ? ', published' : ' as a draft'}.`,

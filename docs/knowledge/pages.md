@@ -42,7 +42,7 @@ The same skeleton on funnel and store pages alike, top to bottom:
 15. Accordions: description, what to expect (a week-by-week timeline), the guarantee, shipping and returns, specs.
 16. One emotional testimonial right there.
 
-Blocks: `rating-line`, `buy-box` (eyebrow, bullets, offer label, ship line, chips, note, guarantee), `bundle-offer`, `included`, `faq`.
+Blocks: `rating-strip`, `buy-box` (eyebrow, bullets, offer label, ship line, chips, note, guarantee), `bundle-offer`, `included`, `delivery-estimate`, `faq`.
 
 ## The sales page (funnel, long form)
 
@@ -70,10 +70,22 @@ scroller, closed by a sticky button. Order:
 19. FAQ of six to twelve, then the review wall with the rating distribution, then the guarantee, then the disclaimer, then the sticky button.
 
 Every CTA is followed by the guarantee line. Blocks: the buy box above,
-`image-grid`, `headline`, `alternatives`, `image-with-text`, `multicolumn`,
-`timeline`, `expert-quote`, `benefit-bullets`, `audience`, `review-wall`,
-`steps`, `offer-stack`, `comparison`, `cost-stack`, `faq`, `guarantee`,
-`sticky-cta`, `disclaimer`. Template: **Sales page**.
+`gallery`, `pull-quote`, `image-grid`, `headline`, `alternatives`, `stats`,
+`image-with-text`, `multicolumn`, `timeline`, `expert-quote`, `letter`,
+`benefit-bullets`, `audience`, `review-wall` with the star breakdown,
+`how-it-works`, `value-stack`, `comparison`, `cost-comparison`, `faq`,
+`guarantee`, `payment-icons`, `sticky-cta`, `disclaimer`. Template: **Sales
+page**.
+
+The science page sells the mechanism: the claim with the rating under it,
+the numbers, what is different, how it works in plain words, the studies
+with journal, year, the finding and the link, every ingredient or material,
+what to expect and when, the comparison, customers on camera, a note from
+the designer, the value stack, the offer. Nothing on either page is
+invented: a number has a source, a study has a link, a quote has a person.
+Blocks: `rating-strip`, `stats`, `how-it-works`, `studies`, `ingredients`,
+`timeline`, `video-wall`, `letter`, `value-stack`. Template: **Science
+page**; version format **Science-led**.
 
 ## The offer page (funnel, short form)
 
@@ -148,6 +160,11 @@ so a new colourway never says 0) → one CTA to the page; sold-out items stay
 in the grid, marked; an empty state with words; adjacent collections
 stacked below for cross-sell.
 
+Blocks: `rating-strip`, `buy-box` or `bundle-offer`, `trust-badges`,
+`delivery-estimate`, `guarantee`, `multicolumn`, `image-with-text`,
+`how-it-works`, `specs`, `comparison`, `expert-quote`, `review-wall` with
+the star breakdown, `ugc-gallery`, `faq`, `product-qa`, `sticky-cta`.
+
 ## The checkout
 
 One page in Shopify's order, and it re-sells. Above the form: the timer,
@@ -164,6 +181,24 @@ Under the button: the guarantee, the consent line with the renewal terms,
 the trust strip, the guarantee card. Below everything, for the person who
 scrolled past the form: reviews from credentialed sceptics and comment
 screenshots. Then the one-click upsell, the downsell, the thank-you.
+
+The funnel checkouts (Checkout Champ, Funnelish, the hosted ones on their own
+subdomain) wrap the same form in more: the logo with a "secure checkout"
+line and a support contact, the steps, a "your cart is reserved for 10:00"
+timer, the product's rating right above the form, the expected arrival
+date, the bundle tiers inside the checkout, the bump pre-checked before
+payment (shipping protection or expedited shipping), the pay button with
+the guarantee under it, then the reasons to finish — the guarantee, three
+reviews, "why choose us", the questions people ask before paying, the
+payment marks. The summary sits beside the form on desktop and collapses to
+one line on a phone.
+
+Blocks: `header`, `checkout-steps`, `countdown`, `rating-strip`,
+`delivery-estimate`, `checkout-form` (with `order-summary` and `order-bump`
+when the summary or the bump is placed on its own), `guarantee`,
+`trust-badges`, `review-wall`, `multicolumn`, `faq`, `payment-icons`,
+`footer`. A published page with the checkout role is the store's
+`/checkout`.
 
 ## Popups
 
