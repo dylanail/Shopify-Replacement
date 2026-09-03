@@ -6,7 +6,7 @@ import { HttpError, makeCtx, Raw, redirect, send, sendError, type Ctx } from './
 import { logger } from './lib/log.ts'
 import { renderSvg } from './agent/images.ts'
 import { readUpload } from './lib/uploads.ts'
-import { recoverRuns } from './agent/runtime.ts'
+import { recoverRuns, resumeQueuedRuns } from './agent/runtime.ts'
 import { sweepAbandonedCarts } from './email/abandoned.ts'
 import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
@@ -159,7 +159,11 @@ const server = createServer(async (req, res) => {
 })
 
 const db = getDb()
+// Re-queue what the last process was in the middle of, then actually run it:
+// a crash during onboarding used to leave a half-built store and a run marked
+// 'queued' that nothing would ever pick up.
 recoverRuns(db)
+resumeQueuedRuns(db)
 // Abandoned carts are swept every ten minutes; the four-hour wait is the
 // window the review-app crowd settled on.
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`

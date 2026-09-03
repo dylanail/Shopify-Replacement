@@ -26,7 +26,7 @@ export const commerceTools: Tool[] = defineTools([
       return {
         summary: `Created the ${collection.title} collection with ${collection.productIds.length} product${collection.productIds.length === 1 ? '' : 's'}.`,
         data: { id: collection.id, handle: collection.handle },
-        artifacts: [{ type: 'link', href: `/collections/${collection.id}`, label: collection.title }],
+        artifacts: [{ type: 'link', href: '/admin/collections', label: collection.title }],
       }
     },
   },

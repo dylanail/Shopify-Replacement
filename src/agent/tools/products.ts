@@ -76,12 +76,17 @@ export const productTools: Tool[] = defineTools([
       const combos = options.length
         ? cartesian(options.map((option) => option.values.map((entry) => ({ [option.title]: entry.value }))))
         : [[{}]]
-      const variants = combos.map((combo, index) => {
+      // Every variant is the price that was asked for. There used to be a
+      // silent surcharge of 5% of the base per variant index, documented
+      // nowhere and reported in no summary, so "a $240 jacket in S/M/L/XL"
+      // quietly priced XL at $276. A size premium is the merchant's decision,
+      // made on the product page.
+      const variants = combos.map((combo) => {
         const optionValues = Object.assign({}, ...combo) as Record<string, string>
         const label = Object.values(optionValues).join(' / ') || 'Default'
         return {
           title: label,
-          priceCents: price + index * Math.round(price * 0.05),
+          priceCents: price,
           inventory: (args.inventory as number) ?? 25,
           optionValues,
         }

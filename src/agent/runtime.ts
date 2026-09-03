@@ -162,6 +162,13 @@ export function resumeRun(db: Db, runId: string) {
  * whole reason steps are rows rather than a closure — a deploy in the middle
  * of a merchant's onboarding has to be survivable.
  */
+/**
+ * Mark work a restart interrupted as ready to run again.
+ *
+ * Finished steps stay finished: runToCompletion skips every step already
+ * marked done, so what comes back is what was in flight and what never
+ * started. `resumeQueuedRuns` is what actually runs them.
+ */
 export function recoverRuns(db: Db): number {
   const stuck = db.all<{ id: string }>("SELECT id FROM agent_runs WHERE status IN ('running','queued')")
   for (const row of stuck) {
@@ -170,6 +177,26 @@ export function recoverRuns(db: Db): number {
   }
   if (stuck.length) log.info(`recovered ${stuck.length} interrupted run(s)`)
   return stuck.length
+}
+
+/**
+ * Run the queue. Nothing else does.
+ *
+ * `recoverRuns` marks the interrupted work ready and this is what picks it
+ * up; without it a queued run sat there forever, because the only other
+ * callers of runToCompletion are `chat.ask` and `onboard`, both in the same
+ * tick they create their run. Not awaited: the server has a port to bind, and
+ * a run that fails on resume fails the way it would have in the request.
+ */
+export function resumeQueuedRuns(db: Db): number {
+  const queued = db.all<{ id: string }>("SELECT id FROM agent_runs WHERE status = 'queued' ORDER BY created_at")
+  for (const row of queued) {
+    void runToCompletion(db, row.id, { actor: { type: 'agent', id: 'recovery' } })
+      .then((outcome) => log.info(`resumed ${row.id}: ${outcome.run.status}${outcome.failures.length ? ` (${outcome.failures.length} failed)` : ''}`))
+      .catch((error) => log.error(`could not resume ${row.id}: ${error instanceof Error ? error.message : String(error)}`))
+  }
+  if (queued.length) log.info(`resuming ${queued.length} queued run(s)`)
+  return queued.length
 }
 
 export type RunOutcome = { run: Run; results: ToolResult[]; artifacts: Artifact[]; failures: string[] }

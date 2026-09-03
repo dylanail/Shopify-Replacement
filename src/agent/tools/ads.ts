@@ -7,6 +7,7 @@ import { deleteAvatar, listAvatars, saveAvatar, suggestAvatars, type Avatar } fr
 import { readBrief } from '../copy.ts'
 import { generate, imageModels, PRESETS, type ImageProvider, type PresetId } from '../images.ts'
 import { modelFor } from '../models.ts'
+import { publicStoreUrl } from '../../lib/urls.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id) as unknown as string[]
@@ -14,9 +15,7 @@ const FORMAT_IDS = AD_FORMATS.map((format) => format.id)
 const PLATFORM_IDS = PLATFORMS.map((platform) => platform.id)
 
 function publicUrlFor(storeSlug: string): string {
-  const root = process.env.AMBORAS_STOREFRONT_HOST
-  if (root) return `https://${storeSlug}.${root}`
-  return `${process.env.AMBORAS_PUBLIC_ORIGIN ?? 'http://localhost:3000'}/s/${storeSlug}`
+  return publicStoreUrl(null, { slug: storeSlug })
 }
 
 /** The photo a re-shoot should start from: an upload on the product, else the store's. */

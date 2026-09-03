@@ -8,6 +8,7 @@ import { addRedirect, listSeoPages, productJsonLd, upsertSeoPage, validateProduc
 import type { Brand } from '../../domain/types.ts'
 import { brandDescription, brandName, brandVoice, paletteFor, readBrief, slogan } from '../copy.ts'
 import { generate } from '../images.ts'
+import { publicStoreUrl } from '../../lib/urls.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const SECTIONS = ['announcement', 'hero', 'featured', 'story', 'collection-grid', 'reviews', 'newsletter', 'footer']
@@ -115,7 +116,7 @@ export const storefrontTools: Tool[] = defineTools([
       return {
         summary: `Draft updated (${Object.keys(patch).join(', ')}). It is not live until you publish.`,
         data: draft.theme,
-        artifacts: [{ type: 'link', href: '/store', label: 'Open the store designer' }],
+        artifacts: [{ type: 'link', href: '/admin/store', label: 'Open the store designer' }],
       }
     },
   },
@@ -296,7 +297,7 @@ export const storefrontTools: Tool[] = defineTools([
       const products = listProducts(ctx.db, ctx.storeId, { status: 'published', limit: 100 })
       const rows: string[][] = []
       for (const product of products) {
-        const node = productJsonLd(store, product, `https://${store.slug}/products/${product.handle}`, statsFor(ctx.db, ctx.storeId, product.id))
+        const node = productJsonLd(store, product, `${publicStoreUrl(ctx.db, store)}/products/${product.handle}`, statsFor(ctx.db, ctx.storeId, product.id))
         for (const issue of validateProductSchema(node)) rows.push([product.title, issue.level, issue.message])
       }
       const errors = rows.filter((row) => row[1] === 'error').length
