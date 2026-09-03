@@ -35,6 +35,8 @@ import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domai
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
 import { execute } from '../src/agent/registry.ts'
+import { generateVersions, versionStats } from '../src/pages/versions.ts'
+import { PDP_FORMATS } from '../src/agent/directions.ts'
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -688,8 +690,16 @@ test('behaviour events and funnel split tests are counted per session and judged
   assert.equal(funnelEntry(db, store.id, one), `/products/${product.handle}`)
   track(db, store.id, a, 'funnel.enter', { path: '/go/spring', meta: { funnelId: one.id, group: 'spring' } })
   track(db, store.id, b, 'funnel.enter', { path: '/go/spring', meta: { funnelId: two.id, group: 'spring' } })
+  // Order matters: only what a session did *after* entering counts for the
+  // funnel it entered. Session a's earlier purchase is not this funnel's.
+  const beforeOnly = funnelStats(db, store.id, 'spring')
+  assert.equal(beforeOnly.find((row) => row.funnelId === one.id)?.revenuePerSessionCents, 0, 'a purchase made before entering is not the funnel\'s conversion')
+
+  track(db, store.id, a, 'cart.add', { path: '/pages/offer' })
+  track(db, store.id, a, 'checkout.complete', { path: '/checkout', amountCents: 7900 })
   const stats = funnelStats(db, store.id, 'spring')
   assert.equal(stats.find((row) => row.funnelId === one.id)?.revenuePerSessionCents, 7900)
+  assert.equal(stats.find((row) => row.funnelId === one.id)?.carts, 1)
   assert.equal(stats.find((row) => row.funnelId === two.id)?.revenuePerSessionCents, 0)
 })
 
@@ -740,4 +750,36 @@ test('the shipping row is read from the world like the rest of the punch list', 
   seedDefaultRegion(db, store.id, 'USD')
   refreshTodos(db, store.id)
   assert.equal(status('shipping'), 'done')
+})
+
+test('a split test is decided on this product, after the session saw the version', async () => {
+  const { db, store, product } = shop()
+  const other = createProduct(db, store.id, { title: 'Something else', status: 'published', variants: [{ title: 'One', priceCents: 9_900, inventory: 5 }] })
+  const versions = await generateVersions(db, store, { kind: 'pdp', productId: product.id, formats: [PDP_FORMATS[0]!.id, PDP_FORMATS[1]!.id], publish: true })
+  const [first, second] = versions
+  assert.ok(first && second)
+
+  const session = sessionFor(db, store.id, { ip: '9.9.9.9', userAgent: 'shopper' })
+  // Bought something else last week, before ever seeing a version of this
+  // product. The events are dated back because the whole test runs inside one
+  // millisecond otherwise.
+  track(db, store.id, session, 'cart.add', { path: '/x', productId: other.id })
+  track(db, store.id, session, 'checkout.complete', { path: '/checkout', amountCents: 9_900 })
+  db.run('UPDATE analytics_events SET created_at = ? WHERE session_id = ?', new Date(Date.now() - 7 * 86400000).toISOString(), session)
+  track(db, store.id, session, 'view.product', { path: '/p', meta: { pageId: first.id } })
+
+  const stats = versionStats(db, store.id, product.id)
+  const a = stats.find((row) => row.pageId === first.id)
+  const b = stats.find((row) => row.pageId === second.id)
+  assert.equal(a?.views, 1)
+  assert.equal(a?.carts, 0, 'a cart add for a different product is not this version\'s')
+  assert.equal(a?.purchases, 0, 'and neither is a purchase made before the version was seen')
+  assert.equal(b?.views, 0, 'the version nobody saw is credited with nothing at all')
+
+  track(db, store.id, session, 'cart.add', { path: '/p', productId: product.id })
+  track(db, store.id, session, 'checkout.complete', { path: '/checkout', amountCents: 4_000 })
+  const after = versionStats(db, store.id, product.id).find((row) => row.pageId === first.id)
+  assert.equal(after?.carts, 1)
+  assert.equal(after?.purchases, 1)
+  assert.equal(after?.revenueCents, 4_000, 'and only the order that came after it')
 })

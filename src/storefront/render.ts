@@ -16,7 +16,7 @@ import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
 import { stripeFor } from '../payments/stripe.ts'
-import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
+import { funnelNextFor, type ResolvedBump, type ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
 import { fontLink, themeCss } from './theme.ts'
@@ -96,7 +96,8 @@ ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 
 /** A built page. Block pages bring their own header and footer; the theme supplies tokens and the cart. */
 export function blockPage(view: StoreView, page: Page): string {
-  const context = blockContextFor(view.db, view.store, view.base)
+  const next = funnelNextFor(view.db, view.store.id, page.id)
+  const context = { ...blockContextFor(view.db, view.store, view.base), ...(next ? { funnelNext: `${view.base}${next}` } : {}) }
   return layout(view, {
     title: page.seo.title || `${page.title} — ${view.store.name}`,
     description: page.seo.description || page.title,

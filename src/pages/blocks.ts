@@ -38,6 +38,14 @@ export type BlockContext = {
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
   /** The blocks this store defined for itself (custom-blocks.ts), resolved alongside the catalog. */
   custom?: BlockDefinition[]
+  /**
+   * Where this page's call to action leads inside its funnel: the offer page
+   * for an advertorial, the checkout for an offer page. The funnel model is
+   * ad → advertorial → offer → checkout, and the advertorial's own CTA
+   * defaults to `#offer`, an anchor on itself — so the offer page a merchant
+   * had chosen in the funnel editor was never linked from anywhere.
+   */
+  funnelNext?: string
   /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
   live?: {
     purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
@@ -527,7 +535,10 @@ export const BLOCKS: BlockDefinition[] = [
       const left = product
         ? `<div class="sticky-product">${product.image ? `<img src="${e(product.image)}" alt="" loading="lazy">` : ''}<div><b>${e(product.title)}</b><span class="micro">${settings.note ? e(settings.note) : format(product.priceCents, context.currency)}</span></div></div>`
         : `<div>${settings.note ? `<div class="p">${e(settings.note)}</div>` : ''}</div>`
-      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(settings.href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
+      // The shipped default is an anchor on this page; when the page is a step
+      // in a funnel, the next step is where the button belongs.
+      const href = settings.href === '#offer' && context.funnelNext ? context.funnelNext : (settings.href as string)
+      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
     },
   },
   {

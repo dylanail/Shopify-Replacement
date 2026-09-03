@@ -99,16 +99,43 @@ export function pickPdpVersion(db: Db, storeId: string, product: Product, sessio
 
 export type VersionStats = { pageId: string; title: string; format: string; weight: number; status: string; views: number; carts: number; purchases: number; revenueCents: number; conversion: number }
 
-/** Per-version numbers from the event stream: a view carries the page it was; a cart add and a purchase are attributed to the version the session saw. */
+/**
+ * Per-version numbers from the event stream.
+ *
+ * A cart add or a purchase counts for a version only if it happened *after*
+ * that session saw it, and a cart add counts only for this product. Without
+ * either bound every version of every product was credited with every
+ * purchase the session ever made, before or after — so a split test between
+ * two pages of one product was decided on a number that included orders for
+ * a different product placed the week before.
+ */
 export function versionStats(db: Db, storeId: string, productId: string): VersionStats[] {
   const pages = versionsFor(db, storeId, productId).filter((page) => page.role === 'pdp')
   return pages.map((page) => {
-    const sessions = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ?", storeId, page.id).map((row) => row.session_id)
-    if (!sessions.length) return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0 }
-    const placeholders = sessions.map(() => '?').join(', ')
-    const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${placeholders})`, storeId, ...sessions)?.c ?? 0
-    const purchases = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${placeholders})`, storeId, ...sessions)
-    return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: sessions.length, carts, purchases: purchases?.c ?? 0, revenueCents: purchases?.total ?? 0, conversion: sessions.length ? (purchases?.c ?? 0) / sessions.length : 0 }
+    const seen = db.all<{ session_id: string; at: string }>(
+      "SELECT session_id, MIN(created_at) at FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ? GROUP BY session_id",
+      storeId,
+      page.id,
+    )
+    const empty = { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0 }
+    if (!seen.length) return empty
+    // One OR-ed pair per session: its id, and the moment it first saw this
+    // version. SQLite has no tuple IN, and the alternative is a query per
+    // session.
+    const after = seen.map(() => '(session_id = ? AND created_at >= ?)').join(' OR ')
+    const params = seen.flatMap((row) => [row.session_id, row.at])
+    const carts = db.one<{ c: number }>(
+      `SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND product_id = ? AND (${after})`,
+      storeId,
+      productId,
+      ...params,
+    )?.c ?? 0
+    const purchases = db.one<{ c: number; total: number | null }>(
+      `SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND (${after})`,
+      storeId,
+      ...params,
+    )
+    return { ...empty, views: seen.length, carts, purchases: purchases?.c ?? 0, revenueCents: purchases?.total ?? 0, conversion: seen.length ? (purchases?.c ?? 0) / seen.length : 0 }
   })
 }
 

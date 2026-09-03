@@ -406,8 +406,8 @@ test('a block setting the owner cleared stays cleared', () => {
     .filter((definition): definition is NonNullable<typeof definition> => Boolean(definition))
     .flatMap((definition) =>
       Object.entries(definition.schema)
-        .filter(([, field]) => field.type === 'string' && typeof field.default === 'string' && (field.default as string).length > 6)
-        .map(([key, field]) => ({ definition, key, fallback: field.default as string })),
+        .filter(([, field]) => field.type === 'string' && typeof (field as { default?: unknown }).default === 'string' && String((field as { default?: unknown }).default).length > 6)
+        .map(([key, field]) => ({ definition, key, fallback: String((field as { default?: unknown }).default) })),
     )[0]
   assert.ok(found, 'the catalog ships blocks with stock copy in their string settings')
   const cleared = renderBlock({ id: 'b1', type: found.definition.type, settings: { [found.key]: '' } }, context)
