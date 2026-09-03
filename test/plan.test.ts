@@ -592,7 +592,7 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.equal(accepted[2]?.settings?.html, '<table></table>')
   assert.equal(accepted[3]?.settings?.productId, product.id)
 
-  // The page writer can insert a section after a block; unknown types, empty HTML and scripts are dropped.
+  // The page writer can insert a section after a block; unknown types, empty HTML and scripts inside HTML are dropped; a custom-code block with js is kept.
   const blocks = [{ id: 'h1', type: 'headline', settings: { text: 'Old' } }, { id: 'f', type: 'footer', settings: {} }]
   const written = applyAuthoring(blocks, {
     blocks: [{ id: 'h1', values: [{ key: 'text', value: 'New' }] }],
@@ -604,9 +604,10 @@ test('a store can define its own blocks, and the model can add sections the cata
       { after: 'f', type: 'custom-code', values: [{ key: 'js', value: 'x()' }] },
     ],
   })
-  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'steps', 'footer'])
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'steps', 'footer', 'custom-code'])
   assert.equal(written[0]?.settings.text, 'New')
   assert.equal(written[2]?.settings.headline, 'Three steps')
+  assert.equal(written[4]?.settings.js, 'x()')
 })
 
 test('css and js can be written for a page, a block, or the whole store', async () => {
