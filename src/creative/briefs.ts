@@ -63,25 +63,41 @@ export function deleteQueueItem(db: Db, storeId: string, itemId: string) {
 
 /* ------------------------------------------------------------ photo briefs */
 
-export type PhotoBrief = { id: string; name: string; what: string; why: string; how: string }
+export type PhotoBrief = { id: string; name: string; what: string; why: string; how: string; /** Only some products have this shot to take; missing it is not a gap. */ optional?: boolean }
 
-/** The eight shots every product page and ad set draws on. */
+/**
+ * The shots every product page and ad set draws on: the eight the course
+ * asks for, plus the ones every reference page turned out to use
+ * (docs/knowledge/reference-pages.md): the pack shot per tier, the "before"
+ * micro-scenes, the mechanism diagram, the goes-everywhere tiles, the
+ * infographic slides for the mobile gallery, and, where there is one, the
+ * expert's portrait, the origin photo and the texture macro.
+ */
 export const PHOTO_BRIEFS: PhotoBrief[] = [
   { id: 'hero', name: 'Hero on a plain ground', what: 'The product alone, front three-quarter, on a plain surface with one soft light.', why: 'The buy box, the ad thumbnail and the share image all use it.', how: 'Window light from one side, a white or neutral card behind, phone at product height, nothing else in frame.' },
+  { id: 'tiers', name: 'The pack shot per tier', what: 'One unit, two units, three units (or 1 / 3 / 5 bottles), each on the same ground, so every quantity tier has its own picture.', why: 'Every reference buy box shows the tier as a picture, not a number: "Buy 2 Get 1 Free" is three bottles side by side. The tier a buyer picks is the one they can see.', how: 'Same distance, light and ground as the hero; stack or line the units up; one frame per tier; leave room for the badge.' },
   { id: 'hand', name: 'In hand, for scale', what: 'Someone holding or wearing it, hands only.', why: 'Answers "how big is it" without a ruler and reads as real.', how: 'Same light as the hero; crop at the wrist; skin tone true.' },
   { id: 'use', name: 'In use, in the real place', what: 'The product doing its job where it is used: the kitchen, the gym, the nursery, the desk.', why: 'The lifestyle block and the first ad frame; the buyer sees their own life.', how: 'Wider shot, natural mess allowed, product clearly the subject.' },
+  { id: 'before', name: 'The "before": four moments of the problem', what: 'Four short scenes of the problem without the product: the ache at the desk at 3 p.m., the drive, bracing to stand, shifting on the couch. No product in frame.', why: 'The sales pages open the argument with four image cards and a caption each ("By mid-afternoon at your desk, sitting turns to a deep ache.") before any product is shown; the buyer recognises the moment.', how: 'One person, four places, phone at eye level, the discomfort readable in posture, nothing staged beyond that; square crops; each frame will get a one-line caption.' },
   { id: 'detail', name: 'Detail of the mechanism', what: 'A close-up of the part that makes it work: the seam, the clip, the texture, the ingredient list.', why: 'The mechanism must be shown, not asserted; this is the proof shot.', how: 'Macro or portrait mode, fill the frame with the detail, sharp focus.' },
-  { id: 'box', name: 'What arrives', what: 'The box or bag open with everything laid out.', why: 'Sets expectations, cuts "is that all?" support tickets, feeds the bundle tiers.', how: 'Top-down on a plain surface, every item visible, labels readable.' },
+  { id: 'mechanism', name: 'The mechanism as a diagram', what: 'A cutaway, a side profile or an annotated render that shows how it works: the jaw moved forward, the tailbone lifted off the seat, the three layers of the filter.', why: 'Every reference page names its mechanism and draws it; the diagram is what the "how it works" section and the ad hold are built on.', how: 'Brief for a render, not a photo: the product from the angle that shows the action, two or three labels, one accent colour; the 360 set is the input.' },
+  { id: 'box', name: 'What arrives, laid out', what: 'The box or bag open with everything laid out flat: the product, the accessories, the manual, the gifts.', why: 'The "what\'s included" stack and the bundle tiers are built from it; it cuts "is that all?" tickets.', how: 'Top-down on a plain surface, every item visible and evenly spaced, labels readable; a second frame with each free gift on its own.' },
   { id: 'size', name: 'Size and options side by side', what: 'Every size, colour or variant in one frame.', why: 'The options picker and the size chart need it; returns fall when people see the range.', how: 'Same distance and light for every unit, evenly spaced.' },
-  { id: 'result', name: 'The result, or before and after', what: 'What is different after using it: the clean surface, the sleeping baby, the flat pack.', why: 'The outcome is what is bought; the before-and-after block and the ad hold read this.', how: 'Same framing before and after; if there is no before, the after alone with the product in frame.' },
+  { id: 'result', name: 'The result, or before and after', what: 'What is different after using it: the clean surface, the sleeping baby, the flat pack. Two frames, same framing, one with the product and one without.', why: 'The outcome is what is bought; the before-and-after block and the ad hold read this.', how: 'Same framing before and after; if there is no before, the after alone with the product in frame.' },
+  { id: 'everywhere', name: 'Goes everywhere: four places', what: 'The product in four places it travels to: the car, the porch, the office, on the go.', why: 'The "and it goes everywhere you go" grid on the sales pages; it answers "will it work in my seat" without a word.', how: 'Four square frames, product in the same position in each, the place doing the talking; shoot in one afternoon.' },
+  { id: 'slides', name: 'The infographic slides', what: 'Four to six gallery slides that sell on their own: the benefits on a plain ground, the mechanism callouts, the dimensions, the expert quote, the reviews overlay.', why: 'On a phone the gallery is seen before any scroll; the reference product pages put the argument into the slides.', how: 'Brief for a designer or a render: the hero or a 360 frame as the base, short labels in the brand type, one idea per slide, the last slide the dimensions.' },
   { id: 'turn', name: 'The 360 set', what: 'Front, both sides, back and top, on the same ground.', why: 'Every render and every page needs the product from more than one side; the reference set is built from these.', how: 'Turn the product, not the phone; keep the distance and the light fixed.' },
+  { id: 'expert', name: 'The expert, if there is one', what: 'A portrait of the real professional who recommends it, in their own place: the clinic, the workshop, the gym.', why: 'The expert quote and the "recommended by" badge need a face; a stock photo is a lie the health report cannot catch.', how: 'Only a real person who agreed in writing; natural light, their name and credential recorded with the file.', optional: true },
+  { id: 'origin', name: 'Where it is made', what: 'The workshop, the factory line, the field, the kitchen: a real photo of the product being made or checked.', why: 'The manufacturing section on the reference pages carries a captioned photo ("Every unit is hand-checked before it ships."); origin is a quality claim the buyer can see.', how: 'Ask the supplier for one frame of the line or the final check; if none exists, the section is left out rather than faked.', optional: true },
+  { id: 'texture', name: 'The texture macro', what: 'The material itself, filling the frame: the serum on skin, the weave, the grain, the foam cut edge.', why: 'Skincare and materials sell on texture; the gallery and the ingredients section use it.', how: 'Macro, raking light from one side, no product packaging in frame.', optional: true },
 ]
 
 /** Which briefs a product already has, read from its media alt text and tags ("photo:hero"). */
-export function photoCoverage(product: Product): { have: PhotoBrief[]; missing: PhotoBrief[] } {
+export function photoCoverage(product: Product): { have: PhotoBrief[]; missing: PhotoBrief[]; optional: PhotoBrief[] } {
   const text = [...product.media.map((media) => media.alt), ...product.tags, product.metadata.photos ?? ''].join(' ').toLowerCase()
   const have = PHOTO_BRIEFS.filter((brief) => text.includes(`photo:${brief.id}`) || (brief.id === 'hero' && Boolean(product.heroImage)))
-  return { have, missing: PHOTO_BRIEFS.filter((brief) => !have.includes(brief)) }
+  // Optional shots (the expert, the origin, the texture) are listed so the owner knows to take them, but not counted as gaps.
+  return { have, missing: PHOTO_BRIEFS.filter((brief) => !have.includes(brief) && !brief.optional), optional: PHOTO_BRIEFS.filter((brief) => brief.optional && !have.includes(brief)) }
 }
 
 /** One queue item per missing shot; already-queued ones are left alone. */

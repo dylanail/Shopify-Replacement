@@ -222,7 +222,7 @@ export function creativePage(ctx: Ctx): string {
     <span class="tag ${pending.length ? 'warn' : 'ok'}">${pending.length} waiting</span></div>
   <div class="grid2"><div>
     <div class="card" id="queue"><h2>The queue</h2>${queue.length ? queue.map(item).join('') : '<p class="muted" style="font-size:12.5px">Nothing queued. Use the forms on the right.</p>'}</div>
-    <div class="card" id="photos"><h2>Product photos against the eight briefs</h2>
+    <div class="card" id="photos"><h2>Product photos against the briefs</h2>
       <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">${PHOTO_BRIEFS.map((brief) => e(brief.name)).join(' · ')}. Mark a photo with <code>photo:&lt;id&gt;</code> in its alt text.</p>
       <table class="data"><thead><tr><th>Product</th><th>Have</th><th>Missing</th><th></th></tr></thead><tbody>${coverage.map(({ product, have, missing }) => `<tr><td>${e(product.title)}</td><td>${have.map((brief) => `<span class="tag ok">${e(brief.id)}</span>`).join(' ') || '—'}</td><td>${missing.map((brief) => `<span class="tag">${e(brief.id)}</span>`).join(' ') || '<span class="tag ok">complete</span>'}</td>
         <td style="text-align:right"><form method="post" action="/admin/creative/briefs"><input type="hidden" name="productId" value="${e(product.id)}"><button class="btn" type="submit" style="font-size:11px" ${missing.length ? '' : 'disabled'}>Queue the briefs</button></form></td></tr>`).join('') || '<tr><td colspan="4" class="muted">No products yet.</td></tr>'}</tbody></table></div>

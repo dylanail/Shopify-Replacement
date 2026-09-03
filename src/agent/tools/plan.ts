@@ -166,7 +166,7 @@ export const planTools: Tool[] = defineTools([
   {
     name: 'queue_photo_briefs',
     area: 'products',
-    description: 'Check a product against the eight photo briefs and queue the missing shots for the owner to take.',
+    description: 'Check a product against the photo briefs (the shots every reference page uses: hero, the pack per tier, in hand, in use, the "before" moments, detail, the mechanism diagram, what arrives, size, result, goes-everywhere, the slides, 360) and queue the missing shots for the owner to take.',
     schema: { productId: { type: 'string', required: true } },
     handler(args, ctx) {
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
