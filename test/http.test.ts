@@ -49,7 +49,7 @@ let slug = ''
 test('the root is the admin, and login and register are served', async () => {
   assert.equal((await call('/')).status, 302)
   assert.equal((await call('/')).location, '/admin')
-  assert.match((await call('/about-this-platform')).text, /AI-native/)
+  assert.equal((await call('/about-this-platform')).status, 404, 'there is no marketing site; this is one person\'s admin')
   assert.equal((await call('/login')).status, 200)
   assert.equal((await call('/healthz')).status, 200)
   assert.equal((await call('/nope')).status, 404)
@@ -70,7 +70,7 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.match(short.location, /error=/, 'a two-word prompt is refused rather than guessed at')
 
   const built = await call('/onboarding', {
-    form: { prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City', planSlug: 'starter' },
+    form: { prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City' },
   })
   assert.match(built.location, /^\/admin\?flash=/)
   assert.match(decodeURIComponent(built.location), /Ironjaw & Co is built/)
@@ -88,6 +88,7 @@ test('every admin page renders', async () => {
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
     '/admin/promotions', '/admin/analytics', '/admin/reviews', '/admin/store', '/admin/marketing',
     '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
+    '/admin/build', '/admin/market', '/admin/creative', '/admin/store?health=1',
   ]) {
     const response = await call(path)
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
@@ -104,12 +105,16 @@ test('the assistant executes a real change from the panel', async () => {
   assert.match(ai.text, /Created The Road Bag/)
 })
 
-test('a risky action is refused from the panel until it is confirmed', async () => {
+test('a risky action from the panel executes, is audited, and the panel carries no permission checkbox', async () => {
   const products = await call('/admin/products?search=Road')
   const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
-  const refused = await call('/admin/ask', { form: { text: `delete product ${productId}`, page: 'products' } })
-  assert.equal(refused.status, 302)
-  assert.match((await call('/admin/products')).text, /The Road Bag/, 'still there')
+  assert.ok(!products.text.includes('Allow risky actions'), 'the per-turn gate is gone')
+  const deleted = await call('/admin/ask', { form: { text: `delete product ${productId}`, page: 'products' } })
+  assert.equal(deleted.status, 302)
+  const row = `href="/admin/products/${productId}" style="text-decoration:none"`
+  assert.ok(products.text.includes(row), 'the table row was there')
+  assert.ok(!(await call('/admin/products')).text.includes(row), `gone from the catalog (${flashOf(deleted.location)})`)
+  assert.match((await call('/admin/settings')).text, /delete_product/, 'and the audit says so')
 })
 
 test('the generated storefront serves a home page, a PDP and its structured data', async () => {
@@ -229,7 +234,7 @@ test('a second store can be started from the admin, with a photo, and both show 
   assert.match(hub.text, /Start a new store/)
   assert.match(hub.text, /Ironjaw/)
 
-  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products', planSlug: 'launch' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
+  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
   assert.match(decodeURIComponent(built.location), /Marrow Lab is built/)
 
   const dashboard = await call('/admin')
@@ -353,4 +358,25 @@ test('the storefront product page carries the conversion sections and the sticky
   assert.match(hero, /ref=%2F_uploads/)
   const svg = await (await fetch(`${base}${hero}`)).text()
   assert.match(svg, /<image href="data:image\/png;base64,/, 'the hero is the merchant photo, staged')
+})
+
+test('the storefront serves generated legal pages, takes behaviour beacons, and names a missing funnel test', async () => {
+  const privacy = await call(`/s/${slug}/pages/privacy`)
+  assert.equal(privacy.status, 200)
+  assert.match(privacy.text, /cookie-free/)
+  assert.match(privacy.text, /Skip to content/, 'the skip link is on every page')
+  assert.match(privacy.text, /<main id="main"/, 'and the main landmark')
+  const terms = await call(`/s/${slug}/pages/terms`)
+  assert.equal(terms.status, 200)
+  assert.match(terms.text, /Returns and the guarantee/)
+  const beacon = await fetch(`${base}/s/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/pages/privacy', e: [{ t: 'scroll', m: { depth: 50 } }, { t: 'cta.click', m: { label: 'Buy' } }, { t: 'checkout.complete', m: {} }] }) })
+  assert.equal(beacon.status, 204)
+  const analytics = await call('/admin/analytics')
+  assert.match(analytics.text, /What visitors did/)
+  assert.match(analytics.text, /scroll|cta\.click/, 'the beacon events reached the ticker')
+  assert.ok(!/checkout\.complete/.test(analytics.text), 'a beacon cannot claim a purchase')
+  const missing = await call(`/s/${slug}/go/nothing`)
+  assert.equal(missing.status, 404)
+  const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })
+  assert.equal(preview.status, 204, 'preview beacons are accepted and dropped')
 })

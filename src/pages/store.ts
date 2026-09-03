@@ -215,6 +215,47 @@ export function landingTemplate(input: TemplateInput): BlockInstance[] {
   ]
 }
 
+/** The offer page: the order that turned 1.18x into 3.59x — the saving above the fold, proof, the problem, the mechanism, the buy box, the objections. */
+export function offerTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  return [
+    newBlock('header', { cta: 'Claim the offer', ctaHref: '#offer' }),
+    newBlock('countdown', { text: 'Save on your first order — ending soon' }),
+    newBlock('hero', { headline: product ? `${product.title}: the one that works when the others did not` : `Introducing ${input.storeName}`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'Get it and save', ctaHref: '#offer', height: 'medium' }),
+    newBlock('trust-badges', {}),
+    newBlock('headline', { level: 'h2', text: 'Why the usual fix keeps failing', sub: 'Say what the alternatives do wrong, in one line each.' }),
+    newBlock('rich-text', { text: 'The cheap version fails in a month. The expensive one asks for a routine nobody keeps. Name each one, what it cost, and what happened next.' }),
+    ...(product ? [newBlock('image-with-text', { image: product.image, headline: `What ${product.title} does differently`, text: 'The mechanism: how it creates the result, in two sentences an eleven-year-old follows.', cta: 'See the offer', ctaHref: '#offer' })] : []),
+    newBlock('multicolumn', { headline: 'How it works' }),
+    newBlock('review-wall', { headline: 'From people who bought it', count: 6, ...(product ? { productId: product.id } : {}) }),
+    ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise' })] : [newBlock('offer-box', {})]),
+    ...(input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : []),
+    ...(input.research?.objections.length ? [newBlock('faq', { headline: 'Before you decide', items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') })] : [newBlock('faq', {})]),
+    newBlock('guarantee', {}),
+    newBlock('sticky-cta', { label: product ? `Get ${product.title}` : 'Claim the offer', href: '#offer' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/** The quiz funnel: one question per screen, the result names the sub-avatar and shows the offer. */
+export function quizTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  const triggers = (input.research?.triggers ?? []).slice(0, 3)
+  const steps = [
+    `What brought you here?|${triggers.length ? triggers.join('|') : 'The last one broke|A recommendation|Curiosity'}`,
+    'What did you try before?|Nothing yet|Something cheap that did not last|Something expensive that disappointed',
+    'What matters most to you?|It lasts|It is easy|It looks right',
+  ].join('\n')
+  return [
+    newBlock('header', {}),
+    newBlock('quiz', { headline: `Find the right ${product?.title ?? 'one'} for you`, steps, resultHeadline: 'Here is the one for you', resultText: 'Based on what you told us, this is the build to start with.', ctaLabel: 'See the offer', ctaHref: '#offer', ...(product ? { productId: product.id } : {}) }),
+    newBlock('trust-badges', {}),
+    ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise' })] : [newBlock('offer-box', {})]),
+    newBlock('guarantee', {}),
+    newBlock('footer', {}),
+  ]
+}
+
 export function blankTemplate(): BlockInstance[] {
   return [newBlock('header', {}), newBlock('headline', { level: 'h1', text: 'A new page' }), newBlock('rich-text', {}), newBlock('footer', {})]
 }
@@ -337,6 +378,10 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .sizechart summary{cursor:pointer;font-weight:500;padding:.6rem 0;border-bottom:1px solid var(--line)}
 .ugc{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}.ugc figure{margin:0}.ugc img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.ugc figcaption{font-size:.75rem;color:var(--muted);margin-top:.25rem}
 .qa-form{display:grid;gap:.5rem;margin-top:1rem}
+.quiz{text-align:center}.qprogress{height:6px;background:var(--line);border-radius:999px;overflow:hidden;margin:.8rem auto 1.4rem;max-width:22rem}.qprogress span{display:block;height:100%;background:var(--primary);transition:width .3s}
+.qstep{border:0;padding:0;margin:0}.qstep legend{margin-inline:auto}.qopts{display:grid;gap:.6rem;max-width:26rem;margin:1rem auto 0}
+.qopt{border:1px solid var(--line);background:var(--raise);color:var(--ink);border-radius:var(--radius);padding:.9rem 1rem;font:inherit;cursor:pointer;text-align:left}.qopt:hover{border-color:var(--primary)}
+.qresult .qproduct{display:flex;gap:1rem;align-items:center;justify-content:center;text-align:left;margin:1rem 0}.qresult .qproduct img{width:96px;height:96px;object-fit:cover;border-radius:var(--radius)}
 @media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}}
 @media (max-width:520px){.cols{grid-template-columns:1fr}}
 `

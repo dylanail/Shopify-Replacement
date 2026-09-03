@@ -145,6 +145,19 @@ details.faq p{margin:.6rem 0 0;color:var(--muted);font-size:.92rem}
 .stickybar{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:1rem;
   padding:.7rem 1rem;background:var(--paper);border-top:1px solid var(--line);transform:translateY(110%);transition:transform .25s ease}
 .stickybar.show{transform:none}
+.skip{position:absolute;left:-999px;top:.5rem;z-index:100;background:var(--ink);color:var(--paper);padding:.6rem 1rem;border-radius:var(--radius);text-decoration:none}
+.skip:focus{left:.5rem}
+:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
+main:focus{outline:none}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+.popup{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:1rem}
+.popup[hidden]{display:none}
+.popup-card{position:relative;background:var(--paper);color:var(--ink);border-radius:var(--radius);padding:2rem;max-width:26rem;width:100%;box-shadow:0 30px 80px rgba(0,0,0,.3)}
+.popup-card h2{margin:0 0 .5rem}.popup-card p{margin:0 0 1rem}
+.popup-x{position:absolute;top:.5rem;right:.5rem;width:36px;height:36px;border:0;background:transparent;font-size:1.4rem;cursor:pointer;color:inherit;border-radius:999px}
+.popup-x:hover{background:var(--raise)}
+.popup .signup{display:flex;gap:.5rem;margin:0}.popup .signup input{flex:1;min-width:0}
+@media (max-width:640px){.popup{align-items:flex-end}.popup-card{max-width:none}}
 .stickybar .t{font-family:var(--display);font-size:1rem}.stickybar .p{font-size:.85rem;color:var(--muted)}
 .stickybar .btn{padding:.8rem 1.2rem}
 .micro{font-size:.84rem;color:var(--muted)}

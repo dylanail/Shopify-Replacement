@@ -31,17 +31,14 @@ test('arguments are validated before the handler runs', async () => {
   )
 })
 
-test('a risky tool refuses without a confirmation for the turn', async () => {
+test('a risky tool executes and its audit row says it was risky', async () => {
   const { db, store, ctx } = withStore()
   const created = await execute('create_product', { title: 'Doomed', priceCents: 1000 }, ctx)
   const productId = (created.data as { id: string }).id
-  await assert.rejects(
-    () => execute('delete_product', { productId }, ctx),
-    (error: ToolRefusal) => error.kind === 'needs_confirmation',
-  )
-  assert.equal(listProducts(db, store.id, {}).length, 1)
-  await execute('delete_product', { productId }, { ...ctx, confirmed: true })
-  assert.equal(listProducts(db, store.id, {}).length, 0)
+  await execute('delete_product', { productId }, ctx)
+  assert.equal(listProducts(db, store.id, {}).length, 0, 'no per-turn gate: the draft/live split is the safety surface')
+  const row = db.one<{ diff: string }>("SELECT diff FROM audit_log WHERE store_id = ? AND action = 'delete_product'", store.id)
+  assert.match(row?.diff ?? '', /"risk":"confirm"/)
 })
 
 test('every call is audited, successes and failures alike', async () => {
@@ -64,7 +61,7 @@ test('the rules planner maps plain requests onto real tools', () => {
   assert.deepEqual(names('show me the pending review queue'), ['list_reviews'])
   assert.deepEqual(names('publish the store'), ['publish_store'])
   assert.deepEqual(names('install shippo'), ['install_plugin'])
-  assert.ok(rulesPlan('mgnbqwx', context).preamble.includes('not sure'))
+  assert.ok(rulesPlan('mgnbqwx', context).preamble.includes('No model is configured'))
 })
 
 test('the planner extracts the title and the price it was given', () => {
@@ -88,7 +85,7 @@ test('branches in a run execute concurrently and failures do not take the run do
       { branch: 'c', tool: 'create_collection', args: { title: 'Shelf' } },
     ],
   })
-  const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id }, confirmed: true })
+  const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id } })
   assert.equal(outcome.run.status, 'completed')
   assert.equal(outcome.results.length, 3)
   assert.equal(outcome.failures.length, 1)
@@ -112,7 +109,7 @@ test('an interrupted run is recovered without repeating finished steps', async (
   db.run("UPDATE agent_runs SET status = 'running' WHERE id = ?", run.id)
 
   assert.equal(recoverRuns(db), 1)
-  const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id }, confirmed: true })
+  const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id } })
   assert.equal(outcome.results.length, 1)
   assert.deepEqual(listProducts(db, store.id, {}).map((product) => product.title), ['Never started'])
 })

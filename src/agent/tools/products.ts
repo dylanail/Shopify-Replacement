@@ -2,12 +2,13 @@ import { addVariant, createProduct, deleteProduct, getProduct, listProducts, low
 import { getStore } from '../../control/stores.ts'
 import { format } from '../../lib/money.ts'
 import { upsertSeoPage } from '../../seo/schema.ts'
-import { draftProducts, readBrief } from '../copy.ts'
+import { readBrief } from '../copy.ts'
+import { authorProductCopy } from '../brand.ts'
 import { enhance, generate, PRESETS, type PresetId } from '../images.ts'
-import { contentFor, writeProductContent } from '../pages.ts'
+import { authorContentFor, authorProductContent } from '../pages.ts'
+import { modelFor } from '../models.ts'
 import { latestResearch, rulesResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
-import type { ProductContent } from '../../domain/types.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id)
 
@@ -64,12 +65,13 @@ export const productTools: Tool[] = defineTools([
       // been researched still gets a complete page, from the category rules.
       const brief = readBrief(`${store?.prompt ?? ''} ${title}`)
       const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(brief)
-      const content: ProductContent = writeProductContent(research, brief, {
-        title,
-        role: (args.role as 'hero' | 'complement') ?? 'hero',
-        priceCents: price,
-        options,
-      })
+      const { content, source } = await authorProductContent(
+        modelFor(ctx.db, ctx.storeId, 'pages'),
+        research,
+        brief,
+        { title, subtitle: (args.subtitle as string) ?? '', description: (args.description as string) ?? '', role: (args.role as 'hero' | 'complement') ?? 'hero', priceCents: price, options },
+        { name: store?.name ?? 'the store', ...(store?.brand.voice ? { voice: store.brand.voice } : {}), currency: store?.currency ?? 'USD' },
+      )
 
       const combos = options.length
         ? cartesian(options.map((option) => option.values.map((entry) => ({ [option.title]: entry.value }))))
@@ -105,7 +107,7 @@ export const productTools: Tool[] = defineTools([
         keyword: product.title.toLowerCase(),
       })
       return {
-        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}, ${content.benefits?.length ?? 0} benefits, a comparison and ${content.faq?.length ?? 0} questions answered${reference ? ', imagery from your photo' : ''}.`,
+        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}, ${content.benefits?.length ?? 0} benefits, a comparison and ${content.faq?.length ?? 0} questions answered${source === 'rules' ? ' (page from category rules; set a model key for written pages)' : ''}${reference ? ', imagery from your photo' : ''}.`,
         data: { id: product.id, handle: product.handle },
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/products/${product.id}` }],
       }
@@ -250,17 +252,23 @@ export const productTools: Tool[] = defineTools([
   {
     name: 'generate_product_copy',
     area: 'products',
-    description: 'Write or rewrite a product description in the store voice and save it.',
+    description: 'Write or rewrite a product description in the store voice from the research on file, under an optional steer, and save it.',
     schema: { productId: { type: 'string', required: true }, angle: { type: 'string', help: 'Optional steer, e.g. "lead on durability".' } },
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
       const brief = readBrief(`${store?.prompt ?? ''} ${product.title} ${(args.angle as string) ?? ''}`)
-      const draft = draftProducts(brief, store?.name ?? 'the store')[0]
-      const description = draft?.description ?? product.description
-      updateProduct(ctx.db, ctx.storeId, product.id, { description, subtitle: product.subtitle || (draft?.subtitle ?? '') })
-      return { summary: `Rewrote the description for ${product.title} (${description.split(/\s+/).length} words).`, data: { description } }
+      const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(brief)
+      const written = await authorProductCopy(modelFor(ctx.db, ctx.storeId, 'brand'), {
+        store: { name: store?.name ?? 'the store', voice: store?.brand.voice ?? '', prompt: store?.prompt ?? '' },
+        product: { title: product.title, subtitle: product.subtitle, description: product.description },
+        research,
+        angle: (args.angle as string) ?? '',
+        brief,
+      })
+      updateProduct(ctx.db, ctx.storeId, product.id, { description: written.description, subtitle: written.subtitle })
+      return { summary: `Rewrote the description for ${product.title} (${written.description.split(/\s+/).length} words${written.source === 'rules' ? ', from the rules writer; set a model key for real copy' : ''}).`, data: { description: written.description } }
     },
   },
   {
@@ -330,15 +338,15 @@ export const productTools: Tool[] = defineTools([
     area: 'products',
     description: 'Write or rewrite the full product page — benefits, comparison, specs, FAQ, guarantee — from the customer research on file.',
     schema: { productId: { type: 'string', required: true } },
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
       const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(readBrief(`${store?.prompt ?? ''} ${product.title}`))
-      const content = contentFor(research, store?.prompt ?? '', product)
+      const { content, source } = await authorContentFor(modelFor(ctx.db, ctx.storeId, 'pages'), research, { name: store?.name ?? 'the store', prompt: store?.prompt ?? '', ...(store?.brand.voice ? { voice: store.brand.voice } : {}), currency: store?.currency ?? 'USD' }, product)
       updateProduct(ctx.db, ctx.storeId, product.id, { content })
       return {
-        summary: `Rewrote the page for ${product.title}: ${content.benefits?.length ?? 0} benefits, ${content.comparison?.rows.length ?? 0}-row comparison, ${content.faq?.length ?? 0} questions.`,
+        summary: `Rewrote the page for ${product.title}: ${content.benefits?.length ?? 0} benefits, ${content.comparison?.rows.length ?? 0}-row comparison, ${content.faq?.length ?? 0} questions${source === 'rules' ? ' (from category rules; set a model key for a written page)' : ''}.`,
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/admin/products/${product.id}` }],
       }
     },

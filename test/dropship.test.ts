@@ -18,7 +18,6 @@ import { sessionFor, track } from '../src/analytics/events.ts'
 import { sweepAbandonedCarts } from '../src/email/abandoned.ts'
 import { saveCheckoutDraft } from '../src/domain/cart.ts'
 import { listReviews } from '../src/domain/reviews.ts'
-import { planBySlug } from '../src/control/plans.ts'
 
 function shop() {
   const { db, user } = fresh()
@@ -231,12 +230,11 @@ test('abandoned carts get one email, once, after the window', async () => {
   assert.equal(send?.recipient, 'left@example.com')
 })
 
-test('personal mode: every store is on the owner plan with nothing gated', () => {
+test('one person\'s platform: a store carries no plan, and hidden products stay hidden', () => {
   const { db, user } = fresh()
   const store = createStore(db, user.id, { name: 'Mine' })
-  assert.equal(store.planSlug, 'owner')
-  assert.equal(planBySlug(store.planSlug).customDomain, true)
-  assert.equal(planBySlug('free').platformFeePercent, 0, 'even an old slug resolves to the owner plan in personal mode')
+  assert.ok(!('planSlug' in store), 'there is no plan on a store')
+  assert.deepEqual(store.models, {}, 'model choices start as the environment default')
   updateProduct(db, store.id, createProduct(db, store.id, { title: 'x', variants: [{ title: 'a', priceCents: 1 }] }).id, { metadata: { hidden: 'true' } })
   assert.equal(listProducts(db, store.id, {}).length, 0)
   assert.equal(listProducts(db, store.id, { includeHidden: true }).length, 1)

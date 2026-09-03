@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI-native commerce platform: control plane, commerce core, agent runtime, generated storefronts.",
-  "engines": { "node": ">=22.18" },
+  "description": "One person's AI-native replacement for Shopify and its app stack: research, pages, offers, ads and domains for dropshipping stores, written by a model.",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.ts",
     "dev": "node --watch --disable-warning=ExperimentalWarning src/main.ts",
@@ -12,5 +14,13 @@
     "reset": "rm -rf data && node --disable-warning=ExperimentalWarning src/seed.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
+    "openai": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
   }
 }

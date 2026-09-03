@@ -11,6 +11,17 @@ export type EventType =
   | 'checkout.complete'
   | 'signup'
   | 'review.submit'
+  /* Behaviour, posted by the page itself: how far it was read, what was seen, what was pressed. */
+  | 'scroll'
+  | 'section.view'
+  | 'cta.click'
+  | 'popup.show'
+  | 'popup.submit'
+  | 'quiz.step'
+  | 'quiz.complete'
+  | 'funnel.enter'
+
+export const BEHAVIOUR_EVENTS: EventType[] = ['scroll', 'section.view', 'cta.click', 'popup.show', 'popup.submit', 'quiz.step', 'quiz.complete']
 
 /**
  * First-party analytics.
@@ -247,4 +258,71 @@ export function companionsFor(db: Db, storeId: string, productId: string, limit 
     .all<{ id: string }>("SELECT id FROM products WHERE store_id = ? AND id != ? AND status = 'published' ORDER BY position LIMIT ?", storeId, productId, limit)
     .map((row) => row.id)
   return [...new Set([...mined, ...fallback])].slice(0, limit)
+}
+
+/* ---------------------------------------------------------------- behaviour */
+
+export type Behaviour = {
+  sessions: number
+  /** How many sessions reached each depth on any page. */
+  scroll: { 25: number; 50: number; 75: number; 100: number }
+  sections: Array<{ path: string; blockType: string; blockId: string; views: number }>
+  ctas: Array<{ path: string; label: string; clicks: number }>
+  popup: { shows: number; submits: number }
+  quiz: Array<{ path: string; step: number; count: number; completes: number }>
+  pages: Array<{ path: string; sessions: number; readHalf: number; ctaClicks: number; carts: number; purchases: number; revenueCents: number; revenuePerSessionCents: number }>
+}
+
+/**
+ * The behaviour report: what visitors did on the pages, not just where they
+ * went. Every number is a count of distinct sessions, so a visitor who
+ * scrolls a page three times counts once.
+ */
+export function behaviour(db: Db, storeId: string, range: Range = '7d'): Behaviour {
+  const from = since(range)
+  const depth = (percent: number) => db.one<{ c: number }>("SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'scroll' AND created_at >= ? AND CAST(json_extract(meta, '$.depth') AS INTEGER) >= ?", storeId, from, percent)?.c ?? 0
+  const sessions = db.one<{ c: number }>('SELECT COUNT(*) c FROM sessions_analytics WHERE store_id = ? AND first_seen >= ?', storeId, from)?.c ?? 0
+  const sections = db.all<{ path: string; blockType: string; blockId: string; views: number }>(
+    "SELECT path, json_extract(meta, '$.blockType') blockType, json_extract(meta, '$.blockId') blockId, COUNT(DISTINCT session_id) views FROM analytics_events WHERE store_id = ? AND type = 'section.view' AND created_at >= ? GROUP BY path, blockType, blockId ORDER BY views DESC LIMIT 40",
+    storeId, from,
+  )
+  const ctas = db.all<{ path: string; label: string; clicks: number }>(
+    "SELECT path, COALESCE(json_extract(meta, '$.label'), '') label, COUNT(DISTINCT session_id) clicks FROM analytics_events WHERE store_id = ? AND type = 'cta.click' AND created_at >= ? GROUP BY path, label ORDER BY clicks DESC LIMIT 40",
+    storeId, from,
+  )
+  const popup = {
+    shows: db.one<{ c: number }>("SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'popup.show' AND created_at >= ?", storeId, from)?.c ?? 0,
+    submits: db.one<{ c: number }>("SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'popup.submit' AND created_at >= ?", storeId, from)?.c ?? 0,
+  }
+  const quizSteps = db.all<{ path: string; step: number; count: number }>(
+    "SELECT path, CAST(json_extract(meta, '$.step') AS INTEGER) step, COUNT(DISTINCT session_id) count FROM analytics_events WHERE store_id = ? AND type = 'quiz.step' AND created_at >= ? GROUP BY path, step ORDER BY path, step",
+    storeId, from,
+  )
+  const quizDone = new Map(db.all<{ path: string; c: number }>("SELECT path, COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'quiz.complete' AND created_at >= ? GROUP BY path", storeId, from).map((row) => [row.path, row.c]))
+  const quiz = quizSteps.map((row) => ({ path: row.path, step: row.step, count: row.count, completes: quizDone.get(row.path) ?? 0 }))
+  const paths = db.all<{ path: string; sessions: number }>(
+    "SELECT path, COUNT(DISTINCT session_id) sessions FROM analytics_events WHERE store_id = ? AND type IN ('view.page','view.product') AND created_at >= ? GROUP BY path ORDER BY sessions DESC LIMIT 30",
+    storeId, from,
+  )
+  const pages = paths.map((row) => {
+    const viewers = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND path = ? AND type IN ('view.page','view.product') AND created_at >= ?", storeId, row.path, from).map((entry) => entry.session_id)
+    if (!viewers.length) return { path: row.path, sessions: 0, readHalf: 0, ctaClicks: 0, carts: 0, purchases: 0, revenueCents: 0, revenuePerSessionCents: 0 }
+    const marks = viewers.map(() => '?').join(', ')
+    const readHalf = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'scroll' AND path = ? AND CAST(json_extract(meta, '$.depth') AS INTEGER) >= 50 AND session_id IN (${marks})`, storeId, row.path, ...viewers)?.c ?? 0
+    const ctaClicks = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cta.click' AND path = ? AND session_id IN (${marks})`, storeId, row.path, ...viewers)?.c ?? 0
+    const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${marks})`, storeId, ...viewers)?.c ?? 0
+    const bought = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${marks})`, storeId, ...viewers)
+    const revenue = bought?.total ?? 0
+    return { path: row.path, sessions: viewers.length, readHalf, ctaClicks, carts, purchases: bought?.c ?? 0, revenueCents: revenue, revenuePerSessionCents: Math.round(revenue / viewers.length) }
+  })
+  return { sessions, scroll: { 25: depth(25), 50: depth(50), 75: depth(75), 100: depth(100) }, sections, ctas, popup, quiz, pages }
+}
+
+/** Revenue per session for a set of sessions: the number a split test is decided on. */
+export function revenuePerSession(db: Db, storeId: string, sessions: string[]): { purchases: number; revenueCents: number; perSessionCents: number } {
+  if (!sessions.length) return { purchases: 0, revenueCents: 0, perSessionCents: 0 }
+  const marks = sessions.map(() => '?').join(', ')
+  const row = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${marks})`, storeId, ...sessions)
+  const revenue = row?.total ?? 0
+  return { purchases: row?.c ?? 0, revenueCents: revenue, perSessionCents: Math.round(revenue / sessions.length) }
 }

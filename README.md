@@ -1,259 +1,190 @@
 # Amboras
 
-An AI-native commerce platform, built as one runnable system: a control plane, a
-commerce core, a durable agent runtime with a validated tool registry, generated
-per-brand storefronts, a plugin framework, first-party analytics, transactional
-email, and an admin that is driven by conversation.
+One person's replacement for Shopify and the thirty apps a dropshipper bolts
+onto it. A store builder with the commerce backend underneath, for stores
+that sell through paid traffic, advertorials and Shopify-style product
+pages: the work is research → pages → offers → ads → domains, and a model
+does as much of it as a good operator would.
 
-You type one sentence — and optionally hand it a product photo and your old
-site. It researches who buys this and what stops them, then a store exists:
-named, branded, three products deep with full pages (benefits, comparison,
-specs, FAQ, guarantee), variants, pricing and imagery derived from your photo,
-with a welcome code, a free-shipping threshold and a bundle already live — at an
-address you can open and buy from. Run it again and you have a second store;
-the hub shows them all.
+You type one sentence, optionally with a product photo and a site to read.
+Customer research is written first: who buys this, what stops them, what
+they compare it against, what they pay. From that, the brand and three
+products with full pages, a welcome code, a free-shipping threshold and a
+bundle, at an address you can open and buy from. Then the dropshipper's loop:
+avatars, versions and advertorials under a direction, ads per platform, image
+re-shoots, a competitor's page read for its angle, the domain connected with
+the registrar's own words.
 
 ```
-node --version                     # needs 22.18+ (native TypeScript, node:sqlite)
+node --version     # 22.18 or newer
+npm ci
+cp .env.example .env               # a model key, and AMBORAS_SECRET
 npm run seed                       # builds the Ironjaw & Co demo store
 npm start                          # http://localhost:4100
 ```
 
-The seed prints the sign-in details and the storefront address. There are no
-dependencies to install: the whole platform runs on the Node standard library.
+```
+npm test            # 123 tests, ~4s; the model path runs against a fake network
+npm run typecheck
+npm run reset       # throw the database away and re-seed
+```
 
-```
-npm test          # 56 tests, ~3s
-npm run typecheck # needs typescript; the source is otherwise dependency-free
-npm run reset     # throw the database away and re-seed
-```
+For a server with TLS, storefront subdomains and custom domains, see
+`docs/DEPLOY.md`: one `docker compose up` with Caddy in front.
 
 ---
 
-## What is actually here
+## Written by a model
+
+Everything that reads or writes words is authored by a model, chosen per
+job: Claude by default (`claude-opus-5`; Fable, Sonnet and Haiku selectable),
+or GPT with an OpenAI key. Model ids live in configuration, not code, and
+Settings lets each store pick a different model per job.
+
+| Job | What the model writes |
+|---|---|
+| **Research** | The customer research record: personas with shares, purchase triggers, objections with answers, competitors with price bands and weaknesses, the price anchor, keywords, proof points, the comparison rows. Reads a pasted site into it. |
+| **Brand and products** | The name (unless you gave one), the mood the palette follows from, slogan, description, voice, announcement bar, and three products with 150–200 words of copy, options and prices inside the anchor. Rewrites of a product's copy under a steer. |
+| **Pages and versions** | Every product page's sections (benefits answering the triggers, comparison, specs, FAQ from the objections, guarantee, shipping, trust strip) and the words inside PDP versions and advertorials in a named format, under a free-form direction and an avatar. |
+| **Ads** | Copy per platform and format from the same research, avatar and direction: hooks, primary text, headline, search headlines within Google's limits, timed video scripts. Testimonials quote only approved reviews on file. |
+| **Reading pages** | A competitor's page into an editable angle record: headline, hooks, offer, proof, audience, the angle it runs. |
+| **The assistant** | The docked panel on every admin page: it sees the store, the conversation and the real tool schemas and answers with tool calls, words, or both. |
+
+Without a key, rules writers stand in so the platform boots, seeds and
+tests. They are scaffolding: generic outside a few categories, and the admin
+says on every page and every record when it is looking at rules output.
+
+## What is here
 
 | | |
 |---|---|
-| **Control plane** | users, sessions, stores, draft/live environments, teams and RBAC, invites, plans, domains, audit log, to-do punch list |
-| **Research** | who buys, what stops them, competitors, price anchor, keywords and proof points — per category rules offline, a model when configured, and it reads a pasted site either way |
-| **Product pages** | benefits answering the triggers, a comparison table against the named competitor, specs, FAQ from the objections, guarantee and shipping strip, sticky mobile buy bar — written from the research, never from thin air |
-| **Imagery** | a merchant photo is staged into six scenes (white seamless, lifestyle, dark luxury, flat lay, golden hour, studio) around the *actual* product; with a model configured it is re-shot rather than staged — OpenAI GPT Image 2 (`gpt-image-2`) or Google Gemini 3 Pro Image (`gemini-3-pro-image-preview`), chosen per render — from a free-form art direction ("on marble, morning light, a hand holding it"), as a contact sheet you pick a lane from |
-| **Avatars & angles** | research personas become editable customer avatars (who, wants, fears, angle, hooks, tone, first objection); a competitor page selling the same product is read into an editable angle record (headline, hooks, offer, proof, audience, the angle it runs) that can be folded into the research or used as a direction; picking an avatar fills the audience, angle and tone that free-form direction leaves blank, for versions, advertorials and ads alike |
-| **Ads** | an Ads tab: drafts per product and platform (Meta, TikTok, Google search, YouTube) in ten formats — static, UGC video script with timed beats, problem-agitate-solve, testimonial (only from approved reviews on file), us-vs-them, founder, ten hooks, offer, retargeting, search headlines in Google's limits — from the same research, avatar and direction as the pages; every field editable, revisable under a new direction, exported as text for the ad manager; a swipe file fed by the Meta Ad Library (with a token), competitor links, pasted ads and built-in hook patterns |
-| **Domains** | per store: attach a domain hosted here or forwarded by the registrar, with the exact records and the menu path for Namecheap, GoDaddy, Cloudflare, Squarespace/Google Domains, Porkbun; verification is a real DNS lookup (TXT + CNAME/A) or, for forwarding, following the redirect, and the check records what it found |
-| **Funnels** | ad → advertorial → offer → checkout with an order bump (shipping protection by default, a real hidden product) → one-click upsell → downsell only if the upsell is declined → thank-you page with tracking and related products |
-| **Versions & direction** | product-page versions and advertorials in named formats (listicle, first-person story, problem-agitate-solve, expert take, "we tested five", mistakes; benefit-, story-, UGC-, comparison-, offer-, urgency-led, premium minimal) with free-form direction read into tone, audience, angle and must-say phrases; pdp versions split-tested by session with per-version views, carts, sales and conversion |
-| **Dropshipping ops** | import a product from any Shopify store URL (`/products/x.json`) or an Open Graph page with a markup; supplier and cost per product with a margin calculator; fulfil via supplier with carrier detection from the tracking number; a branded `/track` page; delivery estimates from lead times; ad-spend log; a profit report that subtracts COGS, supplier shipping, fees, refunds and ads |
-| **Conversion widgets** | recent-sales popups and live-viewer counts from real orders and sessions, stock scarcity from real inventory, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, product Q&A, back-in-stock capture, announcement rotator, compare-at badges, abandoned-cart email on a schedule, purchase and add-to-cart events for GA4, Meta and TikTok |
-| **Commerce core** | products, options, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping rates |
-| **Agent** | 114 tools with per-tool schemas, an executor that validates and refuses, durable resumable runs with parallel branches, a model planner and a rules planner |
-| **Storefront** | server-rendered per brand: home, collections, PDP, cart, checkout, order, blog, pages, sitemap, robots, JSON-LD, `llms.txt` |
-| **Plugins** | manifest schema, install with settings validation, sealed credentials, storefront slots, capabilities, and AI tools contributed by plugins |
-| **Analytics** | cookieless sessions, event pipeline, KPIs with deltas, funnel with benchmarks, live visitors, order affinity mining |
-| **Email** | 10 transactional templates, a small Handlebars subset, a Resend adapter, retries, and a send log |
-| **SEO / GEO** | meta and structured data written on save, a schema validator, redirects, sitemap, and a knowledge card at `/llms.txt` |
+| **Stores hub** | every store you own with 30-day numbers; "+ New store" runs onboarding again |
+| **Build** | three ways to build a store (bring your own product, copy a funnel, copy a funnel with a new angle), each with its own order of work; step statuses are read from what exists, not ticked; eight buyer questions where "I don't know" is an answer that research fills in and labels as assumed |
+| **Market** | the market analysis (awareness, sophistication, desires ranked, the searches to run, competitors, mechanisms, new information, underserved avatars, whether there is a way to stand out at all), the product overview, core avatars with sub-avatars, the ad plan (concept → angle → variations → format → method) and feedback loops, all saved under the store |
+| **Creative** | eight photo briefs checked against each product's media; creator-content concepts for a real person to film, vetted in a queue and never published as reviews; a dependency-free GIF maker over the product's PNG renders; a layout suggester that picks blocks from the catalog for an offer page, advertorial, quiz, product page or home |
+| **Research & avatars** | the research record; avatars suggested from it (who, wants, fears, angle, hooks, tone, first objection), editable and selectable; competitor pages read into editable angle records that fold into the research or become a direction |
+| **Products** | options, variants, swatches, media, SEO, supplier cost and margin, size chart, import from any Shopify `/products/x.json` or Open Graph page, structured page content, image re-shoots from a sentence with GPT Image 2 or Gemini 3 Pro Image |
+| **Pages & builder** | 53 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls a reference URL in with its styles and images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
+| **Templates** | offer page in the order that turned 1.18x into 3.59x, advertorial listicle, quiz funnel, product landing page |
+| **Versions** | PDP versions and advertorials in named formats with free-form direction, split-tested by session with per-version views, carts, sales and conversion |
+| **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you; funnels in the same test group split traffic at `/go/<group>` by weight and are compared on revenue per session |
+| **Bundles** | Kaching-style tiers enforced by a promotion the cart reads |
+| **Checkout** | one page, express row, buy-it-now, Stripe Payment Element with saved cards for the post-purchase offer, demo orders without keys |
+| **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, delivery estimates, ad-spend log, profit report with ROAS |
+| **Ads** | drafts per product, platform and format; every field editable; revisable; exported for the ad manager; a swipe file fed by the Meta Ad Library, competitor links, pasted ads and hook patterns |
+| **Domains** | host here or forward from the registrar, with the records and menu path for Namecheap, GoDaddy, Cloudflare, Squarespace, Porkbun; real DNS and redirect checks; certificates issued on demand by the edge once a name verifies |
+| **Conversion widgets** | recent sales, live viewers, scarcity, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, Q&A, back-in-stock, announcements, compare-at badges, abandoned-cart email, GA4/Meta/TikTok events; each renders nothing when it has nothing honest to say |
+| **Commerce core** | products, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping |
+| **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
+| **Site health** | renders the pages as a visitor gets them and checks landmarks, alt text, labels, headings, button names, contrast, weight on the wire, scripts, fonts and lazy loading |
+| **Plugins** | manifest schema, settings validation, sealed credentials, storefront slots, plugin-contributed tools; eleven first-party integrations installable, the rest a directory |
+| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); ten transactional templates over Resend; meta, structured data, redirects, sitemap |
 
-Everything above is exercised by the test suite, and `test/http.test.ts` walks
-the whole product over HTTP with no mocks: register → onboard from a sentence →
-every admin page → drive the assistant → buy something from the storefront →
-watch the order land in the admin → start a second store with a photo upload →
-see both in the hub → stage a product photo → read the conversion sections off
-the live product page → draft, edit and export an ad → paste a competitor page
-and fold its angle into the research → attach a domain with Namecheap's
-records and check it → re-shoot a product image from a direction and make a
-lane the hero.
+`test/http.test.ts` walks the whole product over HTTP with no mocks,
+`test/models.test.ts` walks the model path against a fake network (research,
+the brand kit, onboarding, avatars, competitor reading and the planner, with
+the exact requests the SDKs send checked), and `test/plan.test.ts` covers
+the build flow, the market documents, the funnel rip, the creative queue,
+the GIF encoder, the health audit, the legal pages, the popup, the quiz and
+the behaviour report.
 
-### The dropshipper's loop, as the admin now has it
+## What it knows
 
-1. **Research** reads the brief and any pasted site. **Competitor pages**
-   selling the same product are read into an angle record on the same page —
-   change any field, write your take, fold it in.
-2. **Avatars** are suggested from the personas: who, wants, fears, the angle
-   that reaches them, five hooks, a tone. Edit them; add your own; switch one
-   off. Every generator has an avatar picker next to its direction box, and a
-   typed word always beats the avatar.
-3. **Product images** are re-shot from a sentence with whichever model is
-   configured; the sheet stays on the product until you pick a lane.
-4. **Versions and advertorials** take the avatar and the direction.
-5. **Ads** take the same avatar and direction, in the format the platform
-   wants, and read the swipe file for hooks.
-6. **Domains** connect the store to a name, with the registrar's own words.
-
----
+The writers do not start from nothing. `docs/knowledge/` is a distillation
+of the course material the owner supplied: desires and the desire calendar,
+awareness and sophistication with the three resets (new mechanism, new
+information, new identity), core and sub-avatars, product research, offers,
+the numbers and testing methods, creatives, and page anatomy.
+`src/agent/knowledge.ts` is the short form, and every prompt asks for the
+topics it needs: research reads desires, sophistication and avatars; pages
+read page anatomy and offers; ads read creatives; the market analysis reads
+all of it. Two rules ride along everywhere: nothing is invented (no review,
+statistic, study or customer the merchant did not supply), and synthetic
+"UGC" is a brief for a real person to film, never a customer on the page.
 
 ## The shape of it
 
 ```
 src/
-  lib/          db (sqlite + migrations), http (router, ctx, sse), validate,
-                crypto (scrypt, aes-gcm, visitor fingerprints), money, ids, log
-  domain/       the commerce core — catalog, cart, orders, promotions, regions,
-                customers, reviews, content
-  control/      the control plane — auth, stores and environments, plans,
-                plugins and the catalog, todos and audit
-  agent/        registry (tools + executor), runtime (durable runs), llm
-                (model planner + rules planner), chat, onboarding, copy, images
-  storefront/   theme (brand tokens to CSS), render (the pages), routes
-  admin/        shell (rail, page, assistant panel), pages, routes
-  analytics/    sessions and events, KPIs, funnel, affinity
-  email/        templates and sending
-  seo/          structured data, sitemap, redirects, llms.txt
+  agent/        models (the router), llm (the planner), research, brand, pages,
+                directions (formats + versions), ads, avatars, angles, images,
+                registry (tools + executor), runtime (durable runs), chat, onboarding
+  domain/       the commerce core
+  control/      auth, stores and environments, domains, plugins, todos and audit
+  pages/        blocks, the builder's store, the cloner, versions
+  storefront/   theme, render, routes
+  admin/        shell, pages, growth pages, editor, routes
+  analytics/ email/ seo/ payments/ lib/
 ```
 
-Four decisions carry most of the weight.
+Five decisions carry the weight.
+
+**Research first; pages say only what it found.** Onboarding writes the
+research before a product exists. Product pages, versions, advertorials, ads
+and avatars all read the same record, so the promise in the ad is the
+promise on the page. Nothing here invents a review, a statistic or a place
+of manufacture.
 
 **One pricing engine.** `domain/cart.ts#totals` is the only place a total is
-computed. The cart drawer, the checkout, the order that gets written and the
-free-shipping-gap upsell all call it. There is no second implementation to drift.
+computed: the drawer, the checkout, the written order and the
+free-shipping-gap upsell all call it.
 
-**The model proposes, the executor disposes.** Every tool call — from the chat
-panel, from onboarding, from a plugin, from a model — goes through
-`agent/registry.ts#execute`. It validates arguments against the tool's own
-schema before the handler exists in the call stack, refuses risky tools without
-a human confirmation for the turn, and writes an audit row whether the call
-succeeded or not. No prompt is load-bearing for safety.
+**Every tool call is validated and audited.** Every call, from the panel,
+onboarding, a plugin or a model, goes through `agent/registry.ts#execute`:
+arguments are checked against the tool's own schema, and an audit row is
+written whether it succeeded or not. Tools execute; there is no per-turn
+permission gate. What keeps a store safe is the next decision.
 
-**Runs are rows, not closures.** An agent run persists its steps, so a deploy in
-the middle of a merchant's onboarding is survivable: finished steps stay
-finished, the in-flight step goes back to pending, and `recoverRuns` re-queues
-it on boot. Branches inside a run execute concurrently, which is why onboarding
-looks like four things happening at once rather than a queue.
-
-**Research comes first, and pages can only say what it found.** Onboarding runs
-`agent/research.ts` before a product is written; `agent/pages.ts` is the mapping
-from that record to a page's shape. A benefit is an answer to a purchase
-trigger, a FAQ entry is an objection, a comparison row is a competitor angle.
-There is no path by which a page contains a claim the research did not put
-there.
-
-**Your photo stays your photo.** An upload is embedded into the scene as-is,
-with a ground, a contact shadow and the brand's light around it — never redrawn.
-With `OPENAI_API_KEY` set, the image model *edits* that photo into the scene
-(`images/edits`, not `generations`), so the product in the output is the one
-you sell and not a plausible stranger.
-
-**Social proof is never invented.** The recent-sales popup reads real orders
-(first name and city), the viewer count reads real sessions, scarcity reads
-real inventory, customer photos come from real reviews. Each widget renders
-nothing at all when it has nothing honest to say, and an imported review is
-never marked verified.
-
-**A direction is read, not pasted.** "Premium, for people who train
-seriously, focus on the repair guarantee" becomes a tone, an audience and an
-angle that drive which sections lead and what the headline pattern is; with
-a model configured the same decisions become the prompt, so a format means
-the same thing either way.
-
-**Draft and live are separate environments.** The assistant only ever edits the
+**Draft and live are separate environments.** The assistant only edits the
 draft. Publishing copies it over live and bumps a version; rollback goes the
-other way. `publishState` is what the admin's publish button reads, so the
-button says what the store needs next instead of just "Publish".
+other way. The publish button says what the store needs next.
 
----
-
-## Two things that are usually faked, and are not
-
-**It works with no API keys.** Configure `ANTHROPIC_API_KEY` and the model plans
-the run from the real tool schemas. Configure nothing and a rules planner maps
-what merchants actually type onto the same tools, and a deterministic writer
-derives the brand, the palette, the product copy and the imagery from the
-sentence. Same sentence, same store, every time. The offline path is not a stub
-— it is the floor under every test and every demo.
-
-**Generated imagery is real output, not a grey box.** With `OPENAI_API_KEY` set,
-`agent/images.ts` calls an image model. Without it, it draws a deterministic
-vector composition from the brand palette — seeded from the subject, so a
-product keeps its picture across restarts — and serves it from
-`/_media/render.svg` with an immutable cache header and no database round trip.
-
----
-
-## Personal mode
-
-This deployment is one person's. Every store is on the owner plan (no
-limits, no platform fee, nothing gated), there is no pricing page, and `/`
-is the admin. The plan tiers still exist as configuration for the day that
-changes; set `AMBORAS_PERSONAL=false` to bring the gates back.
+**Runs are rows.** An agent run persists its steps, so a restart mid-onboarding
+is survivable: finished steps stay finished, and the in-flight step re-queues
+on boot. Branches inside a run execute concurrently.
 
 ## Configuration
 
-Everything is optional. Nothing is required to run.
+See `.env.example` for everything. The ones that decide what runs:
 
 | Variable | Effect |
 |---|---|
-| `PORT` | default `4100` |
-| `AMBORAS_DB` | sqlite file, default `data/amboras.db` |
 | `AMBORAS_SECRET` | master key for password hashing, credential sealing and visitor fingerprints. **Set this in any real deployment.** |
-| `AMBORAS_STOREFRONT_HOST` | serve storefronts at `*.thisdomain` instead of `/s/:slug` |
-| `ANTHROPIC_API_KEY`, `AMBORAS_MODEL` | let a model plan runs |
-| `OPENAI_API_KEY`, `AMBORAS_IMAGE_MODEL` | OpenAI images; the model defaults to `gpt-image-2` (ChatGPT Images 2.0) |
-| `GEMINI_API_KEY`, `AMBORAS_GOOGLE_IMAGE_MODEL` | Google images; defaults to `gemini-3-pro-image-preview` (Nano Banana Pro) |
-| `AMBORAS_IMAGE_PROVIDER` | `openai`, `google` or `svg`: which runs when a render does not say. Default: the first with a key |
-| `META_AD_LIBRARY_TOKEN`, `AMBORAS_AD_LIBRARY_COUNTRY` | search the Meta Ad Library from the Ads tab; the country defaults to `GB` because the API only returns commercial ads for EU/UK reach |
-| `AMBORAS_EDGE_HOST`, `AMBORAS_EDGE_IP` | what hosted domains should point at; default `edge.<AMBORAS_STOREFRONT_HOST>` |
-| `AMBORAS_PUBLIC_ORIGIN` | the address forwarded domains redirect to when there is no storefront host |
-| `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | actually deliver email |
+| `ANTHROPIC_API_KEY`, `AMBORAS_MODEL` | Claude writes; the model defaults to `claude-opus-5` |
+| `OPENAI_API_KEY`, `AMBORAS_OPENAI_MODEL` | GPT writes (default id `gpt-5`), and GPT Image 2 re-shoots |
+| `AMBORAS_TEXT_PROVIDER` | which family answers when both keys are set; `AMBORAS_MODEL_<TASK>` pins one job |
+| `GEMINI_API_KEY`, `AMBORAS_GOOGLE_IMAGE_MODEL` | Gemini 3 Pro Image re-shoots |
+| `AMBORAS_STOREFRONT_HOST`, `AMBORAS_ADMIN_HOST`, `AMBORAS_EDGE_HOST` | storefronts at `*.host`, the admin's hostname, what custom domains point at |
+| `META_AD_LIBRARY_TOKEN` | the Ads tab searches the Meta Ad Library |
+| `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | email actually sends |
 
-Two path prefixes exist and are deliberately different: `/s/:slug` is the live
-storefront (tracked, plugins firing — a customer), and `/preview/:slug` is the
-draft environment (untracked, pixels suppressed — the merchant looking at their
-own unpublished work). Collapsing them would either count the merchant's own
-dashboard visits as traffic or leave a host-less deployment with no analytics.
+On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
+`/preview/:slug` is the draft (untracked, pixels suppressed).
 
----
+## Not built yet
 
-## What is deliberately not built
+- **Storefront export and the sandboxed build loop.** Stores render here;
+  there is no per-store project to edit, build and screenshot. The block
+  builder and the cloner are the page-building surface.
+- **Subscriptions, a Bayesian A/B engine, Search Console keyword tracking,
+  GEO prompt tracking, newsletter flows, workflow automation, migration
+  importers beyond product import.** Listed in `ORIGINAL_INTENT.md` in
+  order. Split tests exist (page versions and funnel groups, decided on
+  revenue per session); the posterior maths does not.
+- **The reference stores were not fetched.** The fifteen example pages the
+  owner pointed at were unreachable from the build environment, so the page
+  anatomy in `docs/knowledge/pages.md` comes from the course walk-through
+  and the known shape of those page builders, not from reading them.
+- **Supplier API push and ad placement.** Fulfilment records the supplier
+  order; it does not place it with DSers, CJ or AutoDS. Ads are written and
+  exported, not published to Meta or TikTok.
+- **Stripe is tested against a stand-in transport.** Keys, PaymentIntents,
+  saved cards, refunds and webhook verification are wired; live Stripe was
+  not reachable from where this was built.
 
-Named so nobody has to discover it by clicking.
+## Where this came from
 
-- **Payments do not move money.** Stripe is modelled all the way through —
-  connect flow, sealed keys, a `payment_provider` capability the checkout reads
-  — but the demo checkout marks the order captured without a charge. Swapping in
-  the Payment Element is a change to one template and one webhook.
-- **Domains verify, certificates do not issue.** The check really looks the
-  name up (TXT and CNAME/A, or follows the redirect for a forwarded domain) and
-  says what it found. `ssl: issued` is a state, not a certificate: TLS
-  termination for custom hostnames belongs to whatever fronts this process
-  (Caddy, a load balancer, Cloudflare), and the Domains page says so. "Mark
-  verified anyway" exists for DNS behind a proxy the lookup cannot see.
-- **Ads are written, not placed.** Nothing here calls an ads API to publish.
-  A draft exports as plain text for the ad manager. The Meta Ad Library
-  search is real when a token is configured, and honest about its scope: the
-  API returns commercial ads only for EU/UK reach, so the default country is
-  GB; competitor US-only ads are pasted in by hand.
-- **Competitor pages are read as text.** Headline, hooks, prices, guarantee,
-  review counts, buttons and audience come from the HTML by rules (or from the
-  model, when configured, on the research pass). Sites that block fetching are
-  pasted in; the extraction is the same either way. It reads what the page
-  says, not what its ads or its numbers actually do.
-- **Testimonial ads never invent.** Without approved reviews on file the
-  format returns an empty draft and says why.
-- **Storefronts are server-rendered here, not exported.** The blueprint's target
-  writes a Next.js project per store and edits its source in a sandbox. The slot
-  system, the draft/live split and the build log are the parts of that design
-  that survive the simplification; the sandboxed compile loop is not here.
-- **Research without a key is category rules.** Boxing gear, skincare and
-  coffee have hand-written knowledge; other categories get a complete but
-  generic record. Set `ANTHROPIC_API_KEY` and the model writes it from the
-  brief and the pasted site. The admin says which one it is looking at.
-- **GEO tracks nothing.** The half a store controls — a knowledge card at
-  `/llms.txt`, structured data, entity descriptors — ships. Measuring where a
-  brand gets cited needs live calls to four engines on a schedule, so the admin
-  says that plainly rather than drawing a fabricated placement chart.
-- **The plugin directory is honest about itself.** Ten integrations are real and
-  installable. The rest of the catalog is a directory listing with a name, a
-  category and a website, and it refuses to install rather than pretending.
-- **No A/B testing engine.** The `experiments` table exists; the Bayesian
-  sequential loop does not.
-
----
-
-## Where the numbers come from
-
-The demo store's dashboard is not fixture data. The seed registers a user, runs
-the real onboarding agent, installs plugins through the plugin framework, writes
-reviews through the moderation path, and places six orders through the actual
-checkout — inventory, promotions, customer records and receipts all move the way
-they would for a customer. The only liberty it takes is backdating those six
-orders across a fortnight so the revenue chart has a shape, and it says so in
-the code.
+The platform was first built beside an unrelated project and inherited some
+of its shape. `docs/DARWIN_INHERITANCE.md` lists every such decision with the
+verdict on each; `ORIGINAL_INTENT.md` is the direction it was built to,
+instruction by instruction.

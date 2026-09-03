@@ -1,7 +1,12 @@
 import { json, now, type Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { logger } from '../lib/log.ts'
 import { latestResearch, type Research } from './research.ts'
 import { saveAvatar, listAvatars, angleFromWants } from './avatars.ts'
+import { completeJson, describe, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
+
+const log = logger('angles')
 
 /**
  * Competitor angles.
@@ -14,7 +19,9 @@ import { saveAvatar, listAvatars, angleFromWants } from './avatars.ts'
  * input, because the point is to take what works and change what does not.
  *
  * Fetching is best effort: many sites block bots, and the merchant can paste
- * the page's HTML (or just its text) instead. The extraction is the same.
+ * the page's HTML (or just its text) instead. The extraction is the same:
+ * rules pull the obvious fields out of the markup, then a model reads the
+ * page as a whole and writes the record properly when one is configured.
  */
 export type AngleKind = 'problem-solution' | 'offer' | 'risk-reversal' | 'clinical' | 'social-proof' | 'comparison' | 'urgency' | 'premium' | 'story' | 'benefit'
 
@@ -176,18 +183,92 @@ export const realFetcher: Fetcher = async (url) => {
   }
 }
 
-/** Reads a competitor URL; pasted HTML wins over the fetch when both are given. */
-export async function readCompetitor(input: { url?: string; html?: string }, fetcher: Fetcher = realFetcher): Promise<CompetitorAngle> {
-  if (input.html?.trim()) return extractAngle(input.html, input.url ?? '')
-  if (!input.url) throw new Error('Give a URL or paste the page')
-  const response = await fetcher(input.url)
-  if (!response.ok) {
-    const angle = extractAngle('', input.url)
-    angle.brand = hostnameOf(input.url)
-    angle.notes.push(response.status ? `The site answered ${response.status}; paste the page's HTML instead (view-source, select all, copy).` : `Could not reach the site (${response.text.slice(0, 80)}); paste the page's HTML instead.`)
+const ANGLE_KINDS: AngleKind[] = ['problem-solution', 'offer', 'risk-reversal', 'clinical', 'social-proof', 'comparison', 'urgency', 'premium', 'story', 'benefit']
+
+const ANGLE_SCHEMA = S.obj({
+  brand: S.str('The brand selling on the page.'),
+  headline: S.str('The main promise, as written on the page.'),
+  subheadline: S.str('The supporting line.'),
+  hooks: S.arr(S.str(), 'Up to eight lines on the page that work as hooks: questions, callouts, "tired of…".'),
+  benefits: S.arr(S.str(), 'Up to eight benefits the page claims, as written.'),
+  offer: S.obj({
+    price: S.str('The selling price as written, or empty.'),
+    comparePrice: S.str('The struck-through price, or empty.'),
+    discount: S.str('"40% off", or empty.'),
+    shipping: S.str('The shipping promise, or empty.'),
+    guarantee: S.str('The guarantee or returns promise, or empty.'),
+    bundle: S.str('Any buy-more offer, or empty.'),
+  }),
+  proof: S.obj({ reviewCount: S.str('As written, or empty.'), rating: S.str('As written, or empty.'), badges: S.arr(S.str(), 'Trust badges and claims: "as seen on", "vet approved".') }),
+  ctas: S.arr(S.str(), 'The button texts.'),
+  audience: S.str('Who the page says it is for, or empty.'),
+  angle: S.enumOf(ANGLE_KINDS, 'The angle the page runs above all others.'),
+})
+
+/**
+ * The model reads the page as a page. The rules extraction found what the
+ * markup gave away; this pass reads the words and fills the record with what
+ * the page actually says, in its own phrasing, so the merchant edits a real
+ * reading rather than a regex's guess.
+ */
+export async function refineAngle(choice: ModelChoice, text: string, rules: CompetitorAngle): Promise<CompetitorAngle> {
+  const prompt = [
+    `Page URL: ${rules.url || '(pasted)'}`,
+    `What the markup gave away (may be incomplete or wrong): ${JSON.stringify({ brand: rules.brand, headline: rules.headline, subheadline: rules.subheadline, hooks: rules.hooks, offer: rules.offer, proof: rules.proof, ctas: rules.ctas, audience: rules.audience })}`,
+    `The page text:\n${text.slice(0, 20000)}`,
+    'Read the page and write the record. Quote the page\'s own words for the headline, hooks, benefits, offer and proof; leave a field empty rather than guessing. Classify the angle it runs.',
+  ].join('\n\n')
+  const parsed = await completeJson<Omit<CompetitorAngle, 'url' | 'images' | 'notes' | 'take'>>(choice, {
+    task: 'extraction',
+    system: `You read competitor product pages for a dropshipper and record exactly what they say: the promise, the hooks, the offer, the proof, the audience, the angle. You never add claims the page does not make. Note which awareness level the page speaks to and which sophistication stage its claims sit at.\n\n${knowledge('sophistication')}`,
+    prompt,
+    schema: ANGLE_SCHEMA,
+    name: 'competitor_angle',
+  })
+  return {
+    ...rules,
+    brand: parsed.brand?.trim() || rules.brand,
+    headline: parsed.headline?.trim() || rules.headline,
+    subheadline: parsed.subheadline?.trim() || rules.subheadline,
+    hooks: parsed.hooks?.length ? parsed.hooks.slice(0, 8) : rules.hooks,
+    benefits: parsed.benefits?.length ? parsed.benefits.slice(0, 8) : rules.benefits,
+    offer: { ...rules.offer, ...Object.fromEntries(Object.entries(parsed.offer ?? {}).filter(([, value]) => typeof value === 'string' && value.trim())) },
+    proof: { reviewCount: parsed.proof?.reviewCount || rules.proof.reviewCount, rating: parsed.proof?.rating || rules.proof.rating, badges: parsed.proof?.badges?.length ? parsed.proof.badges.slice(0, 6) : rules.proof.badges },
+    ctas: parsed.ctas?.length ? parsed.ctas.slice(0, 6) : rules.ctas,
+    audience: parsed.audience?.trim() || rules.audience,
+    angle: ANGLE_KINDS.includes(parsed.angle) ? parsed.angle : rules.angle,
+    notes: [...rules.notes.filter((note) => !/^Read from pasted text|^No H1/.test(note)), `Read by ${describe(choice)}.`],
+  }
+}
+
+/** Reads a competitor URL; pasted HTML wins over the fetch when both are given. A model, when given, reads the page after the rules. */
+export async function readCompetitor(input: { url?: string; html?: string }, fetcher: Fetcher = realFetcher, model: ModelChoice | null = null): Promise<CompetitorAngle> {
+  let source = ''
+  let angle: CompetitorAngle
+  if (input.html?.trim()) {
+    source = input.html
+    angle = extractAngle(input.html, input.url ?? '')
+  } else {
+    if (!input.url) throw new Error('Give a URL or paste the page')
+    const response = await fetcher(input.url)
+    if (!response.ok) {
+      angle = extractAngle('', input.url)
+      angle.brand = hostnameOf(input.url)
+      angle.notes.push(response.status ? `The site answered ${response.status}; paste the page's HTML instead (view-source, select all, copy).` : `Could not reach the site (${response.text.slice(0, 80)}); paste the page's HTML instead.`)
+      return angle
+    }
+    source = response.text
+    angle = extractAngle(response.text, input.url)
+  }
+  if (!model) return angle
+  try {
+    const isHtml = /<[a-z][\s\S]*>/i.test(source)
+    const text = isHtml ? strip(source.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, ' ')) : source
+    return await refineAngle(model, text, angle)
+  } catch (error) {
+    log.warn(`${describe(model)} could not read the page; keeping the rules extraction: ${error instanceof Error ? error.message : String(error)}`)
     return angle
   }
-  return extractAngle(response.text, input.url)
 }
 
 /* ------------------------------------------------------------------ storage */

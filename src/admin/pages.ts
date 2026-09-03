@@ -12,7 +12,7 @@ import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
 import { listInstalled } from '../control/plugins.ts'
-import { PLANS, planBySlug, yearlySavingsPercent } from '../control/plans.ts'
+import { catalog, resolvedModels } from '../agent/models.ts'
 import { BENCHMARK, funnel, kpis, liveVisitors, recentEvents, revenueSeries } from '../analytics/events.ts'
 import { listSends } from '../email/send.ts'
 import { TEMPLATES } from '../email/templates.ts'
@@ -31,6 +31,7 @@ import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
+import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
 import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 
@@ -360,7 +361,8 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
     ${events.map((event) => `<tr><td><span class="tag">${escapeHtml(event.type)}</span></td><td class="muted">${escapeHtml(event.path || '—')}</td>
       <td>${event.amount_cents ? format(event.amount_cents, ctx.store.currency) : '—'}</td><td class="muted">${escapeHtml(event.city || '—')}</td>
       <td class="muted">${event.created_at.slice(11, 19)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1.2rem">No traffic recorded yet.</td></tr>'}
-    </tbody></table></div>`
+    </tbody></table></div>
+  ${behaviourCard(ctx, range)}`
 }
 
 /* -------------------------------------------------------------------- reviews */
@@ -397,7 +399,7 @@ export function reviewsPage(ctx: Ctx, status: string): string {
 
 /* ------------------------------------------------------------- store designer */
 
-export function storePage(ctx: Ctx, messages: ChatMessage[]): string {
+export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): string {
   const draft = environment(ctx.db, ctx.store.id, 'draft')
   const live = environment(ctx.db, ctx.store.id, 'live')
   const dirty = JSON.stringify(draft.theme) !== JSON.stringify(live.theme)
@@ -423,7 +425,9 @@ export function storePage(ctx: Ctx, messages: ChatMessage[]): string {
       <div class="card"><h2>Sections</h2><p class="muted" style="font-size:12px">${draft.theme.sections.map((section) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(section)}</span>`).join('')}</p>
         <p class="muted" style="font-size:11.5px;margin-top:.6rem">Ask the assistant to reorder or drop sections — it edits the draft, never the live theme.</p></div>
       <div class="card"><h2>Build log</h2>${draft.buildLog.slice(-6).reverse().map((entry) => `<p class="muted" style="font-size:11.5px;margin:.2rem 0">${entry.at.slice(11, 19)} — ${escapeHtml(entry.message)}</p>`).join('') || '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
-    </div></div>`
+    </div></div>
+  <div class="grid2" style="margin-top:1rem"><div>${healthCard(ctx, health)}</div><div>${popupCard(ctx)}${legalCard(ctx)}</div></div>
+  ${messages.length ? '' : ''}`
 }
 
 /* ------------------------------------------------------------------ marketing */
@@ -522,6 +526,7 @@ export function settingsPage(ctx: Ctx): string {
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
+    ${modelsCard(ctx)}
     <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
       ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
         || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
@@ -546,6 +551,21 @@ export function settingsPage(ctx: Ctx): string {
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
   </div></div>`
+}
+
+/** Which model writes what for this store. */
+function modelsCard(ctx: Ctx): string {
+  const entries = catalog()
+  const resolved = resolvedModels(ctx.db, ctx.store.id)
+  const anyKey = entries.some((entry) => entry.available)
+  return `<div class="card" id="models"><h2>Models</h2>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Research, the brand kit, product pages, versions, ads and the assistant are each written by a model. Pick one per job for this store, or leave the default from the environment.${anyKey ? '' : ' <strong>No model key is configured</strong>: set ANTHROPIC_API_KEY or OPENAI_API_KEY and everything below switches from the rules writers to a model.'}</p>
+    <form method="post" action="/admin/settings/models">
+      ${resolved.map((row) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0">
+        <div style="flex:1"><div style="font-size:13px">${escapeHtml(row.name)}</div><div class="muted" style="font-size:11.5px">${escapeHtml(row.note)} Now: ${escapeHtml(row.label)}.</div></div>
+        <select name="${row.task}" style="width:220px"><option value="">Default</option>${entries.map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${row.stored === `${entry.provider}:${entry.model}` ? 'selected' : ''} ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}</select></div>`).join('')}
+      <div class="row" style="margin-top:.6rem"><button class="btn primary" type="submit">Save</button></div></form>
+    <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">${entries.filter((entry) => entry.available).map((entry) => `${escapeHtml(entry.name)}: ${escapeHtml(entry.note)}`).join(' · ') || 'Model ids live in configuration: AMBORAS_MODEL for Claude, AMBORAS_OPENAI_MODEL for GPT.'}</p></div>`
 }
 
 /* --------------------------------------------------------------- profit */
@@ -593,10 +613,12 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="eyebrow" style="margin:.4rem 0">5 · Downsell (only if the upsell is declined)</div>
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
     <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
+    <div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
+    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
-  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}</div></div>`
+  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
 }
 
 /* ------------------------------------------------------------ pages hub */
@@ -609,7 +631,7 @@ export function pagesPage(ctx: Ctx): string {
     <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
-      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="advertorial">Advertorial (listicle)</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
+      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="offer">Offer page (the funnel landing page)</option><option value="advertorial">Advertorial (listicle)</option><option value="quiz">Quiz funnel</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
       <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
       <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
       <button class="btn primary" type="submit">Create and open the editor</button></form>
@@ -623,6 +645,7 @@ export function pagesPage(ctx: Ctx): string {
       <div class="field"><label>HTML</label><textarea name="html" rows="5" placeholder="<!doctype html>…"></textarea></div>
       <button class="btn primary" type="submit">Create</button></form>
   </div>
+  <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
   ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
@@ -702,13 +725,12 @@ export function storesPage(ctx: Ctx, stores: Store[]): string {
   <div class="grid3">${stores.map((store) => {
     const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
     const sales = salesSummary(ctx.db, store.id, 30)
-    const plan = planBySlug(store.planSlug)
     return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
           <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
         <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
-      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)} · ${escapeHtml(plan.name)}</div>
+      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)}</div>
       <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
       <div class="row" style="margin-top:.4rem">
         <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
@@ -733,7 +755,7 @@ export function researchPage(ctx: Ctx): string {
     <div style="margin-top:1rem">${competitorsCard(ctx)}${avatarsCard(ctx)}</div>`
   }
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Customer research</h1>
-    <p class="muted" style="margin:.25rem 0 0">${research.createdAt.slice(0, 16).replace('T', ' ')} · source: ${escapeHtml(research.source)}${research.source === 'rules' ? ' (category rules — set ANTHROPIC_API_KEY for model research)' : ''}</p></div></div>
+    <p class="muted" style="margin:.25rem 0 0">${research.createdAt.slice(0, 16).replace('T', ' ')} · ${research.source === 'rules' ? 'from category rules — set ANTHROPIC_API_KEY or OPENAI_API_KEY and run again for real research' : `written by ${escapeHtml(research.model || 'a model')}${research.source === 'model+site' ? ', with your site read in' : ''}`}</p></div></div>
   <div class="notice" style="margin-bottom:1rem"><strong>Positioning.</strong> ${escapeHtml(research.positioning)}</div>
   <div class="grid2"><div>
     <div class="card"><h2>Who buys</h2>
@@ -770,7 +792,7 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
   const runs = listRuns(ctx.db, ctx.store.id, 8)
   const counts = toolCountsByArea()
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Assistant</h1>
-    <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated, audited, and refusable.</p></div></div>
+    <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated against its schema and audited; it edits the draft, and publishing is yours.</p></div></div>
   <div class="grid2"><div>
     <div class="card" style="max-height:56vh;overflow:auto">
       ${messages.length ? messages.map((message) => `<div style="margin-bottom:1rem">

@@ -1,18 +1,18 @@
 import { seedOf } from './images.ts'
 
 /**
- * The deterministic writer.
+ * The rules writer.
  *
- * The platform prefers a real model when one is configured, but it must never
- * *depend* on one: onboarding has to produce a store with a defensible name,
- * a coherent palette and three plausible products even with no API key, no
- * network, and no budget. So the whole brand kit is derived from the sentence
- * the merchant typed — same sentence, same store, every time.
+ * Scaffolding for a deployment with no model key, and the floor under the
+ * tests: a defensible name, a coherent palette and three plausible products
+ * derived from the sentence the owner typed — same sentence, same store,
+ * every time. With a model configured, `agent/brand.ts` writes the kit and
+ * only the palettes and fonts here are used.
  */
 
 export type Palette = { primary: string; secondary: string; paper: string; ink: string; displayFont: string; bodyFont: string; mood: string }
 
-const PALETTES: Palette[] = [
+export const PALETTES: Palette[] = [
   { mood: 'heritage', primary: '#7a4a2b', secondary: '#5d1f28', paper: '#f4ece1', ink: '#241a14', displayFont: "'Fraunces', Georgia, serif", bodyFont: "'Manrope', ui-sans-serif, system-ui, sans-serif" },
   { mood: 'clinical', primary: '#2f6f6a', secondary: '#123c39', paper: '#f6f8f7', ink: '#14201e', displayFont: "'Instrument Serif', Georgia, serif", bodyFont: "'DM Sans', ui-sans-serif, system-ui, sans-serif" },
   { mood: 'botanical', primary: '#4d6b3c', secondary: '#2c3f24', paper: '#f5f4ea', ink: '#1e2418', displayFont: "'Newsreader', Georgia, serif", bodyFont: "'Onest', ui-sans-serif, system-ui, sans-serif" },
@@ -21,6 +21,8 @@ const PALETTES: Palette[] = [
   { mood: 'monochrome', primary: '#2b2b2b', secondary: '#000000', paper: '#f7f7f5', ink: '#111111', displayFont: "'Space Grotesk', ui-sans-serif, system-ui, sans-serif", bodyFont: "'Inter Tight', ui-sans-serif, system-ui, sans-serif" },
   { mood: 'petal', primary: '#a8496b', secondary: '#5d2138', paper: '#fbf0f2', ink: '#2c161d', displayFont: "'Instrument Serif', Georgia, serif", bodyFont: "'Sora', ui-sans-serif, system-ui, sans-serif" },
 ]
+
+export const MOODS: string[] = PALETTES.map((palette) => palette.mood)
 
 const MOOD_WORDS: Array<[string, string[]]> = [
   ['heritage', ['heritage', 'leather', 'vintage', 'atelier', 'workshop', 'artisan', 'hand-stitched', 'boxing', 'barber', 'whisky', 'tobacco', '1920', 'classic', 'traditional']],

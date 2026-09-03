@@ -1,4 +1,5 @@
 import { escapeHtml } from '../lib/http.ts'
+import { MODES } from '../control/build.ts'
 
 const EXAMPLES = [
   'A hand-stitched boxing gear store called Ironjaw & Co, 1920s heritage leather atelier in Mexico City',
@@ -76,6 +77,8 @@ export function onboardingPage(name: string, error: string | null, hasStores = f
       <div class="field"><label for="siteUrl">Your existing site (optional)</label>
         <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
+      <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">How will you build it?</legend>
+        ${MODES.map((mode, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${index === 2 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
       <button type="submit">Build my store</button>
     </form>
     <div class="steps">

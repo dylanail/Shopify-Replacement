@@ -1,7 +1,12 @@
 import { json, now, type Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
-import { latestResearch, type Persona } from './research.ts'
+import { logger } from '../lib/log.ts'
+import { latestResearch, type Persona, type Research } from './research.ts'
 import { readDirection, type Direction, type Tone } from './directions.ts'
+import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
+
+const log = logger('avatars')
 
 /**
  * Avatars.
@@ -31,6 +36,18 @@ export type Avatar = {
   answer: string
   source: 'research' | 'competitor' | 'manual'
   selected: boolean
+  /** A sub-avatar belongs to a core avatar; the core has no parent. */
+  parentId: string
+  /** The five categories, when they were written down. The core avatar carries the desire; sub-avatars add one or more of the rest. */
+  desire: string
+  experience: string
+  emotion: string
+  behaviour: string
+  demographic: string
+  /** What this person calls themselves, for a hook: "night shift", "the last-minute kind". */
+  label: string
+  /** How many people the avatar can reach: niche (under 100k), mid (100k–1M), mass (1M+). */
+  tier: 'niche' | 'mid' | 'mass' | ''
   createdAt: string
   updatedAt: string
 }
@@ -86,25 +103,80 @@ export function hooksFor(persona: Persona, triggers: string[]): string[] {
   return hooks.slice(0, 5)
 }
 
+const TONES: Tone[] = ['plain', 'urgent', 'premium', 'warm', 'clinical', 'playful', 'blunt']
+
+const AVATARS_SCHEMA = S.obj({
+  avatars: S.arr(
+    S.obj({
+      name: S.str('"The serious amateur" — a label the owner will recognise.'),
+      who: S.str('Who they are, one or two sentences with concrete detail.'),
+      wants: S.str('The outcome they are buying.'),
+      fears: S.str('What they are afraid of getting wrong.'),
+      buysWhen: S.str('The moment that triggers the purchase.'),
+      share: S.num('Fraction of buyers, 0 to 1; shares add up to 1.'),
+      angle: S.str('The angle that reaches this person, in five to eight words.'),
+      hooks: S.arr(S.str(), 'Five first lines for an ad aimed at this person.'),
+      tone: S.enumOf(TONES, 'The tone that lands with them.'),
+      objection: S.str('The objection they raise first.'),
+      answer: S.str('The answer that gets past it.'),
+      desire: S.str('The surface desire as "I want X" or "I need Y".'),
+      experience: S.str('The circumstance or the product they tried and its outcome, emotion removed. Empty if unknown.'),
+      emotion: S.str('How they feel about it, as one of the six primary emotions or a secondary one unpacked. Empty if unknown.'),
+      behaviour: S.str('What they do about it now and how often. Empty if unknown.'),
+      label: S.str('What they call themselves, for a hook.'),
+      tier: S.enumOf(['niche', 'mid', 'mass'], 'How many people this reaches.'),
+    }),
+    'Three to five avatars, biggest share first. The first is the core avatar: one desire, nothing else layered.',
+  ),
+})
+
+async function modelAvatars(choice: ModelChoice, research: Research): Promise<AvatarInput[]> {
+  const prompt = [
+    `Customer research on file:\n${JSON.stringify({ category: research.category, positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, competitors: research.competitors, proofPoints: research.proofPoints })}`,
+    'Turn the personas into avatars a media buyer can write to: one person each, with the angle that reaches them, five scroll-stopping hooks in their language, the tone, and the objection they raise first with its answer. Keep the persona names from the research where they fit.',
+  ].join('\n\n')
+  const parsed = await completeJson<{ avatars: Array<Omit<AvatarInput, 'source' | 'selected'>> }>(choice, {
+    task: 'research',
+    system: `You write customer avatars for a dropshipping brand that sells through paid social. Specific people, real language, no invented statistics. Each avatar is desire-based first; the angle is the reason to buy in that person's terms.\n\n${knowledge('avatars', 'desires', 'honesty')}`,
+    prompt,
+    schema: AVATARS_SCHEMA,
+    name: 'avatars',
+    maxTokens: 6000,
+  })
+  return (parsed.avatars ?? []).map((avatar) => ({ ...avatar, tone: TONES.includes(avatar.tone as Tone) ? avatar.tone : 'plain', hooks: (avatar.hooks ?? []).slice(0, 5), tier: (['niche', 'mid', 'mass'] as const).includes(avatar.tier as 'niche') ? avatar.tier : ('' as const), source: 'research' as const, selected: true }))
+}
+
 /**
- * Reads the research on file into avatars. Existing avatars with the same
- * name are left alone: the merchant's edits are theirs, and re-running research
+ * Reads the research on file into avatars. With a model it writes them;
+ * without one the personas are mapped by rules. Existing avatars with the
+ * same name are left alone: the merchant's edits are theirs, and re-running
  * should add what is new, not overwrite what they fixed.
  */
-export function suggestAvatars(db: Db, storeId: string): Avatar[] {
+export async function suggestAvatars(db: Db, storeId: string, model?: ModelChoice | null): Promise<Avatar[]> {
   const research = latestResearch(db, storeId)
   if (!research) return listAvatars(db, storeId)
+  const choice = model === undefined ? modelFor(db, storeId, 'research') : model
+  let suggested: AvatarInput[]
+  try {
+    suggested = choice ? await modelAvatars(choice, research) : []
+    if (choice) log.info(`avatars written by ${describe(choice)}`)
+  } catch (error) {
+    log.warn(`${describe(choice)} could not write avatars; mapping the personas instead: ${error instanceof Error ? error.message : String(error)}`)
+    suggested = []
+  }
+  if (!suggested.length) suggested = research.audience.map((persona, index) => personaToAvatar(persona, research.triggers, research.objections, index))
   const existing = new Set(listAvatars(db, storeId).map((avatar) => avatar.name.toLowerCase()))
-  research.audience.forEach((persona, index) => {
-    if (existing.has(persona.name.toLowerCase())) return
-    saveAvatar(db, storeId, personaToAvatar(persona, research.triggers, research.objections, index))
-  })
+  for (const avatar of suggested) {
+    if (!avatar.name?.trim() || existing.has(avatar.name.toLowerCase())) continue
+    saveAvatar(db, storeId, avatar)
+    existing.add(avatar.name.toLowerCase())
+  }
   return listAvatars(db, storeId)
 }
 
 /* ------------------------------------------------------------------ storage */
 
-type AvatarRow = { id: string; store_id: string; name: string; body: string; source: string; selected: number; created_at: string; updated_at: string }
+type AvatarRow = { id: string; store_id: string; name: string; body: string; source: string; selected: number; parent_id?: string; created_at: string; updated_at: string }
 
 function rowToAvatar(row: AvatarRow): Avatar {
   const body = json<Partial<Avatar>>(row.body, {})
@@ -123,6 +195,14 @@ function rowToAvatar(row: AvatarRow): Avatar {
     answer: body.answer ?? '',
     source: (row.source as Avatar['source']) ?? 'manual',
     selected: Boolean(row.selected),
+    parentId: row.parent_id ?? '',
+    desire: body.desire ?? '',
+    experience: body.experience ?? '',
+    emotion: body.emotion ?? '',
+    behaviour: body.behaviour ?? '',
+    demographic: body.demographic ?? '',
+    label: body.label ?? '',
+    tier: body.tier ?? '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -155,19 +235,35 @@ export function saveAvatar(db: Db, storeId: string, input: AvatarInput & { id?: 
     answer: input.answer ?? current?.answer ?? '',
     source: input.source ?? current?.source ?? 'manual',
     selected: input.selected ?? current?.selected ?? true,
+    parentId: input.parentId ?? current?.parentId ?? '',
+    desire: input.desire ?? current?.desire ?? '',
+    experience: input.experience ?? current?.experience ?? '',
+    emotion: input.emotion ?? current?.emotion ?? '',
+    behaviour: input.behaviour ?? current?.behaviour ?? '',
+    demographic: input.demographic ?? current?.demographic ?? '',
+    label: input.label ?? current?.label ?? '',
+    tier: input.tier ?? current?.tier ?? '',
   }
-  const { name: _name, source, selected, ...body } = merged
+  const { name: _name, source, selected, parentId, ...body } = merged
   if (current) {
-    db.update('avatars', current.id, { name, body, source, selected: selected ? 1 : 0, updated_at: now() })
+    db.update('avatars', current.id, { name, body, source, selected: selected ? 1 : 0, parent_id: parentId, updated_at: now() })
     return getAvatar(db, storeId, current.id) as Avatar
   }
   const avatarId = id('ava')
-  db.insert('avatars', { id: avatarId, store_id: storeId, name, body, source, selected: selected ? 1 : 0, created_at: now(), updated_at: now() })
+  db.insert('avatars', { id: avatarId, store_id: storeId, name, body, source, selected: selected ? 1 : 0, parent_id: parentId, created_at: now(), updated_at: now() })
   return getAvatar(db, storeId, avatarId) as Avatar
 }
 
 export function deleteAvatar(db: Db, storeId: string, avatarId: string) {
   db.run('DELETE FROM avatars WHERE store_id = ? AND id = ?', storeId, avatarId)
+  db.run("UPDATE avatars SET parent_id = '' WHERE store_id = ? AND parent_id = ?", storeId, avatarId)
+}
+
+/** Core avatars first, each followed by its sub-avatars. */
+export function avatarTree(db: Db, storeId: string): Array<{ core: Avatar; subs: Avatar[] }> {
+  const all = listAvatars(db, storeId)
+  const cores = all.filter((avatar) => !avatar.parentId || !all.some((other) => other.id === avatar.parentId))
+  return cores.map((core) => ({ core, subs: all.filter((avatar) => avatar.parentId === core.id) }))
 }
 
 /* ---------------------------------------------------------------- direction */

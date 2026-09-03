@@ -479,6 +479,53 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX ad_inspiration_store ON ad_inspiration(store_id);
     `,
   },
+  {
+    name: '008_models_per_store',
+    sql: `
+    -- Which model writes what, per store: {"research":"anthropic:claude-opus-5"}.
+    -- Empty means the environment default. The plan and credit columns from
+    -- the SaaS scaffolding stay in place but nothing reads them any more.
+    ALTER TABLE stores ADD COLUMN models TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
+  {
+    name: '009_build_market_creative',
+    sql: `
+    -- How this store is being built: the mode (copy a funnel, copy a funnel
+    -- without its angle, or bring your own product), what the owner answered
+    -- about the buyer (with "I don't know" kept as an answer), and which
+    -- steps were skipped on purpose.
+    ALTER TABLE stores ADD COLUMN build TEXT NOT NULL DEFAULT '{}';
+    -- Overrides for the generated legal pages: company, contact, address.
+    ALTER TABLE stores ADD COLUMN legal TEXT NOT NULL DEFAULT '{}';
+
+    -- Planning documents saved under the store: market analysis, the product
+    -- overview, the ad plan, feedback loops. One JSON body per document.
+    CREATE TABLE market_docs (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL DEFAULT 'rules', model TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX market_docs_store ON market_docs(store_id, kind, updated_at DESC);
+
+    -- A sub-avatar is an avatar with a parent; the body carries the category
+    -- fields (desire, experience, emotion, behaviour, demographic, label).
+    ALTER TABLE avatars ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
+
+    -- Creative work that needs a human before it is used anywhere: photo
+    -- briefs to shoot, synthetic UGC concepts to vet, GIFs to approve.
+    CREATE TABLE creative_queue (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX creative_queue_store ON creative_queue(store_id, status, kind);
+
+    -- Funnels in the same test group split traffic by weight at /go/:group.
+    ALTER TABLE funnels ADD COLUMN test_group TEXT NOT NULL DEFAULT '';
+    ALTER TABLE funnels ADD COLUMN weight INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ]
 
 function migrate(db: Db) {

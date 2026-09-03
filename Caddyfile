@@ -1,0 +1,25 @@
+# Caddy terminates TLS for everything and asks the app, before issuing a
+# certificate, whether it serves that hostname. That is what makes "paste a
+# domain, add the records, check" end in a working https:// address with no
+# certificate step: the app clears a name the moment it verifies as hosted.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://app:4100/_edge/tls-ask
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	encode zstd gzip
+	reverse_proxy app:4100 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+	}
+}
+
+http:// {
+	redir https://{host}{uri} permanent
+}

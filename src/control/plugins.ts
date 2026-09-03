@@ -4,7 +4,6 @@ import { badRequest, forbidden } from '../lib/http.ts'
 import { id } from '../lib/ids.ts'
 import { check } from '../lib/validate.ts'
 import { findPlugin, type Plugin } from './catalog-plugins.ts'
-import { planBySlug } from './plans.ts'
 import { getStore } from './stores.ts'
 import type { SlotName } from './plugin-types.ts'
 
@@ -61,9 +60,6 @@ export function install(db: Db, storeId: string, pluginId: string, settings: Rec
   }
   const store = getStore(db, storeId)
   if (!store) throw badRequest('No such store')
-  if (plugin.planGated && plugin.allowedPlanIds && !plugin.allowedPlanIds.includes(store.planSlug)) {
-    throw forbidden(`${plugin.name} needs a higher plan than ${planBySlug(store.planSlug).name}.`)
-  }
 
   const schema = plugin.manifest.admin?.settingsSchema ?? {}
   const existing = getInstalled(db, storeId, pluginId)

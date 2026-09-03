@@ -3,7 +3,6 @@ import { statsFor } from '../../domain/reviews.ts'
 import { environment, getStore, publish, publishState, rollback, setTheme, updateStore } from '../../control/stores.ts'
 import { addShippingOption, createRegion, defaultRegion, listRegions } from '../../domain/regions.ts'
 import { inviteTeammate } from '../../control/auth.ts'
-import { requirePlan } from '../../control/plans.ts'
 import { refreshTodos } from '../../control/todos.ts'
 import { addRedirect, listSeoPages, productJsonLd, upsertSeoPage, validateProductSchema } from '../../seo/schema.ts'
 import type { Brand } from '../../domain/types.ts'
@@ -188,7 +187,6 @@ export const storefrontTools: Tool[] = defineTools([
     },
     handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
-      if (listRegions(ctx.db, ctx.storeId).length >= 1) requirePlan(store?.planSlug ?? 'free', 'multiRegion', 'Selling in more than one region')
       const region = createRegion(ctx.db, ctx.storeId, {
         name: args.name as string,
         currency: args.currency as string,
@@ -231,7 +229,6 @@ export const storefrontTools: Tool[] = defineTools([
     schema: { email: { type: 'string', required: true }, role: { type: 'string', enum: ['admin', 'member'], default: 'member' } },
     handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
-      requirePlan(store?.planSlug ?? 'free', 'prioritySupport', 'Inviting teammates')
       const result = inviteTeammate(ctx.db, ctx.storeId, args.email as string, args.role as 'admin' | 'member')
       return {
         summary: result.joined

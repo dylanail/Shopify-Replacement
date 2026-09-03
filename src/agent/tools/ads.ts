@@ -6,6 +6,7 @@ import { applyCompetitor, directionFrom, listCompetitors, readCompetitor, saveCo
 import { deleteAvatar, listAvatars, saveAvatar, suggestAvatars, type Avatar } from '../avatars.ts'
 import { readBrief } from '../copy.ts'
 import { generate, imageModels, PRESETS, type ImageProvider, type PresetId } from '../images.ts'
+import { modelFor } from '../models.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id) as unknown as string[]
@@ -102,8 +103,8 @@ export const adTools: Tool[] = defineTools([
     area: 'products',
     description: 'Turn the research personas into editable customer avatars, each with an angle, hooks and a tone. Existing avatars are kept.',
     schema: {},
-    handler(_args, ctx) {
-      const avatars = suggestAvatars(ctx.db, ctx.storeId)
+    async handler(_args, ctx) {
+      const avatars = await suggestAvatars(ctx.db, ctx.storeId)
       if (!avatars.length) return { summary: 'No research on file yet, so nothing to suggest from. Run run_customer_research first.' }
       return {
         summary: `${avatars.length} avatars on file: ${avatars.map((avatar) => avatar.name).join(', ')}.`,
@@ -168,7 +169,7 @@ export const adTools: Tool[] = defineTools([
       productId: { type: 'string', help: 'Which of your products this competes with.' },
     },
     async handler(args, ctx) {
-      const angle = await readCompetitor({ url: args.url as string | undefined, html: args.html as string | undefined })
+      const angle = await readCompetitor({ url: args.url as string | undefined, html: args.html as string | undefined }, undefined, modelFor(ctx.db, ctx.storeId, 'extraction'))
       const record = saveCompetitor(ctx.db, ctx.storeId, { productId: args.productId as string | undefined, angle })
       return {
         summary: `${record.brand || 'The competitor'} runs the ${record.angle} angle: "${record.headline || record.subheadline || '(no headline found)'}"${record.offer.price ? `, priced ${record.offer.price}${record.offer.comparePrice ? ` (was ${record.offer.comparePrice})` : ''}` : ''}${record.proof.reviewCount ? `, ${record.proof.reviewCount} reviews` : ''}. ${record.hooks.length} hooks, ${record.benefits.length} benefits pulled.`,
@@ -302,7 +303,7 @@ export const adTools: Tool[] = defineTools([
         notes.push(library.note)
         found.push(...library.results)
       }
-      if (args.url || args.text) found.push(await readInspiration({ url: args.url as string | undefined, text: args.text as string | undefined }))
+      if (args.url || args.text) found.push(await readInspiration({ url: args.url as string | undefined, text: args.text as string | undefined }, undefined, modelFor(ctx.db, ctx.storeId, 'extraction')))
       const patterns = patternInspiration(product?.title ?? store?.name ?? 'this', readBrief(store?.prompt ?? '').category)
       return {
         summary: `${found.length} found${notes.length ? ` (${notes.join(' ')})` : ''}, plus ${patterns.length} hook patterns for ${product?.title ?? 'the store'}. Save the ones worth keeping with save_ad_inspiration.`,

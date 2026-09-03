@@ -246,6 +246,8 @@ export async function checkDomain(db: Db, storeId: string, hostname: string, pub
   }
   db.update('domains', row.id, {
     last_check: check,
+    // A hosted name that verifies is cleared for a certificate: the edge (Caddy
+    // with on-demand TLS, see docs/DEPLOY.md) issues it on the first HTTPS visit.
     ...(check.verified ? { status: 'verified', ssl: row.mode === 'forward' ? 'pending' : 'issued' } : {}),
   })
   return check
@@ -277,6 +279,23 @@ export function attachDomain(db: Db, storeId: string, input: { hostname: string;
 
 export function removeDomain(db: Db, storeId: string, hostname: string) {
   db.run('DELETE FROM domains WHERE store_id = ? AND hostname = ?', storeId, hostname)
+}
+
+/**
+ * Whether the edge may issue a certificate for a hostname. Caddy's on-demand
+ * TLS asks this before every first issuance, so a stranger pointing a name at
+ * the server does not get a certificate minted for it: only the admin host,
+ * the storefront root and its subdomains, and custom domains that verified
+ * as hosted (www and apex count as one).
+ */
+export function tlsAllowed(db: Db, hostname: string, rootDomain: string): boolean {
+  const clean = hostname.trim().toLowerCase()
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(clean)) return false
+  const admin = (process.env.AMBORAS_ADMIN_HOST ?? '').toLowerCase()
+  if (admin && clean === admin) return true
+  if (rootDomain && (clean === rootDomain.toLowerCase() || clean.endsWith(`.${rootDomain.toLowerCase()}`))) return true
+  const bare = clean.replace(/^www\./, '')
+  return Boolean(db.one("SELECT id FROM domains WHERE hostname IN (?, ?, ?) AND status = 'verified' AND mode = 'host'", clean, bare, `www.${bare}`))
 }
 
 export function domainsFor(db: Db, storeId: string): DomainRecord[] {

@@ -1,5 +1,62 @@
 # Decisions inherited from Darwin, not from the Amboras direction
 
+## Resolution (September 2026)
+
+Each item below was reconsidered against the original direction in
+`ORIGINAL_INTENT.md` and resolved in the branch that carries this section.
+The measure was capability for one operator running dropshipping stores,
+not self-containment. What changed, and what was deliberately kept:
+
+| # | Item | Verdict | What happened |
+|---|---|---|---|
+| 1 | Zero runtime dependencies | **Replaced** | Ordinary dependencies where they raise capability: `@anthropic-ai/sdk` and `openai` for the writers (structured outputs, typed errors, retries, refusal fallbacks), `typescript` and `@types/node` as dev dependencies. A lockfile is committed. The rest of the hand-rolled library stays because it works and nothing in the spec needs replacing it. |
+| 2 | `node:sqlite`, one file | **Kept, as a decision** | One person, a handful of stores, tens of orders a day: sqlite is the right database, and backup is copying a file. Nothing in the feature list needs Postgres. Revisit only if a second machine has to write. |
+| 3 | One process, three surfaces | **Kept, and given a home** | The blueprint's separate apps served a SaaS with a team. For one operator, one process behind Caddy is simpler to run. `docker-compose.yml`, `Caddyfile` and `docs/DEPLOY.md` make it deployable; `/s/:slug` and `/preview/:slug` stay for localhost; subdomains and custom domains work with `AMBORAS_STOREFRONT_HOST`. |
+| 4 | Template-string admin, no React | **Deferred** | Every owner-facing feature is reachable in the current admin, and a Next.js rewrite of ~3,000 lines adds no capability the owner asked for. It stays on the list; the data layer underneath is already an API. |
+| 5 | Storefront rendered here, not a per-store Next.js build | **Deferred** | The sandboxed compile loop was Amboras's centre for its SaaS; the owner's page-building happens in the block builder and the cloner, which have a real render target already. Export is the useful half and stays on the list. |
+| 6 | Rules writers with the model rewriting inside them | **Replaced: model-first** | `agent/models.ts` routes six tasks (assistant, research, brand, pages, ads, reading pages) to Claude or GPT, defaults to the newest Claude, and is selectable per store in Settings. Research, the brand kit and product copy, product pages, PDP and advertorial versions, ads, avatars and competitor readings are now *authored* by the model through structured outputs; the rules writers are scaffolding for a keyless boot and the admin says when it is looking at them. The hardcoded `claude-sonnet-4-5` is gone; ids live in configuration. |
+| 7 | The executor's per-turn "Allow risky actions" gate | **Replaced** | Tools execute. The executor still validates every argument against the tool's schema and audits every call, with `risk: confirm` recorded in the audit row. The safety surface is the one the blueprint has: the assistant edits the draft, publishing is a deliberate step with rollback. The checkbox is gone from the panel. |
+| 8 | Personal mode as a flag over dormant SaaS tables | **Replaced: personal is the only mode** | `control/plans.ts`, the marketing page, `AMBORAS_PERSONAL`, the plan picker and every plan gate are deleted. The `plan_slug` and `credits_used` columns remain in the schema (sqlite migrations are additive) but nothing reads them. Team invites stay: harmless, and the audit log needs actors. |
+| 9 | Raw Stripe client, no Connect or Billing | **Kept** | Connect and Billing are the SaaS's needs (payouts to merchants, plan subscriptions). One owner with their own Stripe account wants exactly per-store keys, which is what exists. |
+| 10 | Resend without MJML | **Kept** | Ten templates render and send. MJML is a nicety. |
+| 11 | Images on local disk | **Kept** | One VPS, one volume. Object storage is a change to `lib/uploads.ts` when a CDN matters. |
+| 12 | Domains with no TLS | **Replaced** | Caddy issues certificates on demand for names the app clears at `/_edge/tls-ask`: the admin host, storefront subdomains, and custom domains that verified as hosted. "ssl: issued" now means something. |
+| 13 | Durable runs in-process | **Kept** | Steps are rows, recovery on boot works, branches run concurrently. Temporal is for a fleet. |
+| 14 | Hand-rolled auth | **Kept** | One user, cookie sessions, scrypt. Fine. |
+| 15 | Hand-rolled validation instead of Zod | **Kept** | It already emits the strict JSON schema the models need. A Zod port is mechanical and buys nothing today. |
+| 16 | One hardcoded text model | **Replaced** | See 6. |
+| 17 | Analytics in sqlite | **Kept** | See 2. |
+| 18 | HTML plugin slots | **Kept** | See 5. |
+| 19 | No deployment story | **Replaced** | See 3 and 12. |
+| 20 | Test shape | **Kept** | `node --test` against in-memory sqlite, and the whole product over HTTP with no mocks. The model path is now tested too, against a fake network in `test/models.test.ts`. |
+| 21 | `tsconfig.json` | **Kept** | Strict is strict. |
+| 22 | `AMBORAS_*` environment prefix, logger | **Kept** | Cosmetic; renaming would churn every doc. |
+| 23 | README voice | **Replaced** | Rewritten around what the platform is for. |
+
+Still missing from the blueprint, and not touched here because neither the
+owner nor Darwin decided them: subscriptions, a Bayesian A/B engine, CRO
+detection, Search Console keyword tracking, GEO prompt tracking, newsletter
+flows, workflow automation, migration importers beyond product import,
+supplier API push, ad placement APIs. `ORIGINAL_INTENT.md` Part 4 lists them
+in order.
+
+---
+
+### Second iteration (September 2026)
+
+The course material and the owner's notes turned into: a knowledge base the
+writers read by topic (`docs/knowledge/`, `src/agent/knowledge.ts`); three
+build modes with an order of work whose statuses come from the store; a
+Market tab (analysis, product overview, sub-avatars, ad plan, feedback
+loops); a funnel rip that keeps structure and never copy or images; a
+Creative tab (photo briefs, vetted creator-content concepts, GIFs, layout
+suggestions); generated legal pages, a popup, a quiz block, behaviour
+tracking, funnel split tests and a site health report. Nothing already
+defined changed shape: the tables, pages, funnels, versions, ads and avatars
+gained columns and fields, none were renamed or removed.
+
+## The original audit
+
 This codebase was built inside the `dylanail/darwin` repository, under
 `amboras/`, before it was moved here. Darwin is a different product: a
 persistent, single-principal autonomous operator (Fastify gateway, Postgres

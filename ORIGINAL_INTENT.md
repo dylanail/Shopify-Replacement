@@ -421,6 +421,20 @@ beyond product import.
 
 ## Part 4 — What the next session should do
 
+> **Status.** The carry-overs were reconsidered and resolved; the verdict per
+> item is at the top of `docs/DARWIN_INHERITANCE.md`. Steps 1, 2 and the
+> deployment half of step 3 below are done; "storefront as a real build" and
+> the admin rewrite are deferred with reasons; step 5 is untouched.
+>
+> **Second iteration (3 September 2026).** The course material and the
+> owner's notes are in: a knowledge base the writers read by topic, three
+> build modes with an order of work, a Market tab (analysis, product
+> overview, sub-avatars, ad plan, feedback loops), a funnel rip that keeps
+> structure only, a Creative tab with a vetting queue and a GIF maker,
+> generated legal pages, a popup, a quiz block, behaviour tracking, funnel
+> split tests and a site health report. See `README.md` and
+> `docs/DARWIN_INHERITANCE.md`.
+
 ### North star
 
 Make this the most capable version of what Part 1 describes: **one

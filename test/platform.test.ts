@@ -6,7 +6,6 @@ import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
 import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, addDomain, verifyDomain } from '../src/control/stores.ts'
 import { requireRole, register, inviteTeammate, acceptInvite } from '../src/control/auth.ts'
-import { planBySlug, requirePlan, PlanLimitError } from '../src/control/plans.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
 import { directoryEntries } from '../src/control/catalog-plugins.ts'
 import { createProduct } from '../src/domain/catalog.ts'
@@ -126,21 +125,6 @@ test('an invite only activates when it is accepted', () => {
   assert.equal(acceptInvite(db, newcomer.id, invite), false, 'an invite cannot be redeemed twice')
 })
 
-test('plan limits name the upgrade instead of just refusing (when not in personal mode)', () => {
-  process.env.AMBORAS_PERSONAL = 'false'
-  assert.doesNotThrow(() => requirePlan('launch', 'customDomain', 'A custom domain'))
-  try {
-    requirePlan('free', 'customDomain', 'A custom domain')
-    assert.fail('should have refused')
-  } catch (error) {
-    assert.ok(error instanceof PlanLimitError)
-    assert.equal(error.upgradeTo?.slug, 'launch')
-    assert.match(error.message, /Basic includes it/)
-  }
-  assert.equal(planBySlug('nonsense').slug, 'free')
-  delete process.env.AMBORAS_PERSONAL
-})
-
 /* -------------------------------------------------------------------- plugins */
 
 test('plugin settings are validated, secrets are sealed away from settings', () => {
@@ -168,10 +152,11 @@ test('a directory listing refuses to pretend it installs', () => {
   assert.throws(() => install(db, store.id, listing, {}), /directory listing/)
 })
 
-test('a plan-gated plugin refuses on a plan that does not include it', () => {
+test('a catalog plugin that used to be plan-gated installs like any other', () => {
   const { db, user } = fresh()
-  const store = createStore(db, user.id, { name: 'Gated' })
-  assert.throws(() => install(db, store.id, 'klaviyo', { apiKey: 'pk_x' }), /higher plan/)
+  const store = createStore(db, user.id, { name: 'Ungated' })
+  install(db, store.id, 'klaviyo', { apiKey: 'pk_x' })
+  assert.ok(getInstalled(db, store.id, 'klaviyo'), 'there are no plans to gate on')
 })
 
 test('slots render into the storefront and are suppressed in the admin preview', () => {
