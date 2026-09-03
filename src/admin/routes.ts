@@ -38,12 +38,14 @@ import * as pages from './pages.ts'
 import { shell } from './shell.ts'
 import { authPage, onboardingPage } from './auth-pages.ts'
 import * as plan from './plan-pages.ts'
-import { modeById, QUESTIONS, saveAnswers, setBuildMode, skipStep, type BuildMode } from '../control/build.ts'
+import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
 import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
 import { deleteQueueItem, getQueueItem, PAGE_GOALS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
 import { newBlock } from '../pages/store.ts'
+import { customCatalog, customDefinitions, deleteCustomBlock, upsertCustomBlock } from '../pages/custom-blocks.ts'
+import type { CustomField } from '../pages/blocks.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
@@ -319,14 +321,38 @@ export function adminRouter(): Router {
     const found = getPage(db(), current.store.id, ctx.params.id as string)
     if (!found) throw notFound('No such page')
     const products = listProducts(db(), current.store.id, { status: 'published', limit: 100 }).map((product) => ({ id: product.id, title: product.title }))
-    return html(editorPage({ page: found, storeSlug: current.store.slug, products }))
+    return html(editorPage({ page: found, storeSlug: current.store.slug, products, custom: customDefinitions(db(), current.store.id) }))
+  })
+
+  /* A block the store defines for itself: fields as "key|label|type" lines, a template, its css. */
+  router.post('/admin/blocks', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const fields: CustomField[] = String(body.fields ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [key = '', label = '', type = 'string', fallback = ''] = line.split('|').map((part) => part.trim())
+      const kind = type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string'
+      return { key, label: label || key, type: kind, ...(type === 'text' ? { multiline: true } : {}), ...(fallback ? { default: kind === 'number' ? Number(fallback) : kind === 'boolean' ? fallback === 'true' : fallback } : {}) }
+    })
+    try {
+      const block = upsertCustomBlock(db(), current.store.id, { type: String(body.type ?? '').trim() || undefined, name: String(body.name ?? '').trim(), description: String(body.description ?? ''), icon: String(body.icon ?? '✚'), fields, template: String(body.template ?? ''), css: String(body.css ?? ''), js: String(body.js ?? ''), source: 'owner' })
+      return back(ctx, `Block "${block.name}" saved as ${block.type}. It is in the builder palette under Custom.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  router.post('/admin/blocks/:type/delete', (ctx) => {
+    const current = session(ctx)
+    deleteCustomBlock(db(), current.store.id, ctx.params.type as string)
+    return back(ctx, 'Block removed. Pages that used it show a note where it was until you replace it.')
   })
 
   router.post('/admin/pages/:id/save', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
     const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
-    const unknown = blocks.find((block) => !blockDefinition(block.type))
+    const custom = new Set(customDefinitions(db(), current.store.id).map((definition) => definition.type))
+    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type))
     if (unknown) return { error: `Unknown block type ${unknown.type}` }
     const seo = (body.seo ?? {}) as Record<string, unknown>
     const updated = updatePage(db(), current.store.id, ctx.params.id as string, {
@@ -695,6 +721,13 @@ export function adminRouter(): Router {
     return back(ctx, 'Draft saved. Publish to make it live.')
   })
 
+  router.post('/admin/theme/code', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    setTheme(db(), current.store.id, { customCss: String(body.customCss ?? ''), customJs: String(body.customJs ?? '') }, { build: 'Store-wide css and js edited' })
+    return back(ctx, 'Custom code saved to the draft. Publish to make it live.')
+  })
+
   router.post('/admin/publish', (ctx) => {
     const current = session(ctx)
     const state = publishState(db(), current.store.id)
@@ -923,6 +956,18 @@ export function adminRouter(): Router {
     return back(ctx, `Building as "${mode.name}". First step: ${mode.steps[0]?.label}.`)
   })
 
+  router.post('/admin/build/shape', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const doors = Array.isArray(body.doors) ? body.doors.map(String) : body.doors ? [String(body.doors)] : []
+    try {
+      const state = setSiteShape(db(), current.store.id, { ...(body.shape ? { shape: String(body.shape) } : {}), doors, popup: String(body.popup ?? '') })
+      return back(ctx, `Shape saved: ${state.shape || 'undecided'}${state.doors.length ? ` with ${state.doors.join(' and ')} in front` : ''}. The page plan is below.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
   router.post('/admin/build/answers', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
@@ -1087,7 +1132,7 @@ export function adminRouter(): Router {
     const goal = (PAGE_GOALS.includes(String(body.goal) as PageGoal) ? String(body.goal) : 'offer') as PageGoal
     const product = body.productId ? getProduct(db(), current.store.id, String(body.productId)) : null
     const avatar = body.avatarId ? getAvatar(db(), current.store.id, String(body.avatarId)) : listAvatars(db(), current.store.id).find((entry) => entry.selected) ?? null
-    const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? '') })
+    const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? ''), custom: customCatalog(db(), current.store.id) })
     const created = createPage(db(), current.store.id, { title: `${product ? `${product.title} — ` : ''}${goal} page (suggested)`, kind: goal === 'advertorial' ? 'advertorial' : goal === 'checkout' ? 'checkout' : goal === 'pdp' ? 'product' : 'landing', role: goal === 'checkout' ? 'checkout' : 'page', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product && goal !== 'checkout' ? { productId: product.id } : {}) })
     return redirect(`/admin/pages/${created.id}/edit?flash=${encodeURIComponent(`${suggestion.blocks.length} blocks laid out (${suggestion.source}). ${suggestion.note}`)}`)
   })
@@ -1098,7 +1143,8 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     const trigger = ['exit', 'delay', 'scroll'].includes(String(body.trigger)) ? (String(body.trigger) as 'exit') : 'exit'
-    setTheme(db(), current.store.id, { popup: { enabled: body.enabled === 'true', trigger, after: Number(body.after ?? 20) || 20, headline: String(body.headline ?? ''), text: String(body.text ?? ''), code: String(body.code ?? '').trim(), buttonLabel: String(body.buttonLabel ?? 'Send it'), dismissDays: Number(body.dismissDays ?? 7) || 7 } }, { build: 'Popup edited' })
+    const kind = (['email', 'offer', 'quiz'] as const).find((entry) => entry === String(body.kind ?? '')) ?? 'email'
+    setTheme(db(), current.store.id, { popup: { enabled: body.enabled === 'true', trigger, after: Number(body.after ?? 20) || 20, kind, headline: String(body.headline ?? ''), text: String(body.text ?? ''), code: String(body.code ?? '').trim(), buttonLabel: String(body.buttonLabel ?? 'Send it'), href: String(body.href ?? '#offer').trim() || '#offer', validDays: Math.max(0, Number(body.validDays ?? 0) || 0), image: String(body.image ?? '').trim(), dismissDays: Number(body.dismissDays ?? 7) || 7 } }, { build: 'Popup edited' })
     return back(ctx, body.enabled === 'true' ? 'Popup saved to the draft. Publish to make it live.' : 'Popup is off in the draft.')
   })
 

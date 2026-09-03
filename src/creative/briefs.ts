@@ -63,25 +63,41 @@ export function deleteQueueItem(db: Db, storeId: string, itemId: string) {
 
 /* ------------------------------------------------------------ photo briefs */
 
-export type PhotoBrief = { id: string; name: string; what: string; why: string; how: string }
+export type PhotoBrief = { id: string; name: string; what: string; why: string; how: string; /** Only some products have this shot to take; missing it is not a gap. */ optional?: boolean }
 
-/** The eight shots every product page and ad set draws on. */
+/**
+ * The shots every product page and ad set draws on: the eight the course
+ * asks for, plus the ones every reference page turned out to use
+ * (docs/knowledge/reference-pages.md): the pack shot per tier, the "before"
+ * micro-scenes, the mechanism diagram, the goes-everywhere tiles, the
+ * infographic slides for the mobile gallery, and, where there is one, the
+ * expert's portrait, the origin photo and the texture macro.
+ */
 export const PHOTO_BRIEFS: PhotoBrief[] = [
   { id: 'hero', name: 'Hero on a plain ground', what: 'The product alone, front three-quarter, on a plain surface with one soft light.', why: 'The buy box, the ad thumbnail and the share image all use it.', how: 'Window light from one side, a white or neutral card behind, phone at product height, nothing else in frame.' },
+  { id: 'tiers', name: 'The pack shot per tier', what: 'One unit, two units, three units (or 1 / 3 / 5 bottles), each on the same ground, so every quantity tier has its own picture.', why: 'Every reference buy box shows the tier as a picture, not a number: "Buy 2 Get 1 Free" is three bottles side by side. The tier a buyer picks is the one they can see.', how: 'Same distance, light and ground as the hero; stack or line the units up; one frame per tier; leave room for the badge.' },
   { id: 'hand', name: 'In hand, for scale', what: 'Someone holding or wearing it, hands only.', why: 'Answers "how big is it" without a ruler and reads as real.', how: 'Same light as the hero; crop at the wrist; skin tone true.' },
   { id: 'use', name: 'In use, in the real place', what: 'The product doing its job where it is used: the kitchen, the gym, the nursery, the desk.', why: 'The lifestyle block and the first ad frame; the buyer sees their own life.', how: 'Wider shot, natural mess allowed, product clearly the subject.' },
+  { id: 'before', name: 'The "before": four moments of the problem', what: 'Four short scenes of the problem without the product: the ache at the desk at 3 p.m., the drive, bracing to stand, shifting on the couch. No product in frame.', why: 'The sales pages open the argument with four image cards and a caption each ("By mid-afternoon at your desk, sitting turns to a deep ache.") before any product is shown; the buyer recognises the moment.', how: 'One person, four places, phone at eye level, the discomfort readable in posture, nothing staged beyond that; square crops; each frame will get a one-line caption.' },
   { id: 'detail', name: 'Detail of the mechanism', what: 'A close-up of the part that makes it work: the seam, the clip, the texture, the ingredient list.', why: 'The mechanism must be shown, not asserted; this is the proof shot.', how: 'Macro or portrait mode, fill the frame with the detail, sharp focus.' },
-  { id: 'box', name: 'What arrives', what: 'The box or bag open with everything laid out.', why: 'Sets expectations, cuts "is that all?" support tickets, feeds the bundle tiers.', how: 'Top-down on a plain surface, every item visible, labels readable.' },
+  { id: 'mechanism', name: 'The mechanism as a diagram', what: 'A cutaway, a side profile or an annotated render that shows how it works: the jaw moved forward, the tailbone lifted off the seat, the three layers of the filter.', why: 'Every reference page names its mechanism and draws it; the diagram is what the "how it works" section and the ad hold are built on.', how: 'Brief for a render, not a photo: the product from the angle that shows the action, two or three labels, one accent colour; the 360 set is the input.' },
+  { id: 'box', name: 'What arrives, laid out', what: 'The box or bag open with everything laid out flat: the product, the accessories, the manual, the gifts.', why: 'The "what\'s included" stack and the bundle tiers are built from it; it cuts "is that all?" tickets.', how: 'Top-down on a plain surface, every item visible and evenly spaced, labels readable; a second frame with each free gift on its own.' },
   { id: 'size', name: 'Size and options side by side', what: 'Every size, colour or variant in one frame.', why: 'The options picker and the size chart need it; returns fall when people see the range.', how: 'Same distance and light for every unit, evenly spaced.' },
-  { id: 'result', name: 'The result, or before and after', what: 'What is different after using it: the clean surface, the sleeping baby, the flat pack.', why: 'The outcome is what is bought; the before-and-after block and the ad hold read this.', how: 'Same framing before and after; if there is no before, the after alone with the product in frame.' },
+  { id: 'result', name: 'The result, or before and after', what: 'What is different after using it: the clean surface, the sleeping baby, the flat pack. Two frames, same framing, one with the product and one without.', why: 'The outcome is what is bought; the before-and-after block and the ad hold read this.', how: 'Same framing before and after; if there is no before, the after alone with the product in frame.' },
+  { id: 'everywhere', name: 'Goes everywhere: four places', what: 'The product in four places it travels to: the car, the porch, the office, on the go.', why: 'The "and it goes everywhere you go" grid on the sales pages; it answers "will it work in my seat" without a word.', how: 'Four square frames, product in the same position in each, the place doing the talking; shoot in one afternoon.' },
+  { id: 'slides', name: 'The infographic slides', what: 'Four to six gallery slides that sell on their own: the benefits on a plain ground, the mechanism callouts, the dimensions, the expert quote, the reviews overlay.', why: 'On a phone the gallery is seen before any scroll; the reference product pages put the argument into the slides.', how: 'Brief for a designer or a render: the hero or a 360 frame as the base, short labels in the brand type, one idea per slide, the last slide the dimensions.' },
   { id: 'turn', name: 'The 360 set', what: 'Front, both sides, back and top, on the same ground.', why: 'Every render and every page needs the product from more than one side; the reference set is built from these.', how: 'Turn the product, not the phone; keep the distance and the light fixed.' },
+  { id: 'expert', name: 'The expert, if there is one', what: 'A portrait of the real professional who recommends it, in their own place: the clinic, the workshop, the gym.', why: 'The expert quote and the "recommended by" badge need a face; a stock photo is a lie the health report cannot catch.', how: 'Only a real person who agreed in writing; natural light, their name and credential recorded with the file.', optional: true },
+  { id: 'origin', name: 'Where it is made', what: 'The workshop, the factory line, the field, the kitchen: a real photo of the product being made or checked.', why: 'The manufacturing section on the reference pages carries a captioned photo ("Every unit is hand-checked before it ships."); origin is a quality claim the buyer can see.', how: 'Ask the supplier for one frame of the line or the final check; if none exists, the section is left out rather than faked.', optional: true },
+  { id: 'texture', name: 'The texture macro', what: 'The material itself, filling the frame: the serum on skin, the weave, the grain, the foam cut edge.', why: 'Skincare and materials sell on texture; the gallery and the ingredients section use it.', how: 'Macro, raking light from one side, no product packaging in frame.', optional: true },
 ]
 
 /** Which briefs a product already has, read from its media alt text and tags ("photo:hero"). */
-export function photoCoverage(product: Product): { have: PhotoBrief[]; missing: PhotoBrief[] } {
+export function photoCoverage(product: Product): { have: PhotoBrief[]; missing: PhotoBrief[]; optional: PhotoBrief[] } {
   const text = [...product.media.map((media) => media.alt), ...product.tags, product.metadata.photos ?? ''].join(' ').toLowerCase()
   const have = PHOTO_BRIEFS.filter((brief) => text.includes(`photo:${brief.id}`) || (brief.id === 'hero' && Boolean(product.heroImage)))
-  return { have, missing: PHOTO_BRIEFS.filter((brief) => !have.includes(brief)) }
+  // Optional shots (the expert, the origin, the texture) are listed so the owner knows to take them, but not counted as gaps.
+  return { have, missing: PHOTO_BRIEFS.filter((brief) => !have.includes(brief) && !brief.optional), optional: PHOTO_BRIEFS.filter((brief) => brief.optional && !have.includes(brief)) }
 }
 
 /** One queue item per missing shot; already-queued ones are left alone. */
@@ -172,13 +188,14 @@ export async function queueUgcConcepts(db: Db, storeId: string, product: Product
 export type PageGoal = 'offer' | 'advertorial' | 'quiz' | 'pdp' | 'home' | 'science' | 'checkout'
 
 export const PAGE_GOALS: PageGoal[] = ['offer', 'advertorial', 'quiz', 'pdp', 'home', 'science', 'checkout']
+export type CatalogEntry = { type: string; name: string; description: string; fields?: string[] }
 
 export type BlockSuggestion = { type: string; why: string; settings?: Record<string, unknown> }
 
 const CATALOG = BLOCKS.map((block) => ({ type: block.type, name: block.name, description: block.description }))
 
 const SUGGEST_SCHEMA = S.obj({
-  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly.'), why: S.str('One line: the job this block does at this point on the page.') }), 'The page, top to bottom: eight to twenty blocks.'),
+  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly; "custom-html" for a section no block does, with its HTML in html; "custom-code" for css or a script the page needs, in css and js.'), why: S.str('One line: the job this block does at this point on the page.'), html: S.str('Only for custom-html: the section\'s HTML, using the theme classes (head, lead, cols, col, checks, btn, micro). Empty otherwise.'), css: S.str('Only for custom-code: CSS for this page. Empty otherwise.'), js: S.str('Only for custom-code: a script for this page, no external scripts. Empty otherwise.') }), 'The page, top to bottom: eight to twenty blocks.'),
   note: S.str('One sentence on the shape chosen and why.'),
 })
 
@@ -188,20 +205,23 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
   switch (goal) {
     case 'offer':
       return [
-        { type: 'header', why: 'Brand mark and one button.' },
+        { type: 'header', why: 'Brand mark and one button; no navigation out.' },
         { type: 'countdown', why: 'The saving, ending soon.' },
+        { type: 'rating-strip', why: 'The rating from real reviews, before any claim.', settings: product ? { productId: product.id } : {} },
         { type: 'hero', why: 'The promise above the fold with the CTA.' },
         { type: 'trust-badges', why: 'Guarantee, delivery, credential, shipping.' },
-        { type: 'headline', why: 'The problem headline: the alternatives failing.' },
-        { type: 'rich-text', why: 'The story of each failed alternative and its cost.' },
-        { type: 'image-with-text', why: 'The product reveal with proof-of-work.' },
-        { type: 'video', why: 'How it works, shown.' },
-        { type: 'multicolumn', why: 'How it works in three or four bullets.' },
+        { type: 'image-grid', why: 'The problem as four image scenes with a caption each, then the reframe.' },
+        { type: 'alternatives', why: 'Each failed alternative and what it cost, dismissed in two sentences.' },
+        { type: 'image-with-text', why: 'The product reveal with the named mechanism.' },
+        { type: 'multicolumn', why: 'How it works in three verbs.' },
+        { type: 'timeline', why: 'What to expect, week by week, past the guarantee window.' },
         { type: 'review-wall', why: 'Proof from people like them.' },
         buy,
-        { type: 'comparison', why: 'The mechanism against the usual alternative.' },
+        { type: 'included', why: 'What is in the box, gifts with their value.' },
+        { type: 'comparison', why: 'The mechanism against the category, never a brand.' },
+        { type: 'cost-comparison', why: 'What the alternatives cost, added up.' },
         { type: 'faq', why: 'The objections, answered.' },
-        { type: 'guarantee', why: 'The risk removed.' },
+        { type: 'guarantee', why: 'The risk removed, named and numbered.' },
         { type: 'sticky-cta', why: 'The button follows the reader.' },
         { type: 'footer', why: 'Legal links and contact.' },
       ]
@@ -235,14 +255,16 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
       ]
     case 'home':
       return [
-        { type: 'announcement-bar', why: 'The offer in one line.' },
+        { type: 'announcement-bar', why: 'The offer in one line, with its value.' },
         { type: 'header', why: 'Navigation and cart.' },
-        { type: 'hero', why: 'The promise.' },
-        { type: 'featured-products', why: 'The catalog.' },
-        { type: 'image-with-text', why: 'The story.' },
+        { type: 'hero', why: 'The promise with three bullets.' },
+        { type: 'logos', why: 'Press, if real.' },
+        { type: 'featured-products', why: 'The catalog with prices.' },
+        { type: 'image-with-text', why: 'One idea, one number.' },
         { type: 'review-wall', why: 'Proof.' },
+        { type: 'trust-badges', why: 'Guarantee and shipping.' },
         { type: 'email-signup', why: 'The list.' },
-        { type: 'footer', why: 'Legal links.' },
+        { type: 'footer', why: 'Legal links and real contact details.' },
       ]
     case 'science':
       return [
@@ -301,29 +323,48 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
   }
 }
 
-export async function suggestBlocks(choice: ModelChoice | null, input: { goal: PageGoal; product: Product | null; research: Research | null; avatar: Avatar | null; direction?: string }): Promise<{ blocks: BlockSuggestion[]; note: string; source: 'model' | 'rules' }> {
+/**
+ * What the model returned, kept to what can render: catalog types, the
+ * store's own blocks, and a custom-html section when it wrote one. A
+ * buy box is wired to the product; anything unknown is dropped.
+ */
+export function acceptSuggestion(parsed: { blocks?: Array<BlockSuggestion & { html?: string; css?: string; js?: string }>; note?: string }, custom: CatalogEntry[], product: { id: string } | null): BlockSuggestion[] {
+  const known = new Set([...CATALOG.map((entry) => entry.type), ...custom.map((entry) => entry.type)])
+  return (parsed.blocks ?? [])
+    .filter((entry) => known.has(entry.type))
+    .filter((entry) => (entry.type !== 'custom-html' || Boolean(entry.html?.trim())) && (entry.type !== 'custom-code' || Boolean(entry.css?.trim() || entry.js?.trim())))
+    .map(({ html, css, js, ...entry }) => {
+      if (entry.type === 'buy-box' && product) return { ...entry, settings: { productId: product.id, buyNow: true } }
+      if (entry.type === 'custom-html') return { ...entry, settings: { html: String(html ?? '') } }
+      if (entry.type === 'custom-code') return { ...entry, settings: { css: String(css ?? ''), js: String(js ?? '') } }
+      return entry
+    })
+}
+
+export async function suggestBlocks(choice: ModelChoice | null, input: { goal: PageGoal; product: Product | null; research: Research | null; avatar: Avatar | null; direction?: string; custom?: CatalogEntry[] }): Promise<{ blocks: BlockSuggestion[]; note: string; source: 'model' | 'rules' }> {
   const rules = rulesSuggestBlocks(input.goal, input.product)
   if (!choice) return { blocks: rules, note: 'The default order for this kind of page.', source: 'rules' }
   try {
+    const custom = input.custom ?? []
     const prompt = [
       `Kind of page: ${input.goal}. ${input.direction ? `Direction: ${input.direction}` : ''}`,
       input.product ? `Product: ${input.product.title} — ${input.product.subtitle}. ${input.product.description.slice(0, 600)}` : 'No product yet.',
       input.avatar ? `Avatar: ${input.avatar.name}: ${input.avatar.who} Angle: ${input.avatar.angle}` : '',
       input.research ? `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections.map((entry) => entry.objection), competitors: input.research.competitors.map((entry) => entry.name) })}` : '',
       `Blocks available (use the type exactly):\n${JSON.stringify(CATALOG)}`,
-      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta.',
+      custom.length ? `Blocks this store defined for itself (use these too):\n${JSON.stringify(custom)}` : '',
+      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta. If the page needs a section no block does, add it as type "custom-html" with the section\'s HTML in html, using the theme classes (head, lead, eyebrow, cols, col, checks, btn, micro) so it matches the rest; if it needs styling or behaviour no block provides (an animation, a tab switcher, a sticky element), add one "custom-code" block with css and js for this page; prefer a catalog block whenever one fits.',
     ]
       .filter(Boolean)
       .join('\n\n')
-    const parsed = await completeJson<{ blocks: BlockSuggestion[]; note: string }>(choice, {
+    const parsed = await completeJson<{ blocks: Array<BlockSuggestion & { html?: string }>; note: string }>(choice, {
       task: 'pages',
-      system: `You lay out direct-response pages for a dropshipping brand from a fixed block catalog. You decide order and purpose, not copy.\n\n${knowledge('pages', 'offers')}`,
+      system: `You lay out direct-response pages for a dropshipping brand from a block catalog, and you can write a section yourself when the catalog has none for it. You decide order and purpose, not copy.\n\n${knowledge('pages', 'offers')}`,
       prompt,
       schema: SUGGEST_SCHEMA,
       name: 'page_layout',
     })
-    const known = new Set(CATALOG.map((entry) => entry.type))
-    const blocks = (parsed.blocks ?? []).filter((entry) => known.has(entry.type)).map((entry) => (entry.type === 'buy-box' && input.product ? { ...entry, settings: { productId: input.product.id, buyNow: true } } : entry))
+    const blocks = acceptSuggestion(parsed, custom, input.product)
     return blocks.length >= 3 ? { blocks, note: parsed.note ?? '', source: 'model' } : { blocks: rules, note: 'The model returned too little; the default order stands.', source: 'rules' }
   } catch (error) {
     log.warn(`${describe(choice)} could not suggest a layout; using the rules: ${error instanceof Error ? error.message : String(error)}`)

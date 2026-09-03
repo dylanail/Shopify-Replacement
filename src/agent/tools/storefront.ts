@@ -120,6 +120,33 @@ export const storefrontTools: Tool[] = defineTools([
     },
   },
   {
+    name: 'set_store_code',
+    area: 'store',
+    description: 'CSS and JavaScript for the whole store, on every page after the theme: a font tweak, a global animation, a sticky element, a script every page needs. Replaces or appends to what is there. For one page use a custom-code block; for one section define a block with create_block. Goes to the draft; publish makes it live.',
+    schema: {
+      css: { type: 'string', max: 40000, help: 'CSS. Empty leaves the current css alone.' },
+      js: { type: 'string', max: 40000, help: 'JavaScript, run at the end of every page. No external scripts. Empty leaves the current script alone.' },
+      mode: { type: 'string', enum: ['append', 'replace'], default: 'append', help: 'append adds to what is there; replace starts over.' },
+      clear: { type: 'boolean', default: false, help: 'Remove all store-wide css and js.' },
+    },
+    handler(args, ctx) {
+      const draft = environment(ctx.db, ctx.storeId, 'draft')
+      if (args.clear) {
+        setTheme(ctx.db, ctx.storeId, { customCss: '', customJs: '' }, { build: 'Store-wide css and js cleared by the assistant' })
+        return { summary: 'Store-wide css and js cleared on the draft.' }
+      }
+      const css = String(args.css ?? '').trim()
+      const js = String(args.js ?? '').trim()
+      if (!css && !js) throw new Error('Give css, js, or clear.')
+      if (/<script\b[^>]*\bsrc=/i.test(js)) throw new Error('No external scripts; write the script itself.')
+      const join = (current: string, next: string) => (args.mode === 'replace' || !current ? next : `${current}\n\n${next}`)
+      const patch = { ...(css ? { customCss: join(draft.theme.customCss ?? '', css) } : {}), ...(js ? { customJs: join(draft.theme.customJs ?? '', js) } : {}) }
+      setTheme(ctx.db, ctx.storeId, patch, { build: `Store-wide ${[css ? 'css' : '', js ? 'js' : ''].filter(Boolean).join(' and ')} ${args.mode === 'replace' ? 'replaced' : 'added'} by the assistant` })
+      const next = environment(ctx.db, ctx.storeId, 'draft').theme
+      return { summary: `Store-wide code on the draft: ${(next.customCss ?? '').length} characters of css, ${(next.customJs ?? '').length} of js. Publish to make it live.`, artifacts: [{ type: 'link', href: '/admin/store#code', label: 'See it in the store designer' }] }
+    },
+  },
+  {
     name: 'set_announcement',
     area: 'store',
     description: 'Set the announcement bar text at the top of the storefront.',

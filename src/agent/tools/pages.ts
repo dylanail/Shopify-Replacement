@@ -3,7 +3,8 @@ import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { DEFAULT_TIERS, listBundles, upsertBundle, type BundleTier } from '../../domain/bundles.ts'
 import { clonePage } from '../../pages/clone.ts'
 import { createPage, listPages, PAGE_TEMPLATES, pageTemplate, updatePage } from '../../pages/store.ts'
-import { blockDefinition } from '../../pages/blocks.ts'
+import { blockDefinition, BLOCKS, customDefinition, type CustomField } from '../../pages/blocks.ts'
+import { customCatalog, customDefinitions, deleteCustomBlock, getCustomBlock, upsertCustomBlock } from '../../pages/custom-blocks.ts'
 import { latestResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
@@ -75,22 +76,76 @@ export const pageTools: Tool[] = defineTools([
     },
   },
   {
+    name: 'list_blocks',
+    area: 'store',
+    description: 'Every section type a page can be built from: the catalog and the blocks this store defined for itself, with what each is for and its setting keys. Read it before add_block or create_block.',
+    schema: {},
+    handler(_args, ctx) {
+      const custom = customCatalog(ctx.db, ctx.storeId)
+      const catalog = BLOCKS.map((block) => ({ type: block.type, name: block.name, group: block.group, description: block.description, fields: Object.keys(block.schema).filter((key) => !['background', 'padding', 'width', 'align'].includes(key)) }))
+      return {
+        summary: `${catalog.length} catalog blocks and ${custom.length} of this store's own. When none fits, add a section as custom-html, or define a reusable one with create_block.`,
+        data: { catalog, custom },
+        artifacts: [{ type: 'table', columns: ['Type', 'Name', 'For', 'Fields'], rows: [...catalog.map((block) => [block.type, block.name, block.description, block.fields.join(', ')]), ...custom.map((block) => [block.type, block.name, block.description, block.fields.join(', ')])] }],
+      }
+    },
+  },
+  {
     name: 'add_block',
     area: 'store',
-    description: 'Append a block to a page. Settings follow the block schema; anything left out takes its default.',
+    description: 'Insert a section into a page: any catalog block, one of this store\'s own blocks, or, when nothing fits, "custom-html" with settings.html holding the section\'s HTML (the theme\'s classes — head, lead, cols, col, checks, btn — are available), or "custom-code" with settings.css and settings.js for styling or behaviour this one page needs (for the whole store use set_store_code). Settings follow the block schema; anything left out takes its default. Position 0 is the top; omitted appends.',
     schema: { pageId: { type: 'string', required: true }, type: { type: 'string', required: true }, settings: { type: 'object' }, position: { type: 'number', integer: true, min: 0 } },
     handler(args, ctx) {
-      const definition = blockDefinition(args.type as string)
-      if (!definition) throw new Error(`No block called ${args.type}`)
+      const type = args.type as string
+      const definition = blockDefinition(type) ?? customDefinitions(ctx.db, ctx.storeId).find((entry) => entry.type === type) ?? null
+      if (!definition) throw new Error(`No block called ${type}. Use list_blocks, or create_block to define one, or type "custom-html" with settings.html.`)
       const pageId = args.pageId as string
       const { getPage, newBlock } = require_pages()
       const page = getPage(ctx.db, ctx.storeId, pageId)
       if (!page) throw new Error('No such page')
-      const block = newBlock(args.type as string, (args.settings as Record<string, unknown>) ?? {})
+      const block = newBlock(type, (args.settings as Record<string, unknown>) ?? {}, definition)
       const blocks = [...page.blocks]
-      blocks.splice(args.position === undefined ? blocks.length : (args.position as number), 0, block)
+      blocks.splice(args.position === undefined ? blocks.length : Math.min(blocks.length, args.position as number), 0, block)
       updatePage(ctx.db, ctx.storeId, page.id, { blocks })
-      return { summary: `Added a ${definition.name} block to ${page.title} (${blocks.length} blocks now).` }
+      return { summary: `Added a ${definition.name} block to ${page.title} (${blocks.length} blocks now).`, artifacts: [{ type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open the page' }] }
+    },
+  },
+  {
+    name: 'create_block',
+    area: 'store',
+    description: 'Define a new reusable block for this store when no catalog block does the job (check list_blocks first). Give it fields, an HTML template over them, and css and js when it needs them: {{key}} escaped, {{{key}}} raw, {{#if key}}…{{else}}…{{/if}}, {{#each key}}…{{/each}} over the lines of a multiline field with {{0}} {{1}} for its "|" parts and {{.}} for the line, plus {{store.name}}, {{base}}, {{product.title}}, {{product.image}}, {{product.price}}, {{product.handle}}. The theme\'s classes (head, lead, eyebrow, cols, col, checks, btn, micro, rating) style it; add css only for what they do not cover. No scripts. The block then appears in the builder palette and can be placed with add_block.',
+    schema: {
+      name: { type: 'string', required: true, help: 'What the owner will see in the palette, e.g. "Ingredient strip".' },
+      type: { type: 'string', pattern: '^custom-[a-z0-9][a-z0-9-]{1,40}$', help: 'custom-… ; derived from the name when omitted. Reusing an existing type replaces that block.' },
+      description: { type: 'string', help: 'One line on what it is for.' },
+      icon: { type: 'string', help: 'One glyph or emoji.' },
+      fields: { type: 'array', required: true, of: { type: 'object', fields: { key: { type: 'string', required: true, pattern: '^[a-z][a-zA-Z0-9]{0,30}$' }, label: { type: 'string' }, type: { type: 'string', enum: ['string', 'number', 'boolean'], required: true }, multiline: { type: 'boolean' }, default: { type: 'any' }, help: { type: 'string' } } }, max: 24 },
+      template: { type: 'string', required: true, max: 40000 },
+      css: { type: 'string', max: 10000, help: 'CSS for the block; the theme classes cover most of it.' },
+      js: { type: 'string', max: 20000, help: 'A script the block needs (a tab switcher, a counter). It runs once per page that uses the block; find the instances with document.querySelectorAll(".blk--<type>"). No external scripts.' },
+    },
+    handler(args, ctx) {
+      const fields = (args.fields as CustomField[]).map((field) => ({ ...field, ...(field.default === undefined ? {} : { default: field.default as string | number | boolean }) }))
+      const block = upsertCustomBlock(ctx.db, ctx.storeId, { ...(args.type ? { type: args.type as string } : {}), name: args.name as string, description: (args.description as string) ?? '', icon: (args.icon as string) ?? '✚', fields, template: args.template as string, css: (args.css as string) ?? '', js: (args.js as string) ?? '', source: 'model' })
+      const definition = customDefinition(block)
+      return {
+        summary: `Defined "${block.name}" as ${block.type} with fields ${fields.map((field) => field.key).join(', ') || '(none)'}. It is in the palette under Custom; place it with add_block.`,
+        data: { type: block.type, settings: Object.keys(definition.schema) },
+        artifacts: [{ type: 'link', href: '/admin/pages#blocks', label: 'See the store\'s blocks' }],
+      }
+    },
+  },
+  {
+    name: 'delete_block',
+    area: 'store',
+    description: 'Remove one of this store\'s own blocks. Pages that used it show a note where it was.',
+    risk: 'confirm',
+    schema: { type: { type: 'string', required: true } },
+    handler(args, ctx) {
+      const existing = getCustomBlock(ctx.db, ctx.storeId, args.type as string)
+      if (!existing) throw new Error(`No custom block called ${args.type}`)
+      deleteCustomBlock(ctx.db, ctx.storeId, existing.type)
+      return { summary: `Removed ${existing.name} (${existing.type}).` }
     },
   },
   {

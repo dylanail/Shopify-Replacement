@@ -6,13 +6,15 @@ import type { Product } from '../domain/types.ts'
 import type { Cart } from '../domain/cart.ts'
 import type { Totals } from '../domain/types.ts'
 import type { Order } from '../domain/types.ts'
-import { statsFor, type Review, type ReviewStats } from '../domain/reviews.ts'
+import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/reviews.ts'
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import type { Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
+import { getProduct } from '../domain/catalog.ts'
+import { legalFor } from './legal.ts'
 import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
@@ -51,6 +53,7 @@ export function layout(
 ${metaTags({ title: page.title, description: page.description, url: page.canonical ?? view.base, ...(page.image ? { image: page.image } : {}) })}
 ${fontLink(brand)}
 <style>${themeCss(brand, env.theme)}${BUNDLE_CSS}${PAGE_CSS}</style>
+${env.theme.customCss ? `<style data-store-css>${env.theme.customCss.replace(/<\/style/gi, '')}</style>` : ''}
 ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
@@ -81,8 +84,9 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
     <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
 </div></footer>`}
-${popupHtml(view.base, env.theme.popup)}
+${page.bare ? '' : popupHtml(view.base, env.theme.popup)}
 ${view.preview ? '' : trackingScript(view.base)}
+${env.theme.customJs ? `<script data-store-js>${env.theme.customJs.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 </body></html>`
 }
@@ -552,7 +556,7 @@ export type CheckoutInput = {
  * a demo order so the flow can be walked end to end.
  */
 /** The pieces of the checkout, built once from the cart, so the built-in page and a checkout laid out from blocks render the same form. */
-export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string } {
+export function checkoutParts(view: StoreView, input: CheckoutInput): { summary: string; form: string; express: string; bump: string; script: string; note: string; proof: string } {
   const { totals, region } = input
   const cart = view.cart
   const draft = cart?.checkout ?? {}
@@ -561,8 +565,16 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
     const free = totals.appliedPromotions.some((promotion) => promotion.amountCents === 0 && /shipping/i.test(promotion.title)) && option.position === 0
     const clears = option.freeAboveCents !== null && totals.subtotalCents - totals.discountCents >= option.freeAboveCents
     const amount = free || clears ? 0 : option.amountCents
-    return { id: option.id, name: option.name, amountCents: amount, selected: option.id === totals.shippingOptionId }
+    return { id: option.id, name: option.name, amountCents: amount, listCents: option.amountCents, selected: option.id === totals.shippingOptionId }
   })
+  // What the reference checkouts do (docs/knowledge/reference-pages.md): the
+  // arrival date above the form, the guarantee under the button in the
+  // store's own numbers, free shipping shown as a saving, and proof below
+  // the form for whoever scrolls past it.
+  const legal = legalFor(view.db, view.store)
+  const firstProduct = items[0] ? getProduct(view.db, view.store.id, items[0].productId) : null
+  const arrival = firstProduct ? deliveryEstimate(firstProduct.supplier) : null
+  const proof = listReviews(view.db, view.store.id, { status: 'approved', limit: 3 }).filter((review) => !items.length || items.some((item) => item.productId === review.productId)).slice(0, 3)
   const summary = `<div class="summary-body">
     <table class="lines">${items.map((item) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
       <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
@@ -583,8 +595,8 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
         <div class="two"><div class="field"><input name="city" required autocomplete="address-level2" placeholder="City" value="${escapeHtml(draft.address?.city ?? '')}" aria-label="City"></div>
           <div class="field"><input name="postal" required autocomplete="postal-code" placeholder="Postal code" value="${escapeHtml(draft.address?.postal ?? '')}" aria-label="Postal code"></div></div>
         <div class="field"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for delivery updates)" value="${escapeHtml(draft.phone ?? '')}" aria-label="Phone"></div></section>
-      <section class="co-block"><h2>Shipping method</h2>
-        <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
+      <section class="co-block"><h2>Shipping method</h2>${arrival ? `<p class="micro" style="margin-top:-.4rem">🚚 Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}</p>` : ''}
+        <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : option.listCents ? `<s class="micro">${money(option.listCents, view)}</s> Free` : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
       <!--bump-->
       <section class="co-block"><h2>Payment</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
         ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
@@ -615,7 +627,12 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
 })();
 </script>
 ${input.stripe ? stripeScript(view, input.stripe.publishableKey, totals) : ''}`
-  return { summary, form, express, bump, script }
+  const note = `🔒 Secure checkout · ${legal.guaranteeDays}-day money-back guarantee · ${legal.returnsDays}-day returns${arrival ? ` · Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}` : ''}`
+  const proofHtml = `<div class="co-proof">
+      <div class="co-guarantee"><i>⛨</i><div><b>${legal.guaranteeDays}-day money-back guarantee</b><p class="micro">If it is not what the page said, tell us within ${legal.guaranteeDays} days and we refund the price. Returns within ${legal.returnsDays} days of delivery.</p></div></div>
+      ${proof.length ? `<div class="reviews co-reviews">${proof.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('')}</div>` : ''}
+    </div>`
+  return { summary, form, express, bump, script, note, proof: proofHtml }
 }
 
 /**
@@ -637,7 +654,8 @@ export function checkoutPage(view: StoreView, input: CheckoutInput): string {
     <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${parts.summary}</details>
     ${parts.express}
     ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', 'Pay now')}
-    <p class="micro center">🔒 Secure checkout · Free returns for 30 days · Ships in 14 days</p>
+    <p class="micro center">${parts.note}</p>
+    ${parts.proof}
   </div>
   <aside class="co-side">${parts.summary}</aside>
 </div>

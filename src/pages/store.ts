@@ -5,7 +5,8 @@ import { listProducts } from '../domain/catalog.ts'
 import { listReviews } from '../domain/reviews.ts'
 import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '../domain/ops.ts'
 import type { Store } from '../control/stores.ts'
-import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockInstance } from './blocks.ts'
+import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
+import { customDefinitions } from './custom-blocks.ts'
 
 export type Page = {
   id: string
@@ -86,8 +87,7 @@ function uniqueHandle(db: Db, storeId: string, title: string, ignoreId?: string)
   return candidate
 }
 
-export function newBlock(type: string, settings: Record<string, unknown> = {}): BlockInstance {
-  const definition = blockDefinition(type)
+export function newBlock(type: string, settings: Record<string, unknown> = {}, definition: BlockDefinition | null = blockDefinition(type)): BlockInstance {
   return { id: id('blk', 8), type, settings: { ...(definition ? defaultsFor(definition) : {}), ...settings } }
 }
 
@@ -398,20 +398,23 @@ export function salesTemplate(input: TemplateInput): BlockInstance[] {
     newBlock('faq', { headline: '', items: 'How does it work?|The mechanism, in three sentences.\nWhen will I see results?|First days, first weeks, ongoing.\nWho is it for?|Say who, and who should skip it.\nHow long until I get it?|Ships in one to three days; delivered in five to nine.', width: 'narrow', padding: 'small' }),
     newBlock('headline', { level: 'h2', text: 'This is not a life sentence. You just have not found the right support yet.', width: 'narrow' }),
     newBlock('rich-text', { text: 'The problem, in the reader\'s words. What they have tried. Why each one failed.' }),
+    newBlock('image-grid', { headline: 'If this has become the worst part of your day, you are not imagining it', sub: 'The moments customers described to us before they found it.', items: '|By mid-afternoon it turns into a deep ache.\n|Long drives leave it on fire.\n|Getting up takes a brace and a deep breath.\n|You shift and shift and never get comfortable.', perRow: 4, bridge: 'Here is what nobody told you: it was never you. It is the gap the usual fix leaves.' }),
+    newBlock('alternatives', {}),
     newBlock('stats', { headline: 'What customers reported', source: 'Results from a voluntary, self-reported survey; say when and how many. Delete if you have none.' }),
     newBlock('cost-comparison', { headline: 'One thing, instead of all of this' }),
     newBlock('testimonials', { headline: 'Why it is loved daily' }),
     newBlock('trust-badges', { items: '✓|Whole, named ingredients\n✓|Made in a registered facility\n✓|Third-party tested\n✓|Nothing artificial', padding: 'small' }),
     newBlock('timeline', { headline: 'What to expect from consistent use' }),
+    newBlock('audience', {}),
     ...comparisonFrom(input),
     newBlock('how-it-works', { headline: 'How to use it' }),
     newBlock('value-stack', { eyebrow: 'Special offer on now', headline: 'Act now and you get' }),
     newBlock('expert-quote', { headline: 'Reviewed by a professional' }),
     newBlock('payment-icons', {}),
     newBlock('review-wall', { headline: 'What customers say', histogram: true, count: 8, ...(product ? { productId: product.id } : {}) }),
-    offerFrom(input),
+    product ? newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise', bullets: (triggers.length >= 3 ? triggers.slice(0, 4) : ['It works from the first use', 'Nothing to learn', 'Made properly']).map((line) => `${line}|`).join('\n'), offerLabel: 'Limited time offer', cta: 'Buy now & save', chips: '🚚|Free shipping\n⛨|90-day money-back guarantee\n🔒|Secure checkout', guaranteeHeadline: 'Feel the difference or it is free', guaranteeText: 'Use it every day for 90 days. If it is not what you hoped, email us and we refund every penny.' }) : newBlock('offer-box', {}),
     faqFrom(input, 'Frequently asked questions'),
-    newBlock('sticky-cta', { label: 'Buy now & save', href: '#offer' }),
+    newBlock('sticky-cta', { label: 'Buy now & save', href: '#offer', ...(product ? { productId: product.id } : {}) }),
     newBlock('footer', {}),
   ]
 }
@@ -502,6 +505,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
     base,
     currency,
     brand: store.brand,
+    custom: customDefinitions(db, store.id),
     products: products.map((product) => ({
       id: product.id,
       handle: product.handle,
@@ -530,8 +534,11 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
   }
 }
 
+/** The blocks, the runtime, and the script of every custom block the page uses, once each. */
 export function renderPageBody(page: Page, context: BlockContext): string {
-  return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>`
+  const used = new Set(page.blocks.map((block) => block.type))
+  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${definition.js}\n})();</script>`)
+  return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>${scripts.join('')}`
 }
 
 export { BLOCK_RUNTIME }
@@ -614,6 +621,18 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .qstep{border:0;padding:0;margin:0}.qstep legend{margin-inline:auto}.qopts{display:grid;gap:.6rem;max-width:26rem;margin:1rem auto 0}
 .qopt{border:1px solid var(--line);background:var(--raise);color:var(--ink);border-radius:var(--radius);padding:.9rem 1rem;font:inherit;cursor:pointer;text-align:left}.qopt:hover{border-color:var(--primary)}
 .qresult .qproduct{display:flex;gap:1rem;align-items:center;justify-content:center;text-align:left;margin:1rem 0}.qresult .qproduct img{width:96px;height:96px;object-fit:cover;border-radius:var(--radius)}
+.checks{list-style:none;padding:0;margin:.8rem 0;display:grid;gap:.45rem}.checks li{display:flex;gap:.6rem;align-items:flex-start}.checks i{font-style:normal;color:var(--primary);font-weight:700;flex:0 0 auto}
+.offer-label{display:inline-block;font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--primary);border:1px solid var(--primary);border-radius:999px;padding:.35rem .6rem;margin:.6rem 0 .2rem}
+.shipline{display:flex;gap:.5rem;align-items:center;font-size:.9rem;margin:0}.shipline .dot{width:9px;height:9px;border-radius:999px;background:#2f7a4f;box-shadow:0 0 0 3px rgba(47,122,79,.18)}
+.chips{margin-top:.8rem;justify-content:flex-start}
+.guarantee-inline{display:flex;gap:.8rem;align-items:flex-start;margin-top:1rem;border:1px solid var(--line);border-radius:var(--radius);padding:.8rem 1rem;background:var(--raise)}.guarantee-inline i{font-style:normal;font-size:1.4rem;color:var(--primary)}.guarantee-inline p{margin:.2rem 0 0;font-size:.9rem;color:var(--muted)}
+.rating a{text-decoration:none;color:inherit}
+.sticky-product{display:flex;gap:.6rem;align-items:center;min-width:0}.sticky-product img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.sticky-product b{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scenes .scene{margin:0}.scene img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.scene figcaption{font-size:.9rem;margin-top:.5rem}.bridge{font-family:var(--display);font-size:1.25rem;margin-top:1.4rem}
+.alts{margin:1rem 0 0;display:grid;gap:.9rem}.alts dt{font-weight:600}.alts dd{margin:.15rem 0 0;color:var(--muted)}
+.included{list-style:none;padding:0;margin:1rem 0 .4rem;display:grid;gap:.5rem}.included li{display:flex;gap:.7rem;align-items:center;border:1px solid var(--line);border-radius:var(--radius);padding:.55rem .8rem;background:var(--raise)}.included img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.included i{font-style:normal}.included span{flex:1}.included em{font-style:normal;font-weight:600;color:var(--primary);font-size:.85rem}.included em s{color:var(--muted);font-weight:400}
+.press{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:1rem}.press blockquote{margin:0;border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.1rem;background:var(--raise)}.press p{margin:0 0 .5rem;font-family:var(--display);font-size:1.05rem}.press cite{font-style:normal;font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.ingredients img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius);margin-bottom:.5rem}
 .ratingline{display:inline-flex;gap:.5rem;align-items:center;text-decoration:none;color:var(--ink);font-size:.92rem}.ratingline .stars{color:#e0a100}
 .histo{display:grid;gap:.3rem;max-width:22rem;margin:.6rem 0 1rem;font-size:.82rem;color:var(--muted)}.histo div{display:grid;grid-template-columns:2.4rem 1fr 2.6rem;gap:.5rem;align-items:center}.histo i{display:block;height:8px;background:var(--line);border-radius:999px;overflow:hidden}.histo b{display:block;height:100%;background:#e0a100}
 .stats{display:grid;gap:1.2rem;grid-template-columns:repeat(var(--per,3),1fr);margin-top:1rem}.stat b{display:block;font-family:var(--display);font-size:clamp(2rem,4.5vw,3rem);line-height:1;color:var(--primary)}.stat span{display:block;margin-top:.4rem;color:var(--muted);font-size:.92rem}

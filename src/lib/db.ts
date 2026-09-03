@@ -526,6 +526,31 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE funnels ADD COLUMN weight INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    name: '010_custom_blocks',
+    sql: `
+    -- Blocks a store defines for itself, by the owner or by the model, when
+    -- no block in the catalog does the job: a name, the fields the settings
+    -- panel shows, an HTML template over those fields, and its CSS. They
+    -- sit in the builder palette under "Custom" and render like any other.
+    CREATE TABLE custom_blocks (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      type TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      icon TEXT NOT NULL DEFAULT '✚', fields TEXT NOT NULL DEFAULT '[]',
+      template TEXT NOT NULL DEFAULT '', css TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'owner',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (store_id, type));
+    `,
+  },
+  {
+    name: '011_custom_block_js',
+    sql: `
+    -- A custom block may need a script (a tab switcher, a counter); it runs
+    -- once per page that uses the block. Store-wide css and js live on the
+    -- theme.
+    ALTER TABLE custom_blocks ADD COLUMN js TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ]
 
 function migrate(db: Db) {

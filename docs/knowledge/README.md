@@ -2,7 +2,7 @@
 
 What the platform knows about selling through paid social, distilled from the
 Origins Program and Evolve course transcripts the owner supplied, plus the
-page anatomy of the reference stores. The long form lives here; the short
+fifteen reference pages the owner pointed at, read page by page. The long form lives here; the short
 form the writers actually read at generation time is `src/agent/knowledge.ts`,
 which quotes the rules below into the research, avatar, page, ad and planner
 prompts by topic.
@@ -16,7 +16,8 @@ prompts by topic.
 | `offers.md` | Every offer type with when to use it, the law of large numbers, the RatVac case, revenue per session |
 | `testing.md` | Gross margin, breakeven and target ROAS, minimum daily spend, 3:2:2, marksman/sniper/shotgun, the 14 ad review questions, scaling SOP |
 | `creatives.md` | Ad formats, the static templates, video structure, hooks |
-| `pages.md` | What a page has to do in what order, for funnel offer pages, advertorials, quiz funnels and Shopify-style product pages; the behaviour metrics to track |
+| `pages.md` | What a page has to do in what order: the two shapes and the two front doors, the buy box, the sales page, the offer page, advertorials, quiz funnels, product pages, home and collections, the checkout, the popup; the behaviour metrics to track |
+| `reference-pages.md` | The fifteen reference pages and their click-throughs read section by section: the anatomy, the tiers, the guarantees, the urgency, the copy patterns, the image sets, and what a naive builder ships by mistake |
 | `meta-setup.md` | Facebook asset structure and warm-up |
 
 Two rules the writers hold to that the course does not spell out: nothing is

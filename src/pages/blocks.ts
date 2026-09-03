@@ -36,6 +36,8 @@ export type BlockContext = {
   reviews: Array<{ productId: string; rating: number; title: string; body: string; author: string; verified: boolean; media?: string[] }>
   bundles: Array<{ productId: string; html: string }>
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
+  /** The blocks this store defined for itself (custom-blocks.ts), resolved alongside the catalog. */
+  custom?: BlockDefinition[]
   /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
   live?: {
     purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
@@ -71,11 +73,13 @@ export type BlockContext = {
 export type BlockDefinition = {
   type: string
   name: string
-  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Checkout' | 'Forms' | 'Advanced'
+  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Checkout' | 'Forms' | 'Advanced' | 'Custom'
   icon: string
   description: string
   schema: Schema
   render: (settings: Record<string, unknown>, context: BlockContext, block: BlockInstance) => string
+  /** A script the block needs, run once per page that uses it (custom blocks). It finds its instances by `.blk--<type>`. */
+  js?: string
 }
 
 /* --------------------------------------------------------------- helpers */
@@ -345,23 +349,53 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Commerce',
     icon: '🛒',
     description: 'A product with its options, price and add-to-cart, embedded in any page. Funnelish order form, Shopify featured product.',
-    schema: { productId: { type: 'string', label: 'Product', required: true, default: '' }, showImage: { type: 'boolean', label: 'Show image', default: true }, buyNow: { type: 'boolean', label: 'Skip cart, go straight to checkout', default: true }, ...COMMON, width: { ...(COMMON.width as object), default: 'regular' } as never },
+    schema: {
+      productId: { type: 'string', label: 'Product', required: true, default: '' },
+      showImage: { type: 'boolean', label: 'Show image', default: true },
+      buyNow: { type: 'boolean', label: 'Skip cart, go straight to checkout', default: true },
+      eyebrow: { type: 'string', label: 'Eyebrow (a credential or the rating line; empty for none)', default: '' },
+      showRating: { type: 'boolean', label: 'Show the rating from real reviews', default: true },
+      bullets: { type: 'string', label: 'Check bullets (lead|text per line; the lead is bold)', multiline: true, default: '' },
+      offerLabel: { type: 'string', label: 'Offer label above the tiers', default: '' },
+      shipLine: { type: 'string', label: 'Stock and ship line (empty uses the delivery estimate)', default: '' },
+      cta: { type: 'string', label: 'Button label (the price is added)', default: '' },
+      chips: { type: 'string', label: 'Trust chips under the button (icon|text per line)', multiline: true, default: '🔒|Secure checkout\n↩|30-day money-back guarantee\n🚚|Free shipping' },
+      note: { type: 'string', label: 'Line after the button (the compliance line: renewal terms, results vary)', default: '' },
+      guaranteeHeadline: { type: 'string', label: 'Guarantee headline', default: '' },
+      guaranteeText: { type: 'string', label: 'Guarantee text', multiline: true, default: '' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'regular' } as never,
+    },
     render: (settings, context, block) => {
       const product = productFor(context, settings.productId)
       if (!product) return wrap(settings, block, '<div class="ph">Choose a product</div>')
       const cheapest = product.variants[0]
       const bundle = context.bundles.find((entry) => entry.productId === product.id)
+      const reviews = context.reviews.filter((review) => review.productId === product.id)
+      const average = reviews.length ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
+      const rating = settings.showRating && reviews.length ? `<div class="rating"><a href="#reviews">${stars(average)} ${average.toFixed(1)} / 5 · ${reviews.length} review${reviews.length === 1 ? '' : 's'}</a></div>` : ''
+      const bullets = list(settings.bullets).map((entry) => { const [lead = '', text = ''] = entry.split('|'); return `<li><i>✓</i><span>${lead ? `<b>${e(lead)}</b>${text ? ' — ' : ''}` : ''}${e(text)}</span></li>` })
+      const estimate = context.live?.estimates[product.id]
+      const stock = context.live?.stock[product.id]
+      const shipLine = settings.shipLine ? e(settings.shipLine) : estimate ? `${stock === 0 ? 'Back-ordered' : 'In stock'} · arrives ${e(estimate.from)}–${e(estimate.to)}` : ''
+      const chips = list(settings.chips).map((entry) => { const [icon = '', text = ''] = entry.split('|'); return `<span><i>${e(icon)}</i>${e(text)}</span>` })
       return wrap(settings, block, `<div class="buybox-blk" id="offer">
         ${settings.showImage ? `<figure><img src="${e(product.image)}" alt="${e(product.title)}" loading="lazy"></figure>` : ''}
         <div>
+          ${settings.eyebrow ? `<div class="eyebrow">${e(settings.eyebrow)}</div>` : ''}${rating}
           <h2>${e(product.title)}</h2>${product.subtitle ? `<p class="lead">${e(product.subtitle)}</p>` : ''}
+          ${bullets.length ? `<ul class="checks">${bullets.join('')}</ul>` : ''}
+          ${settings.offerLabel ? `<div class="offer-label">${e(settings.offerLabel)}</div>` : ''}
           <div class="price-lg">${format(cheapest?.priceCents ?? product.priceCents, context.currency)}</div>
           <form method="post" action="${context.base}${settings.buyNow ? '/checkout/buy' : '/cart/add'}" class="buyform">
             ${product.variants.length > 1 ? `<label class="opt"><span class="label">Choose</span><select name="variantId">${product.variants.map((variant) => `<option value="${e(variant.id)}">${e(variant.title)} — ${format(variant.priceCents, context.currency)}</option>`).join('')}</select></label>` : `<input type="hidden" name="variantId" value="${e(cheapest?.id ?? '')}">`}
             ${bundle ? bundle.html : '<input type="hidden" name="quantity" value="1">'}
-            <button class="btn btn--wide" type="submit">${settings.buyNow ? 'Buy now' : 'Add to cart'} — <span data-total>${format(cheapest?.priceCents ?? 0, context.currency)}</span></button>
+            ${shipLine ? `<p class="shipline"><i class="dot" aria-hidden="true"></i>${shipLine}</p>` : ''}
+            <button class="btn btn--wide" type="submit">${e(settings.cta || (settings.buyNow ? 'Buy now' : 'Add to cart'))} — <span data-total>${format(cheapest?.priceCents ?? 0, context.currency)}</span></button>
           </form>
-          <p class="micro">Free returns for 30 days · Secure checkout · Ships in 14 days</p>
+          ${chips.length ? `<div class="badges chips">${chips.join('')}</div>` : ''}
+          ${settings.note ? `<p class="micro">${e(settings.note)}</p>` : ''}
+          ${settings.guaranteeHeadline || settings.guaranteeText ? `<div class="guarantee-inline"><i>⛨</i><div>${settings.guaranteeHeadline ? `<b>${e(settings.guaranteeHeadline)}</b>` : ''}${settings.guaranteeText ? `<p>${e(settings.guaranteeText)}</p>` : ''}</div></div>` : ''}
         </div></div>`)
     },
   },
@@ -487,8 +521,14 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Conversion',
     icon: '⤓',
     description: 'A bar pinned to the bottom of the screen once the reader scrolls past the first button.',
-    schema: { label: { type: 'string', required: true, default: 'Claim the offer' }, href: { type: 'string', default: '#offer' }, note: { type: 'string', default: '' } },
-    render: (settings, _context, block) => `<div class="stickybar" data-block="${e(block.id)}" data-sticky><div>${settings.note ? `<div class="p">${e(settings.note)}</div>` : ''}</div><a class="btn" href="${e(settings.href)}">${e(settings.label)}</a></div>`,
+    schema: { label: { type: 'string', required: true, default: 'Claim the offer' }, href: { type: 'string', default: '#offer' }, note: { type: 'string', default: '' }, productId: { type: 'string', label: 'Product (shows its image, name and price in the bar)', default: '' } },
+    render: (settings, context, block) => {
+      const product = settings.productId ? productFor(context, settings.productId) : null
+      const left = product
+        ? `<div class="sticky-product">${product.image ? `<img src="${e(product.image)}" alt="" loading="lazy">` : ''}<div><b>${e(product.title)}</b><span class="micro">${settings.note ? e(settings.note) : format(product.priceCents, context.currency)}</span></div></div>`
+        : `<div>${settings.note ? `<div class="p">${e(settings.note)}</div>` : ''}</div>`
+      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(settings.href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
+    },
   },
   {
     type: 'offer-box',
@@ -775,6 +815,74 @@ export const BLOCKS: BlockDefinition[] = [
     },
   },
 
+  /* What the reference pages taught (docs/knowledge/reference-pages.md) */
+  {
+    type: 'benefit-bullets',
+    name: 'Check bullets',
+    group: 'Text & media',
+    icon: '✓',
+    description: 'Bold-lead check bullets: the buy-box benefits, or the "get your life back" list. Outcome-negations for cold traffic ("No more…").',
+    schema: { headline: { type: 'string', default: '' }, items: { type: 'string', label: 'Items (lead|text per line; the lead is bold)', multiline: true, required: true, default: 'Holds firm at hour 8|never flattens\nWorks on any seat|car, office chair, kitchen stool\nNo pills, no stretches|and no $1,200 chair' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<ul class="checks">${list(settings.items).map((entry) => { const [lead = '', text = ''] = entry.split('|'); return `<li><i>✓</i><span>${lead ? `<b>${e(lead)}</b>${text ? ' — ' : ''}` : ''}${e(text)}</span></li>` }).join('')}</ul>`),
+  },
+  {
+    type: 'image-grid',
+    name: 'Image cards',
+    group: 'Text & media',
+    icon: '▦',
+    description: 'Two to four image cards with a caption each: the "before" micro-scenes ("By mid-afternoon at your desk, sitting turns to a deep ache."), or the "goes everywhere" lifestyle tiles.',
+    schema: { headline: { type: 'string', default: '' }, sub: { type: 'string', multiline: true, default: '' }, items: { type: 'string', label: 'Cards (image URL|caption per line)', multiline: true, required: true, default: '' }, perRow: { type: 'number', integer: true, min: 2, max: 4, default: 4 }, bridge: { type: 'string', label: 'Line after the cards (the reframe)', default: '' }, ...COMMON },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${settings.sub ? `<p class="lead">${e(settings.sub)}</p>` : ''}<div class="cols scenes" style="--per:${Number(settings.perRow)}">${list(settings.items).map((entry) => { const [src = '', caption = ''] = entry.split('|'); return `<figure class="scene">${src ? `<img src="${e(src)}" alt="${e(caption)}" loading="lazy" decoding="async">` : '<div class="ph">Image</div>'}${caption ? `<figcaption>${e(caption)}</figcaption>` : ''}</figure>` }).join('') || '<div class="ph">Add cards: image URL|caption</div>'}</div>${settings.bridge ? `<p class="bridge">${e(settings.bridge)}</p>` : ''}`),
+  },
+  {
+    type: 'alternatives',
+    name: 'Instead of…',
+    group: 'Text & media',
+    icon: '⇄',
+    description: 'The failed alternatives, each dismissed in two sentences that end on a feeling: "Instead of fish oil: the burps, the giant capsules."',
+    schema: { headline: { type: 'string', default: 'Why the usual fixes keep failing' }, items: { type: 'string', label: 'Alternatives (name|why it fails per line)', multiline: true, required: true, default: 'The $1,200 chair|Built for a showroom, not a human tailbone.\nPain pills|Dull the ache, leave you foggy, never touch the cause.\nPhysical therapy|Helped for an hour; could not touch the eight hours a day in the seat.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<dl class="alts">${list(settings.items).map((entry) => { const [name = '', why = ''] = entry.split('|'); return `<div><dt>Instead of ${e(name)}:</dt><dd>${e(why)}</dd></div>` }).join('')}</dl>`),
+  },
+  {
+    type: 'included',
+    name: 'What\'s included',
+    group: 'Commerce',
+    icon: '📦',
+    description: 'The gift stack next to the tiers: each free item with its value, then "N free gifts included". Also the "inside the box" list.',
+    schema: { headline: { type: 'string', default: 'What\'s included' }, items: { type: 'string', label: 'Items (item|value|image URL per line; a value marks it as a free gift)', multiline: true, required: true, default: 'The product||\n2 replacement filters|$19.98|\nThe 5-year warranty|Free|' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => {
+      const items = list(settings.items).map((entry) => { const [item = '', value = '', src = ''] = entry.split('|'); return { item, value, src } })
+      const gifts = items.filter((entry) => entry.value).length
+      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<ul class="included">${items.map((entry) => `<li>${entry.src ? `<img src="${e(entry.src)}" alt="" loading="lazy">` : '<i>📦</i>'}<span>${e(entry.item)}</span>${entry.value ? `<em>${/free/i.test(entry.value) ? '' : `<s>${e(entry.value)}</s> `}FREE</em>` : ''}</li>`).join('')}</ul>${gifts ? `<p class="micro"><b>${gifts} free gift${gifts === 1 ? '' : 's'} included</b></p>` : ''}`)
+    },
+  },
+  {
+    type: 'press-quotes',
+    name: 'Featured in',
+    group: 'Social proof',
+    icon: '“',
+    description: 'Pull-quotes from publications, each with its source. Only real mentions; for names alone use "As seen on".',
+    schema: { label: { type: 'string', default: 'Featured in' }, items: { type: 'string', label: 'Quotes (quote|source per line)', multiline: true, required: true, default: '' }, ...COMMON, align: { ...(COMMON.align as object), default: 'center' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="eyebrow">${e(settings.label)}</div><div class="press">${list(settings.items).map((entry) => { const [quote = '', source = ''] = entry.split('|'); return `<blockquote><p>“${e(quote)}”</p><cite>${e(source)}</cite></blockquote>` }).join('') || '<div class="ph">Add quotes: quote|source</div>'}</div>`),
+  },
+  {
+    type: 'ingredients',
+    name: 'Ingredients',
+    group: 'Text & media',
+    icon: '🌿',
+    description: 'Every ingredient or material with what it does — all of them, not a chosen few. Also the materials and specs of a device.',
+    schema: { headline: { type: 'string', default: 'What is in it' }, lead: { type: 'string', multiline: true, default: '' }, items: { type: 'string', label: 'Items (name|what it does|image URL per line)', multiline: true, required: true, default: '' }, perRow: { type: 'number', integer: true, min: 2, max: 4, default: 3 }, ...COMMON },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${settings.lead ? `<p class="lead">${e(settings.lead)}</p>` : ''}<div class="cols ingredients" style="--per:${Number(settings.perRow)}">${list(settings.items).map((entry) => { const [name = '', what = '', src = ''] = entry.split('|'); return `<div class="col">${src ? `<img src="${e(src)}" alt="" loading="lazy">` : ''}<h3>${e(name)}</h3><p>${e(what)}</p></div>` }).join('') || '<div class="ph">Add items: name|what it does</div>'}</div>`),
+  },
+  {
+    type: 'audience',
+    name: 'Built for',
+    group: 'Text & media',
+    icon: '⌂',
+    description: 'The people it is for, one line each, so cold traffic finds itself: "Long-haul drivers", "Desk workers", "Postpartum and seniors".',
+    schema: { headline: { type: 'string', default: 'Built for every seat that hurts you' }, items: { type: 'string', label: 'Personas (who|the line for them per line)', multiline: true, required: true, default: 'Long-haul drivers|Hours behind the wheel without the tailbone counting the miles.\nDesk workers|Make it to 5 p.m. without the lower-back lockup.\nPostpartum, post-surgery and seniors|Gentler than any chair, on any chair.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<dl class="alts audience">${list(settings.items).map((entry) => { const [who = '', line = ''] = entry.split('|'); return `<div><dt>${e(who)}</dt><dd>${e(line)}</dd></div>` }).join('')}</dl>`),
+  },
   /* From the reference pages: the parts a Checkout Champ sales page, a GemPages product page and a science page have that the Shopify set does not */
   {
     type: 'rating-strip',
@@ -813,7 +921,9 @@ export const BLOCKS: BlockDefinition[] = [
       ...COMMON,
       align: { ...(COMMON.align as object), default: 'center' } as never,
     },
-    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="stats" style="--per:${Number(settings.perRow)}">${list(settings.items).map((entry) => { const [number = '', caption = ''] = entry.split('|'); return `<div class="stat"><b>${e(number.trim())}</b><span>${e(caption.trim())}</span></div>` }).join('')}</div>${settings.source ? `<p class="micro">${e(settings.source)}</p>` : ''}`),
+    render: (settings, _context, block) => !String(settings.source ?? '').trim()
+      ? wrap(settings, block, '<div class="ph">Big numbers need a source line (who was asked, when, how many) before they render: a number without a source is an invented one.</div>')
+      : wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="stats" style="--per:${Number(settings.perRow)}">${list(settings.items).map((entry) => { const [number = '', caption = ''] = entry.split('|'); return `<div class="stat"><b>${e(number.trim())}</b><span>${e(caption.trim())}</span></div>` }).join('')}</div>${settings.source ? `<p class="micro">${e(settings.source)}</p>` : ''}`),
   },
   {
     type: 'timeline',
@@ -1030,14 +1140,110 @@ export function blockDefinition(type: string): BlockDefinition | null {
   return byType.get(type) ?? null
 }
 
-export function blockGroups(): Array<{ group: BlockDefinition['group']; blocks: BlockDefinition[] }> {
-  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Checkout', 'Forms', 'Advanced']
-  return order.map((group) => ({ group, blocks: BLOCKS.filter((block) => block.group === group) }))
+export function blockGroups(custom: BlockDefinition[] = []): Array<{ group: BlockDefinition['group']; blocks: BlockDefinition[] }> {
+  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Checkout', 'Forms', 'Advanced', 'Custom']
+  return order.map((group) => ({ group, blocks: [...BLOCKS, ...custom].filter((block) => block.group === group) })).filter((entry) => entry.blocks.length)
+}
+
+/* --------------------------------------------------------- custom blocks */
+
+export type CustomField = { key: string; label?: string; type: 'string' | 'number' | 'boolean'; multiline?: boolean; default?: string | number | boolean; help?: string }
+export type CustomBlockInput = { type: string; name: string; description?: string; icon?: string; fields: CustomField[]; template: string; css?: string; js?: string }
+
+/**
+ * The template language a custom block is written in. Small on purpose:
+ *   {{key}}            a setting, escaped          {{{key}}}   the same, raw HTML
+ *   {{#if key}}…{{else}}…{{/if}}                    shown when the setting is set
+ *   {{#each key}}…{{/each}}                          one pass per line of a multiline setting;
+ *      inside: {{.}} the line, {{0}} {{1}} … its "|" parts, {{{0}}} raw, {{@index}} from 1
+ *   {{store.name}} {{base}} {{currency}}             the store
+ *   {{product.title}} {{product.image}} {{product.price}} {{product.handle}} {{product.subtitle}}
+ *      the product a `productId` setting names, else the first one
+ */
+export function renderTemplate(template: string, settings: Record<string, unknown>, context: BlockContext): string {
+  const product = productFor(context, settings.productId)
+  const scope: Record<string, unknown> = {
+    ...settings,
+    base: context.base,
+    currency: context.currency,
+    'store.name': context.storeName,
+    'product.title': product?.title ?? '',
+    'product.subtitle': product?.subtitle ?? '',
+    'product.image': product?.image ?? '',
+    'product.handle': product?.handle ?? '',
+    'product.price': product ? format(product.priceCents, context.currency) : '',
+  }
+  const truthy = (value: unknown) => value === true || (typeof value === 'number' && value !== 0) || (typeof value === 'string' && value.trim() !== '')
+  const vars = (source: string, local: Record<string, unknown>) =>
+    source
+      .replace(/\{\{\{\s*([\w.@]+)\s*\}\}\}/g, (_m, key: string) => String(local[key] ?? scope[key] ?? ''))
+      .replace(/\{\{\s*([\w.@]+)\s*\}\}/g, (_m, key: string) => e(local[key] ?? scope[key] ?? ''))
+  const ifs = (source: string, local: Record<string, unknown>): string =>
+    source.replace(/\{\{#if\s+([\w.]+)\s*\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/g, (_m, key: string, yes: string, no = '') => (truthy(local[key] ?? scope[key]) ? yes : no))
+  const eaches = (source: string): string =>
+    source.replace(/\{\{#each\s+([\w.]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g, (_m, key: string, body: string) =>
+      list(scope[key])
+        .map((line, index) => {
+          const parts = line.split('|').map((part) => part.trim())
+          const local: Record<string, unknown> = { '.': line, '@index': index + 1 }
+          parts.forEach((part, at) => { local[String(at)] = part })
+          return vars(ifs(body, local), local)
+        })
+        .join(''),
+    )
+  return vars(ifs(eaches(template), {}), {})
+}
+
+const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000, js: 20_000 }
+
+/** Turns a stored custom block into a definition the renderer, the editor and the tools treat like any catalog block. */
+export function customDefinition(input: CustomBlockInput): BlockDefinition {
+  const issues: string[] = []
+  if (!/^custom-[a-z0-9][a-z0-9-]{1,40}$/.test(input.type)) issues.push('type must be "custom-" followed by letters, digits and dashes')
+  if (!input.name.trim()) issues.push('a name is needed')
+  if (!input.template.trim()) issues.push('a template is needed')
+  if (input.template.length > CUSTOM_LIMITS.template) issues.push(`the template is over ${CUSTOM_LIMITS.template} characters`)
+  if ((input.css ?? '').length > CUSTOM_LIMITS.css) issues.push(`the css is over ${CUSTOM_LIMITS.css} characters`)
+  if (input.fields.length > CUSTOM_LIMITS.fields) issues.push(`more than ${CUSTOM_LIMITS.fields} fields`)
+  if ((input.js ?? '').length > CUSTOM_LIMITS.js) issues.push(`the js is over ${CUSTOM_LIMITS.js} characters`)
+  if (/<script\b/i.test(input.template)) issues.push('no <script> in a block template; put the block\'s script in its js field, which runs once per page')
+  const schema: Schema = {}
+  for (const field of input.fields) {
+    if (!/^[a-z][a-zA-Z0-9]{0,30}$/.test(field.key)) { issues.push(`field key "${field.key}" must be a camelCase word`); continue }
+    if (field.key in COMMON || field.key === 'productId') { issues.push(`"${field.key}" is reserved`); continue }
+    if (field.type === 'number') schema[field.key] = { type: 'number', label: field.label ?? field.key, default: typeof field.default === 'number' ? field.default : Number(field.default) || 0, ...(field.help ? { help: field.help } : {}) }
+    else if (field.type === 'boolean') schema[field.key] = { type: 'boolean', label: field.label ?? field.key, default: Boolean(field.default), ...(field.help ? { help: field.help } : {}) }
+    else schema[field.key] = { type: 'string', label: field.label ?? field.key, default: field.default === undefined ? '' : String(field.default), ...(field.multiline ? { multiline: true } : {}), ...(field.help ? { help: field.help } : {}) }
+  }
+  const referenced = [...input.template.matchAll(/\{\{[#{]?\s*(?:if|each)?\s*([a-z][a-zA-Z0-9]*)\b/g)].map((match) => match[1] as string)
+  for (const key of new Set(referenced)) {
+    if (['if', 'each', 'else', 'base', 'currency', 'store', 'product', 'productId'].includes(key) || key in schema) continue
+    issues.push(`the template uses {{${key}}} but no field "${key}" is declared`)
+  }
+  if (issues.length) throw new Error(`Custom block "${input.type}": ${issues.join('; ')}`)
+  const usesProduct = /\{\{\{?\s*product\./.test(input.template)
+  const css = (input.css ?? '').replace(/<\/style/gi, '')
+  const js = (input.js ?? '').replace(/<\/script/gi, '<\\/script').trim()
+  return {
+    ...(js ? { js } : {}),
+    type: input.type,
+    name: input.name.trim(),
+    group: 'Custom',
+    icon: (input.icon ?? '✚').slice(0, 4) || '✚',
+    description: (input.description ?? '').trim() || 'A block this store defined for itself.',
+    schema: { ...(usesProduct ? { productId: { type: 'string', label: 'Product', default: '' } } : {}), ...schema, ...COMMON },
+    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${css}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
+  }
+}
+
+/** The catalog, then the store's own blocks. */
+function resolve(type: string, context?: BlockContext): BlockDefinition | null {
+  return byType.get(type) ?? context?.custom?.find((definition) => definition.type === type) ?? null
 }
 
 /** Validated settings for a block, with defaults filled in. Unknown types render a visible note, never nothing. */
 export function renderBlock(block: BlockInstance, context: BlockContext): string {
-  const definition = byType.get(block.type)
+  const definition = resolve(block.type, context)
   if (!definition) return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">Unknown block: ${e(block.type)}</p></div></section>`
   const validated = check(definition.schema, block.settings)
   // A setting that fails its own field takes the default; the rest survive.

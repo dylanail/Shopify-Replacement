@@ -99,6 +99,13 @@ export function auditHtml(html: string, input: { path: string; title?: string; b
   if (!/:focus-visible/i.test(html)) issues.push({ severity: 'warn', check: 'focus', detail: 'No visible focus style is defined.' })
   if (!/prefers-reduced-motion/i.test(html) && /animation|transition/i.test(html)) issues.push({ severity: 'warn', check: 'motion', detail: 'Animations run without honouring prefers-reduced-motion.' })
   if (/<a\b[^>]*>\s*<\/a>/i.test(html)) issues.push({ severity: 'error', check: 'link-name', detail: 'An empty link with no text.' })
+  // Template residue: what the reference pages shipped by accident (docs/knowledge/reference-pages.md).
+  const unconfirmed = (html.match(/\[confirm[^\]]*\]/gi) ?? []).length
+  if (unconfirmed) issues.push({ severity: 'error', check: 'unconfirmed', detail: `${unconfirmed} "[confirm]" marker${unconfirmed === 1 ? '' : 's'} still on the page: a fact nobody supplied yet.` })
+  const deadLinks = (html.match(/<a\b[^>]*href=["']#["']/gi) ?? []).length
+  if (deadLinks) issues.push({ severity: 'warn', check: 'dead-link', detail: `${deadLinks} link${deadLinks === 1 ? '' : 's'} to "#" that go nowhere.` })
+  if (/placeholder-image|placeholder\.png|\blorem ipsum\b/i.test(html)) issues.push({ severity: 'error', check: 'placeholder', detail: 'A placeholder image or lorem ipsum is on the page.' })
+  if (/(?:^|[^\d])0 (?:people|customers|orders|bought|dog parents)/i.test(html.replace(/<[^>]+>/g, ' '))) issues.push({ severity: 'warn', check: 'zero-counter', detail: 'A counter reads zero ("0 bought…"); render a real number or nothing.' })
   const brand = input.brand ?? {}
   if (brand.primary && (brand.paper || true)) {
     const onWhite = contrast('#ffffff', brand.primary)

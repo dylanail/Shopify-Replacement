@@ -208,6 +208,10 @@ export type Theme = {
   slots: Record<string, string[]>
   /** The one popup a store gets. Off unless enabled; never shown over the buy box on a phone. */
   popup?: Popup
+  /** CSS the owner or the assistant wrote for the whole store, inlined after the theme on every page. */
+  customCss?: string
+  /** A script for the whole store, at the end of every page. */
+  customJs?: string
 }
 
 export type Popup = {
@@ -215,11 +219,23 @@ export type Popup = {
   trigger: 'exit' | 'delay' | 'scroll'
   /** Seconds (delay) or percent scrolled (scroll). */
   after: number
+  /**
+   * What it offers (from the reference stores): `email` asks for an address
+   * and hands over the code; `offer` shows the code or the deal and sends
+   * the visitor to the buy box; `quiz` sends them to the quiz page.
+   */
+  kind?: 'email' | 'offer' | 'quiz'
   headline: string
   text: string
   /** A discount code shown after the email is given; empty for a plain sign-up. */
   code: string
   buttonLabel: string
+  /** Where the button goes for the offer and quiz kinds. */
+  href?: string
+  /** "Valid for 7 days after sign-up": how long the code is good for; 0 says nothing. */
+  validDays?: number
+  /** An image at the top of the card, when there is one. */
+  image?: string
   /** Days before it may show again after being dismissed. */
   dismissDays: number
 }

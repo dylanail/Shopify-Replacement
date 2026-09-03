@@ -5,7 +5,7 @@ import { fresh } from './helpers.ts'
 import { createStore, environment, setTheme } from '../src/control/stores.ts'
 import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
-import { answersForPrompt, buildProgress, buildState, MODES, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, skipStep } from '../src/control/build.ts'
+import { answersForPrompt, buildProgress, buildState, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, setSiteShape, SHAPES, skipStep } from '../src/control/build.ts'
 import { knowledge, calendarMonth, TOPIC_NAMES } from '../src/agent/knowledge.ts'
 import { authorResearch, runResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
@@ -21,8 +21,14 @@ import { saveUpload } from '../src/lib/uploads.ts'
 import { auditHtml, auditStore, contrast } from '../src/storefront/health.ts'
 import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
-import { renderBlock, blockDefinition, type BlockContext } from '../src/pages/blocks.ts'
-import { offerTemplate, quizTemplate } from '../src/pages/store.ts'
+import { renderBlock, blockDefinition, customDefinition, renderTemplate, type BlockContext } from '../src/pages/blocks.ts'
+import { customCatalog, customDefinitions, listCustomBlocks, upsertCustomBlock } from '../src/pages/custom-blocks.ts'
+import { acceptSuggestion } from '../src/creative/briefs.ts'
+import { applyAuthoring } from '../src/agent/directions.ts'
+import { editorPage } from '../src/admin/editor.ts'
+import { getPage, renderPageBody } from '../src/pages/store.ts'
+import { layout } from '../src/storefront/render.ts'
+import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
@@ -103,21 +109,23 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   setBuildMode(db, store.id, 'own-product')
   let progress = buildProgress(db, store.id)
   assert.equal(progress.mode?.id, 'own-product')
-  assert.equal(progress.steps[0]?.key, 'images')
-  assert.equal(progress.steps[0]?.status, 'next', 'no product has an image yet')
+  assert.equal(progress.steps[0]?.key, 'shape')
+  assert.equal(progress.steps[0]?.status, 'done', 'a product of one\'s own defaults to a store until the owner says otherwise')
+  assert.equal(progress.steps[1]?.key, 'images')
+  assert.equal(progress.steps[1]?.status, 'next', 'no product has an image yet')
   assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
 
-  // An image on the product completes the first step without anyone ticking anything.
+  // An image on the product completes the step without anyone ticking anything.
   const { updateProduct } = require_catalog()
   updateProduct(db, store.id, product.id, { heroImage: '/_uploads/x.png' })
   progress = buildProgress(db, store.id)
-  assert.equal(progress.steps[0]?.status, 'done')
-  assert.equal(progress.steps[1]?.status, 'next')
+  assert.equal(progress.steps[1]?.status, 'done')
+  assert.equal(progress.steps[2]?.status, 'next')
 
   skipStep(db, store.id, 'reference')
   progress = buildProgress(db, store.id)
-  assert.equal(progress.steps[1]?.status, 'skipped')
-  assert.equal(progress.steps[2]?.status, 'next', 'skipping moves next along')
+  assert.equal(progress.steps[2]?.status, 'skipped')
+  assert.equal(progress.steps[3]?.status, 'next', 'skipping moves next along')
 
   const state = saveAnswers(db, store.id, { who: { value: 'People who work nights and sleep at noon' }, instinct: { unknown: true }, tried: { value: '' } })
   assert.equal(state.answers.who?.unknown, false)
@@ -132,6 +140,63 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   assert.equal(MODES.length, 3)
   assert.equal(QUESTIONS.length, 8)
   for (const mode of MODES) assert.ok(mode.steps.every((step) => step.href.startsWith('/')), `${mode.id} steps link somewhere`)
+  for (const mode of MODES) assert.ok(mode.steps.some((step) => step.key === 'shape') && mode.steps.some((step) => step.key === 'pages'), `${mode.id} decides the shape and builds its pages`)
+})
+
+test('the shape decides the page plan, and every page on it reads its status from the store', () => {
+  const { db, store, product } = shop()
+  assert.equal(SHAPES.length, 2)
+  assert.equal(DOORS.length, 2)
+  assert.equal(pagePlan(db, store.id).pages.length, 0, 'no shape, no plan')
+
+  // Copying a funnel implies a funnel; a store is a click away.
+  setBuildMode(db, store.id, 'copy-funnel')
+  assert.equal(buildState(db, store.id).shape, 'funnel')
+  let plan = pagePlan(db, store.id)
+  const keys = plan.pages.map((entry) => entry.key)
+  assert.deepEqual(keys, ['sales', 'bundle', 'checkout', 'upsell', 'thankyou', 'popup', 'legal'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'missing')
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.template, 'sales')
+  assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'missing', 'no funnel record yet')
+  assert.equal(plan.pages.find((entry) => entry.key === 'thankyou')?.status, 'built-in')
+
+  // The sales page is found by what it is, not by a checkbox: a landing page with a buy box counts.
+  const sales = createPage(db, store.id, { title: 'Save today', kind: 'landing', blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }) })
+  const funnel = upsertFunnel(db, store.id, { name: 'Main', productId: product.id, offerPageId: sales.id, upsell: { variantId: product.variants[0]?.id, discountPercent: 20 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.href, `/pages/${sales.id}/edit`, 'an existing page links to its editor')
+  assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'upsell')?.status, 'done')
+  assert.ok(funnel.id)
+
+  // Front doors go in front, in the order chosen; the popup decision adds or removes its row.
+  setSiteShape(db, store.id, { doors: ['quiz', 'advertorial', 'nonsense'], popup: 'yes' })
+  plan = pagePlan(db, store.id)
+  assert.deepEqual(plan.doors, ['quiz', 'advertorial'], 'unknown doors are dropped')
+  assert.deepEqual(plan.pages.slice(0, 2).map((entry) => entry.key), ['quiz', 'advertorial'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'missing')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'missing', 'chosen but not on')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.optional, false)
+  createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
+  createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
+  setTheme(db, store.id, { popup: { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Send', dismissDays: 7 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'done', 'a page with a quiz block is the quiz')
+  assert.equal(plan.pages.find((entry) => entry.key === 'advertorial')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'done')
+  setSiteShape(db, store.id, { popup: 'no' })
+  assert.ok(!pagePlan(db, store.id).pages.some((entry) => entry.key === 'popup'), 'no popup means no popup row')
+
+  // A store has other pages, and the pages step reads the plan.
+  setSiteShape(db, store.id, { shape: 'store', doors: [] })
+  plan = pagePlan(db, store.id)
+  assert.deepEqual(plan.pages.map((entry) => entry.key), ['home', 'collection', 'pdp', 'bundle', 'checkout', 'legal'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'pdp')?.status, 'missing', 'the product has no image yet')
+  const progress = buildProgress(db, store.id)
+  assert.equal(progress.steps.find((step) => step.key === 'shape')?.status, 'done')
+  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Missing: Product page, Bundle tiers/)
+  assert.throws(() => setSiteShape(db, store.id, { shape: 'catalogue' }), /No such shape/)
 })
 
 function require_catalog() {
@@ -284,12 +349,14 @@ test('a ripped page keeps the structure and the angle, and none of the words or 
 
 test('photo briefs, creator-content concepts and GIFs wait in a queue and never touch the reviews', async () => {
   const { db, store, product } = shop()
-  assert.equal(PHOTO_BRIEFS.length, 8)
+  assert.equal(PHOTO_BRIEFS.length, 16)
+  assert.equal(PHOTO_BRIEFS.filter((brief) => brief.optional).length, 3, 'the expert, the origin and the texture are optional')
   const before = photoCoverage(product)
   assert.equal(before.have.length, 0)
   const queued = queuePhotoBriefs(db, store.id, product)
-  assert.equal(queued.length, 8)
-  assert.equal(queuePhotoBriefs(db, store.id, product).length, 8, 'queueing again adds nothing')
+  assert.equal(queued.length, 13, 'the required shots are queued; the optional three are not')
+  assert.equal(queuePhotoBriefs(db, store.id, product).length, 13, 'queueing again adds nothing')
+  assert.equal(before.optional.length, 3)
   const { updateProduct } = await import('../src/domain/catalog.ts')
   updateProduct(db, store.id, product.id, { heroImage: '/_uploads/h.png', media: [{ url: '/_uploads/d.png', alt: 'photo:detail the seam' }] })
   const after = photoCoverage(getProduct(db, store.id, product.id)!)
@@ -404,6 +471,185 @@ test('legal pages, the popup and the quiz block render from the store\'s own con
   assert.ok(offer.some((block) => block.type === 'buy-box'))
 })
 
+test('the blocks, templates, popup kinds and hygiene checks learned from the reference pages', () => {
+  const { db, store, product } = shop()
+  const context: BlockContext = blockContextFor(db, store, '/s/x')
+  const shape = { id: product.id, title: product.title, image: '', subtitle: '' }
+
+  // The buy box carries the reference skeleton: bullets, offer label, ship line, chips, the note, the guarantee.
+  const buy = renderBlock({ id: 'b1', type: 'buy-box', settings: { productId: product.id, eyebrow: 'Sleep-specialist designed', bullets: 'Blocks every bit of light|even at noon\nInstalls in five minutes|no drilling', offerLabel: 'Limited time offer', chips: '🚚|Free shipping\n⛨|90-day guarantee', note: 'Results vary.', guaranteeHeadline: 'The empty-box promise', guaranteeText: 'Send it back, box or no box.' } }, context)
+  assert.match(buy, /Sleep-specialist designed/)
+  assert.match(buy, /<b>Blocks every bit of light<\/b>/)
+  assert.match(buy, /offer-label/)
+  assert.match(buy, /shipline/, 'the arrival line comes from the delivery estimate')
+  assert.match(buy, /90-day guarantee/)
+  assert.match(buy, /The empty-box promise/)
+  assert.ok(!buy.includes('class="rating"'), 'no rating line without real reviews')
+
+  // The sticky bar can carry the product and its price.
+  const sticky = renderBlock({ id: 's1', type: 'sticky-cta', settings: { label: 'Buy now', href: '#offer', productId: product.id } }, context)
+  assert.match(sticky, /Total Blackout Blind/)
+  assert.match(sticky, /\$79\.00/)
+
+  // Honesty: survey stats need a source; the rating line renders nothing without reviews.
+  assert.match(renderBlock({ id: 'st', type: 'stats', settings: { items: '76%|felt better' } }, context), /need a source/)
+  assert.match(renderBlock({ id: 'st2', type: 'stats', settings: { items: '76%|felt better', source: 'Survey of 500 customers, May 2026' } }, context), /76%/)
+  assert.match(renderBlock({ id: 'r', type: 'rating-strip', settings: {} }, context), /^<!-- data-block="r" rating-strip: 0 reviews -->$/)
+
+  // The new blocks render their lines.
+  assert.match(renderBlock({ id: 'i', type: 'included', settings: { items: 'The blind||\nThe fitting kit|$19|' } }, context), /1 free gift included/)
+  assert.match(renderBlock({ id: 'a', type: 'alternatives', settings: { items: 'curtains|They leak at the edges.' } }, context), /Instead of curtains:/)
+  assert.match(renderBlock({ id: 'au', type: 'audience', settings: { items: 'Night workers|Sleep at noon.' } }, context), /<dt>Night workers<\/dt>/)
+  assert.match(renderBlock({ id: 'ig', type: 'image-grid', settings: { items: '|At the desk\n|On the drive', bridge: 'It was never you.' } }, context), /<figcaption>At the desk<\/figcaption>[\s\S]*class="bridge"/)
+  for (const type of ['benefit-bullets', 'image-grid', 'press-quotes', 'ingredients', 'audience', 'timeline', 'how-it-works', 'value-stack', 'cost-comparison', 'studies', 'expert-quote', 'rating-strip']) assert.ok(blockDefinition(type), `${type} is in the catalog`)
+
+  // The sales page is the Funnelish shape: the first button before the long argument, the pain scenes and the alternatives inside it, the buy box with its bullets and chips, the sticky button carrying the product.
+  const sales = salesTemplate({ storeName: store.name, product: shape, research: null })
+  const types = sales.map((block) => block.type)
+  assert.ok(types.indexOf('button') < types.indexOf('image-grid'), 'the first button comes before the persuasion')
+  for (const type of ['timeline', 'alternatives', 'image-grid', 'value-stack', 'cost-comparison', 'audience', 'how-it-works', 'buy-box', 'sticky-cta']) assert.ok(types.includes(type), `sales page has ${type}`)
+  assert.equal(sales.find((block) => block.type === 'sticky-cta')?.settings.productId, product.id)
+  assert.match(String(sales.find((block) => block.type === 'buy-box')?.settings.chips), /guarantee/)
+  const home = homeTemplate({ storeName: store.name, product: shape, research: null })
+  assert.ok(home.some((block) => block.type === 'featured-products') && home.some((block) => block.type === 'email-signup'))
+  // A page from the sales template is found by the page plan as the sales page.
+  setBuildMode(db, store.id, 'copy-funnel')
+  createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done')
+
+  // The popup offers one thing: an email, the deal, or the quiz; it says how long the code is good for.
+  const offerPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, kind: 'offer', headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Claim it', href: '#offer', validDays: 7, dismissDays: 7 })
+  assert.match(offerPopup, /Use code <strong>TEN<\/strong>/)
+  assert.match(offerPopup, /data-popup-go/)
+  assert.ok(!offerPopup.includes('<form'), 'the offer kind asks for nothing')
+  assert.match(offerPopup, /Valid for 7 days\./)
+  const quizPopup = popupHtml('/s/x', { enabled: true, trigger: 'delay', after: 5, kind: 'quiz', headline: 'Find yours', text: '', code: '', buttonLabel: '', dismissDays: 7 })
+  assert.match(quizPopup, /href="\/pages\/quiz"/)
+  assert.match(quizPopup, /Take the quiz/)
+  const emailPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Go', validDays: 3, dismissDays: 7 })
+  assert.match(emailPopup, /<form/)
+  assert.match(emailPopup, /Valid for 3 days after sign-up\./)
+
+  // The health report flags template residue: unconfirmed facts, dead links, placeholder images, counters at zero.
+  const residue = auditHtml('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><style>:focus-visible{outline:2px solid}</style></head><body><a class="skip" href="#main">Skip</a><main id="main"><h1>T</h1><p>[confirm] Dr Name says so</p><a href="#">Terms</a><img src="/placeholder-image.png" alt="x"><p>0 people bought this today</p></main></body></html>', { path: '/p' })
+  const found = residue.issues.map((issue) => issue.check)
+  for (const expected of ['unconfirmed', 'dead-link', 'placeholder', 'zero-counter']) assert.ok(found.includes(expected), `finds ${expected}`)
+})
+
+test('a store can define its own blocks, and the model can add sections the catalog lacks', async () => {
+  const { db, store, product } = shop()
+  const context: BlockContext = blockContextFor(db, store, '/s/x')
+
+  // The template language: escaped by default, raw on request, each over lines and their parts, if/else, the product.
+  const out = renderTemplate('<h2>{{headline}}</h2>{{#if sub}}<p>{{sub}}</p>{{else}}<p>none</p>{{/if}}<ul>{{#each items}}<li data-n="{{@index}}">{{0}} — {{{1}}}</li>{{/each}}</ul>{{product.title}} {{product.price}}', { headline: '<b>Hi</b>', sub: '', items: 'A|<i>one</i>\nB|two' }, context)
+  assert.match(out, /&lt;b&gt;Hi&lt;\/b&gt;/, 'values are escaped')
+  assert.match(out, /<p>none<\/p>/)
+  assert.match(out, /<li data-n="1">A — <i>one<\/i><\/li><li data-n="2">B — two<\/li>/)
+  assert.match(out, /Total Blackout Blind \$79\.00/)
+
+  // A definition is checked before it is stored: reserved and undeclared keys, scripts, a bad type.
+  assert.throws(() => customDefinition({ type: 'strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /type must be "custom-"/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /no field "headline"/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [{ key: 'width', type: 'string' }], template: '<p>{{width}}</p>' }), /reserved/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no <script>/)
+
+  // Stored, it renders through the same path as the catalog and shows in the editor palette under Custom.
+  const block = upsertCustomBlock(db, store.id, { name: 'Ingredient strip', description: 'A row of ingredient chips with a percentage each', fields: [{ key: 'headline', type: 'string', default: 'What is in it' }, { key: 'items', type: 'string', multiline: true, default: 'Amla|100%' }], template: '<h2 class="head">{{headline}}</h2><div class="cols">{{#each items}}<div class="col"><h3>{{0}}</h3><p>{{1}}</p></div>{{/each}}</div>', css: '.chip{color:red}', source: 'model' })
+  assert.equal(block.type, 'custom-ingredient-strip')
+  assert.equal(listCustomBlocks(db, store.id).length, 1)
+  const fresh = blockContextFor(db, store, '/s/x')
+  assert.equal(fresh.custom?.length, 1)
+  const html = renderBlock({ id: 'c1', type: block.type, settings: { items: 'Amla|100%\nNothing else|0%' } }, fresh)
+  assert.match(html, /What is in it/)
+  assert.match(html, /<h3>Amla<\/h3><p>100%<\/p>/)
+  assert.match(html, /<style data-custom="custom-ingredient-strip">\.chip\{color:red\}<\/style>/)
+  assert.match(html, /class="blk blk--custom-ingredient-strip/, 'it is wrapped like every other block')
+  assert.match(renderBlock({ id: 'c2', type: block.type, settings: {} }, context), /Unknown block/, 'without the store context it is unknown, never a crash')
+  const page = createPage(db, store.id, { title: 'P', blocks: [] })
+  const editor = editorPage({ page, storeSlug: store.slug, products: [], custom: customDefinitions(db, store.id) })
+  assert.match(editor, /"type":"custom-ingredient-strip"/)
+  assert.match(editor, /"group":"Custom"/)
+  assert.deepEqual(customCatalog(db, store.id)[0]?.fields, ['headline', 'items'])
+
+  // The tools: list, define, place; and custom-html when nothing fits.
+  const actor = { type: 'user' as const, id: 'u' }
+  const listed = await execute('list_blocks', {}, { db, storeId: store.id, actor, page: 'ai' })
+  assert.match(listed.summary, /1 of this store's own/)
+  const defined = await execute('create_block', { name: 'Press marquee', description: 'Logos scrolling', fields: [{ key: 'names', type: 'string', multiline: true, default: 'A\nB' }], template: '<div class="logos">{{#each names}}<span>{{.}}</span>{{/each}}</div>' }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.match(defined.summary, /custom-press-marquee/)
+  await execute('add_block', { pageId: page.id, type: 'custom-press-marquee', settings: { names: 'Vogue\nGQ' }, position: 0 }, { db, storeId: store.id, actor, page: 'ai' })
+  await execute('add_block', { pageId: page.id, type: 'custom-html', settings: { html: '<p class="lead">A section no block does.</p>' } }, { db, storeId: store.id, actor, page: 'ai' })
+  await assert.rejects(execute('add_block', { pageId: page.id, type: 'no-such-block' }, { db, storeId: store.id, actor, page: 'ai' }), /list_blocks|create_block/)
+  const placed = getPage(db, store.id, page.id)!
+  assert.deepEqual(placed.blocks.map((entry) => entry.type), ['custom-press-marquee', 'custom-html'])
+  const rendered = renderBlock(placed.blocks[0]!, blockContextFor(db, store, '/s/x'))
+  assert.match(rendered, /<span>Vogue<\/span><span>GQ<\/span>/)
+
+  // The layout suggester keeps catalog types, the store's own, and custom-html only when it carries HTML.
+  const accepted = acceptSuggestion({ blocks: [{ type: 'hero', why: 'promise' }, { type: 'custom-press-marquee', why: 'press' }, { type: 'custom-html', why: 'empty', html: '' }, { type: 'custom-html', why: 'a table', html: '<table></table>' }, { type: 'made-up', why: 'no' }, { type: 'buy-box', why: 'offer' }] }, customCatalog(db, store.id), product)
+  assert.deepEqual(accepted.map((entry) => entry.type), ['hero', 'custom-press-marquee', 'custom-html', 'buy-box'])
+  assert.equal(accepted[2]?.settings?.html, '<table></table>')
+  assert.equal(accepted[3]?.settings?.productId, product.id)
+
+  // The page writer can insert a section after a block; unknown types, empty HTML and scripts inside HTML are dropped; a custom-code block with js is kept.
+  const blocks = [{ id: 'h1', type: 'headline', settings: { text: 'Old' } }, { id: 'f', type: 'footer', settings: {} }]
+  const written = applyAuthoring(blocks, {
+    blocks: [{ id: 'h1', values: [{ key: 'text', value: 'New' }] }],
+    additions: [
+      { after: 'h1', type: 'how-it-works', values: [{ key: 'headline', value: 'Three steps' }, { key: 'steps', value: 'One|First|\nTwo|Second|' }] },
+      { after: 'h1', type: 'custom-html', values: [{ key: 'html', value: '<p>Extra</p>' }] },
+      { after: '', type: 'custom-html', values: [{ key: 'html', value: '<script>x()</script>' }] },
+      { after: 'f', type: 'nonsense', values: [] },
+      { after: 'f', type: 'custom-code', values: [{ key: 'js', value: 'x()' }] },
+    ],
+  })
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'how-it-works', 'footer', 'custom-code'])
+  assert.equal(written[0]?.settings.text, 'New')
+  assert.equal(written[2]?.settings.headline, 'Three steps')
+  assert.equal(written[4]?.settings.js, 'x()')
+})
+
+test('css and js can be written for a page, a block, or the whole store', async () => {
+  const { db, store, product } = shop()
+  const actor = { type: 'user' as const, id: 'u' }
+
+  // A block with a script: it runs once per page that uses the block, however many instances there are.
+  const tabs = upsertCustomBlock(db, store.id, { name: 'Tabs', fields: [{ key: 'items', type: 'string', multiline: true, default: 'One|First\nTwo|Second' }], template: '<div class="tabs">{{#each items}}<button type="button" data-tab="{{@index}}">{{0}}</button>{{/each}}</div>', css: '.tabs button{cursor:pointer}', js: 'document.querySelectorAll(".blk--custom-tabs button").forEach(function(b){b.addEventListener("click",function(){b.classList.add("on")})})', source: 'model' })
+  assert.equal(tabs.js?.includes('addEventListener'), true)
+  assert.throws(() => upsertCustomBlock(db, store.id, { name: 'Bad', fields: [], template: '<p>x</p><script>y()</script>' }), /js field/)
+  const page = createPage(db, store.id, { title: 'T', blocks: [{ id: 't1', type: 'custom-tabs', settings: {} }, { id: 't2', type: 'custom-tabs', settings: {} }, { id: 'h', type: 'custom-html', settings: { html: '<p>plain</p>' } }] })
+  const body = renderPageBody(page, blockContextFor(db, store, '/s/x'))
+  assert.equal((body.match(/data-custom-js="custom-tabs"/g) ?? []).length, 1, 'the block script is on the page once')
+  assert.equal((body.match(/<button type="button" data-tab="1">One<\/button>/g) ?? []).length, 2, 'both instances render')
+  assert.ok(!renderPageBody(createPage(db, store.id, { title: 'U', blocks: [] }), blockContextFor(db, store, '/s/x')).includes('data-custom-js'), 'a page without the block carries no script for it')
+
+  // A page can carry its own css and js through the custom-code block, from the suggester or the writer.
+  const accepted = acceptSuggestion({ blocks: [{ type: 'hero', why: 'p' }, { type: 'custom-code', why: 'reveal', css: '.blk{opacity:1}', js: '' }, { type: 'custom-code', why: 'empty', css: '', js: '' }, { type: 'footer', why: 'f' }] }, [], product)
+  assert.deepEqual(accepted.map((entry) => entry.type), ['hero', 'custom-code', 'footer'])
+  assert.equal(accepted[1]?.settings?.css, '.blk{opacity:1}')
+  const written = applyAuthoring([{ id: 'h', type: 'headline', settings: { text: 'x' } }], { blocks: [], additions: [
+    { after: 'h', type: 'custom-code', values: [{ key: 'js', value: 'console.log(1)' }] },
+    { after: 'h', type: 'custom-code', values: [{ key: 'js', value: '<script src="https://evil.example/x.js"></script>' }] },
+    { after: 'h', type: 'custom-code', values: [] },
+  ] })
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-code'])
+  assert.equal(written[1]?.settings.js, 'console.log(1)')
+
+  // Store-wide css and js: on the draft theme through the tool, appended by default, on every page after the theme.
+  await execute('set_store_code', { css: '.btn{border-radius:999px}' }, { db, storeId: store.id, actor, page: 'ai' })
+  await execute('set_store_code', { css: '.head{letter-spacing:.02em}', js: 'document.body.dataset.ready="1"' }, { db, storeId: store.id, actor, page: 'ai' })
+  await assert.rejects(execute('set_store_code', { js: '<script src="https://x.example/a.js"></script>' }, { db, storeId: store.id, actor, page: 'ai' }), /No external scripts/)
+  const theme = environment(db, store.id, 'draft').theme
+  assert.match(theme.customCss ?? '', /999px[\s\S]*letter-spacing/, 'append keeps what was there')
+  const html = layout({ db, store, env: environment(db, store.id, 'draft'), base: '/s/x', preview: true, cart: null, totals: null }, { title: 'T', description: '', body: '<main id="main"></main>' })
+  assert.match(html, /<style data-store-css>\.btn\{border-radius:999px\}/)
+  assert.match(html, /<script data-store-js>document\.body\.dataset\.ready="1"<\/script>/)
+  await execute('set_store_code', { css: 'body{margin:0}', mode: 'replace' }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.equal(environment(db, store.id, 'draft').theme.customCss, 'body{margin:0}')
+  await execute('set_store_code', { clear: true }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.equal(environment(db, store.id, 'draft').theme.customJs, '')
+})
+
 test('behaviour events and funnel split tests are counted per session and judged on revenue per session', () => {
   const { db, store, product } = shop()
   const a = sessionFor(db, store.id, { ip: '1.1.1.1', userAgent: 'a' })
@@ -460,11 +706,11 @@ test('the planner can drive the build, the market and the creative queue through
   const analysis = await execute('write_market_analysis', {}, { db, storeId: store.id, actor, page: 'ai' })
   assert.match(analysis.summary, /No way to stand out found yet/)
   const briefs = await execute('queue_photo_briefs', { productId: product.id }, { db, storeId: store.id, actor, page: 'ai' })
-  assert.match(briefs.summary, /8 photo briefs/)
+  assert.match(briefs.summary, /13 photo briefs/)
   const layout = await execute('suggest_page_layout', { goal: 'quiz', productId: product.id }, { db, storeId: store.id, actor, page: 'ai' })
   assert.match(layout.summary, /blocks laid out|Created/)
   const queue = await execute('creative_queue', {}, { db, storeId: store.id, actor, page: 'ai' })
-  assert.match(queue.summary, /8 waiting/)
+  assert.match(queue.summary, /13 waiting/)
   const health = await execute('site_health', {}, { db, storeId: store.id, actor, page: 'ai' })
   assert.match(health.summary, /Site score/)
   assert.ok(listAvatars(db, store.id).length >= 0)
