@@ -7,6 +7,7 @@ import { latestDoc, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, type
 import { modelFor } from '../models.ts'
 import { ripToPage } from '../../pages/rip.ts'
 import { createPage, newBlock } from '../../pages/store.ts'
+import { customCatalog } from '../../pages/custom-blocks.ts'
 import { queuePhotoBriefs, queueUgcConcepts, suggestBlocks, listQueue, type PageGoal } from '../../creative/briefs.ts'
 import { makeProductGif } from '../../creative/product-gif.ts'
 import { auditStore } from '../../storefront/health.ts'
@@ -158,7 +159,7 @@ export const planTools: Tool[] = defineTools([
     async handler(args, ctx) {
       const product = args.productId ? getProduct(ctx.db, ctx.storeId, args.productId as string) : null
       const avatar = listAvatars(ctx.db, ctx.storeId).find((entry) => entry.selected) ?? null
-      const suggestion = await suggestBlocks(modelFor(ctx.db, ctx.storeId, 'pages'), { goal: args.goal as PageGoal, product, research: latestResearch(ctx.db, ctx.storeId), avatar, ...(args.direction ? { direction: args.direction as string } : {}) })
+      const suggestion = await suggestBlocks(modelFor(ctx.db, ctx.storeId, 'pages'), { goal: args.goal as PageGoal, product, research: latestResearch(ctx.db, ctx.storeId), avatar, ...(args.direction ? { direction: args.direction as string } : {}), custom: customCatalog(ctx.db, ctx.storeId) })
       const page = createPage(ctx.db, ctx.storeId, { title: (args.title as string) || `${product ? `${product.title} — ` : ''}${args.goal} page (suggested)`, kind: args.goal === 'advertorial' ? 'advertorial' : 'landing', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product ? { productId: product.id } : {}) })
       return { summary: `Created "${page.title}" with ${suggestion.blocks.length} blocks (${suggestion.source}). ${suggestion.note}`, artifacts: [{ type: 'table', columns: ['Block', 'Job'], rows: suggestion.blocks.map((block) => [block.type, block.why]) }, { type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open it' }] }
     },

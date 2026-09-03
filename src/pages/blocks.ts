@@ -36,6 +36,8 @@ export type BlockContext = {
   reviews: Array<{ productId: string; rating: number; title: string; body: string; author: string; verified: boolean; media?: string[] }>
   bundles: Array<{ productId: string; html: string }>
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
+  /** The blocks this store defined for itself (custom-blocks.ts), resolved alongside the catalog. */
+  custom?: BlockDefinition[]
   /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
   live?: {
     purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
@@ -50,7 +52,7 @@ export type BlockContext = {
 export type BlockDefinition = {
   type: string
   name: string
-  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Forms' | 'Advanced'
+  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Forms' | 'Advanced' | 'Custom'
   icon: string
   description: string
   schema: Schema
@@ -905,14 +907,107 @@ export function blockDefinition(type: string): BlockDefinition | null {
   return byType.get(type) ?? null
 }
 
-export function blockGroups(): Array<{ group: BlockDefinition['group']; blocks: BlockDefinition[] }> {
-  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Forms', 'Advanced']
-  return order.map((group) => ({ group, blocks: BLOCKS.filter((block) => block.group === group) }))
+export function blockGroups(custom: BlockDefinition[] = []): Array<{ group: BlockDefinition['group']; blocks: BlockDefinition[] }> {
+  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Forms', 'Advanced', 'Custom']
+  return order.map((group) => ({ group, blocks: [...BLOCKS, ...custom].filter((block) => block.group === group) })).filter((entry) => entry.blocks.length)
+}
+
+/* --------------------------------------------------------- custom blocks */
+
+export type CustomField = { key: string; label?: string; type: 'string' | 'number' | 'boolean'; multiline?: boolean; default?: string | number | boolean; help?: string }
+export type CustomBlockInput = { type: string; name: string; description?: string; icon?: string; fields: CustomField[]; template: string; css?: string }
+
+/**
+ * The template language a custom block is written in. Small on purpose:
+ *   {{key}}            a setting, escaped          {{{key}}}   the same, raw HTML
+ *   {{#if key}}…{{else}}…{{/if}}                    shown when the setting is set
+ *   {{#each key}}…{{/each}}                          one pass per line of a multiline setting;
+ *      inside: {{.}} the line, {{0}} {{1}} … its "|" parts, {{{0}}} raw, {{@index}} from 1
+ *   {{store.name}} {{base}} {{currency}}             the store
+ *   {{product.title}} {{product.image}} {{product.price}} {{product.handle}} {{product.subtitle}}
+ *      the product a `productId` setting names, else the first one
+ */
+export function renderTemplate(template: string, settings: Record<string, unknown>, context: BlockContext): string {
+  const product = productFor(context, settings.productId)
+  const scope: Record<string, unknown> = {
+    ...settings,
+    base: context.base,
+    currency: context.currency,
+    'store.name': context.storeName,
+    'product.title': product?.title ?? '',
+    'product.subtitle': product?.subtitle ?? '',
+    'product.image': product?.image ?? '',
+    'product.handle': product?.handle ?? '',
+    'product.price': product ? format(product.priceCents, context.currency) : '',
+  }
+  const truthy = (value: unknown) => value === true || (typeof value === 'number' && value !== 0) || (typeof value === 'string' && value.trim() !== '')
+  const vars = (source: string, local: Record<string, unknown>) =>
+    source
+      .replace(/\{\{\{\s*([\w.@]+)\s*\}\}\}/g, (_m, key: string) => String(local[key] ?? scope[key] ?? ''))
+      .replace(/\{\{\s*([\w.@]+)\s*\}\}/g, (_m, key: string) => e(local[key] ?? scope[key] ?? ''))
+  const ifs = (source: string, local: Record<string, unknown>): string =>
+    source.replace(/\{\{#if\s+([\w.]+)\s*\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/g, (_m, key: string, yes: string, no = '') => (truthy(local[key] ?? scope[key]) ? yes : no))
+  const eaches = (source: string): string =>
+    source.replace(/\{\{#each\s+([\w.]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g, (_m, key: string, body: string) =>
+      list(scope[key])
+        .map((line, index) => {
+          const parts = line.split('|').map((part) => part.trim())
+          const local: Record<string, unknown> = { '.': line, '@index': index + 1 }
+          parts.forEach((part, at) => { local[String(at)] = part })
+          return vars(ifs(body, local), local)
+        })
+        .join(''),
+    )
+  return vars(ifs(eaches(template), {}), {})
+}
+
+const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000 }
+
+/** Turns a stored custom block into a definition the renderer, the editor and the tools treat like any catalog block. */
+export function customDefinition(input: CustomBlockInput): BlockDefinition {
+  const issues: string[] = []
+  if (!/^custom-[a-z0-9][a-z0-9-]{1,40}$/.test(input.type)) issues.push('type must be "custom-" followed by letters, digits and dashes')
+  if (!input.name.trim()) issues.push('a name is needed')
+  if (!input.template.trim()) issues.push('a template is needed')
+  if (input.template.length > CUSTOM_LIMITS.template) issues.push(`the template is over ${CUSTOM_LIMITS.template} characters`)
+  if ((input.css ?? '').length > CUSTOM_LIMITS.css) issues.push(`the css is over ${CUSTOM_LIMITS.css} characters`)
+  if (input.fields.length > CUSTOM_LIMITS.fields) issues.push(`more than ${CUSTOM_LIMITS.fields} fields`)
+  if (/<script\b/i.test(input.template)) issues.push('no scripts in a block template; page scripts belong in a custom-code block')
+  const schema: Schema = {}
+  for (const field of input.fields) {
+    if (!/^[a-z][a-zA-Z0-9]{0,30}$/.test(field.key)) { issues.push(`field key "${field.key}" must be a camelCase word`); continue }
+    if (field.key in COMMON || field.key === 'productId') { issues.push(`"${field.key}" is reserved`); continue }
+    if (field.type === 'number') schema[field.key] = { type: 'number', label: field.label ?? field.key, default: typeof field.default === 'number' ? field.default : Number(field.default) || 0, ...(field.help ? { help: field.help } : {}) }
+    else if (field.type === 'boolean') schema[field.key] = { type: 'boolean', label: field.label ?? field.key, default: Boolean(field.default), ...(field.help ? { help: field.help } : {}) }
+    else schema[field.key] = { type: 'string', label: field.label ?? field.key, default: field.default === undefined ? '' : String(field.default), ...(field.multiline ? { multiline: true } : {}), ...(field.help ? { help: field.help } : {}) }
+  }
+  const referenced = [...input.template.matchAll(/\{\{[#{]?\s*(?:if|each)?\s*([a-z][a-zA-Z0-9]*)\b/g)].map((match) => match[1] as string)
+  for (const key of new Set(referenced)) {
+    if (['if', 'each', 'else', 'base', 'currency', 'store', 'product', 'productId'].includes(key) || key in schema) continue
+    issues.push(`the template uses {{${key}}} but no field "${key}" is declared`)
+  }
+  if (issues.length) throw new Error(`Custom block "${input.type}": ${issues.join('; ')}`)
+  const usesProduct = /\{\{\{?\s*product\./.test(input.template)
+  const css = (input.css ?? '').replace(/<\/style/gi, '')
+  return {
+    type: input.type,
+    name: input.name.trim(),
+    group: 'Custom',
+    icon: (input.icon ?? '✚').slice(0, 4) || '✚',
+    description: (input.description ?? '').trim() || 'A block this store defined for itself.',
+    schema: { ...(usesProduct ? { productId: { type: 'string', label: 'Product', default: '' } } : {}), ...schema, ...COMMON },
+    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${css}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
+  }
+}
+
+/** The catalog, then the store's own blocks. */
+function resolve(type: string, context?: BlockContext): BlockDefinition | null {
+  return byType.get(type) ?? context?.custom?.find((definition) => definition.type === type) ?? null
 }
 
 /** Validated settings for a block, with defaults filled in. Unknown types render a visible note, never nothing. */
 export function renderBlock(block: BlockInstance, context: BlockContext): string {
-  const definition = byType.get(block.type)
+  const definition = resolve(block.type, context)
   if (!definition) return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">Unknown block: ${e(block.type)}</p></div></section>`
   const validated = check(definition.schema, block.settings)
   // A setting that fails its own field takes the default; the rest survive.

@@ -2,7 +2,7 @@ import type { Product, ProductContent } from '../domain/types.ts'
 import type { Research } from './research.ts'
 import type { Brief } from './copy.ts'
 import { newBlock, salesTemplate } from '../pages/store.ts'
-import type { BlockInstance } from '../pages/blocks.ts'
+import { blockDefinition, type BlockInstance } from '../pages/blocks.ts'
 import { logger } from '../lib/log.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
 import { knowledge } from './knowledge.ts'
@@ -265,7 +265,51 @@ const BLOCKS_SCHEMA = S.obj({
       values: S.arr(S.obj({ key: S.str('The setting key, unchanged.'), value: S.str('The new text.') }), 'Only the text settings you rewrote.'),
     }),
   ),
+  additions: S.arr(
+    S.obj({
+      after: S.str('The id of the block this new section goes after; "" puts it first.'),
+      type: S.str('A catalog block type, or "custom-html" for a section no block does.'),
+      values: S.arr(S.obj({ key: S.str('A setting key of that block; "html" for custom-html.'), value: S.str('Its text.') }), 'The settings, as text.'),
+      why: S.str('One line: what this section does that the layout was missing.'),
+    }),
+    'Sections the layout was missing, if any. Usually empty.',
+  ),
 })
+
+type Authored = { blocks: Array<{ id: string; values: Array<{ key: string; value: string }> }>; additions?: Array<{ after: string; type: string; values: Array<{ key: string; value: string }>; why?: string }> }
+
+/**
+ * Applies what the model wrote: the rewritten text per block, then the
+ * sections it added. An added section must be a catalog block (its
+ * settings are validated when rendered) or a custom-html section with its
+ * HTML; anything else is dropped. Layout stays the format's except for
+ * those insertions.
+ */
+export function applyAuthoring(blocks: BlockInstance[], parsed: Authored): BlockInstance[] {
+  const byId = new Map((parsed.blocks ?? []).map((entry) => [entry.id, entry.values]))
+  const rewritten = blocks.map((block) => {
+    const values = byId.get(block.id)
+    if (!values) return block
+    const settings = { ...block.settings }
+    for (const { key, value } of values) {
+      if (typeof settings[key] === 'string' && !NOT_TEXT.test(key) && typeof value === 'string' && value.trim()) settings[key] = value
+    }
+    return { ...block, settings }
+  })
+  for (const addition of parsed.additions ?? []) {
+    if (!addition || typeof addition.type !== 'string' || addition.type === 'custom-code') continue
+    const definition = blockDefinition(addition.type)
+    if (!definition) continue
+    const settings: Record<string, unknown> = {}
+    for (const { key, value } of addition.values ?? []) if (typeof key === 'string' && typeof value === 'string' && !NOT_TEXT.test(key) && key in definition.schema) settings[key] = value
+    if (addition.type === 'custom-html' && !String(settings.html ?? '').trim()) continue
+    if (/<script\b/i.test(String(settings.html ?? ''))) continue
+    const block = newBlock(addition.type, settings)
+    const at = addition.after ? rewritten.findIndex((entry) => entry.id === addition.after) : -1
+    rewritten.splice(at + 1, 0, block)
+  }
+  return rewritten
+}
 
 /**
  * With a model, it writes the words inside the blocks the format laid out —
@@ -290,26 +334,16 @@ export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInst
       `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
       `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
       extra,
-      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), steps "title|text|image URL", timeline stages "when|title|text", alternatives "name|why it fails", cost lines "item|cost", offer items "item|value", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it.',
+      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text", check bullets and included items "lead|text", image cards "image URL|caption" (keep the URL part, even when empty), steps "title|text|image URL", timeline stages "when|title|text", alternatives "name|why it fails", cost lines "item|cost", offer items "item|value", personas "who|line", trust chips "icon|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Name the mechanism from the research and use the name everywhere; give every section one number that is actually in the research; reframe the root cause so the buyer is absolved. Never invent reviews, statistics, studies, experts or names: leave a "[confirm]" marker where a fact is missing rather than filling it. If the layout is missing a section the page needs (a comparison the research supports, a how-to, a "what\'s included"), add it in additions: a catalog block with its settings as text, or "custom-html" with the section\'s HTML using the theme classes (head, lead, cols, col, checks, btn, micro). Usually additions is empty.',
     ].filter(Boolean).join('\n\n')
-    const parsed = await completeJson<{ blocks: Array<{ id: string; values: Array<{ key: string; value: string }> }> }>(choice, {
+    const parsed = await completeJson<Authored>(choice, {
       task: 'pages',
-      system: `You write direct-response ecommerce pages and advertorials for a dropshipping brand. You write inside a layout that is already decided, replacing placeholder text with copy that is specific, honest and in the requested tone. Write at a sixth-grade reading level, show rather than tell, and give the reader a reason to buy in the avatar's own terms.\n\n${knowledge('pages', 'offers', 'sophistication', 'honesty')}`,
+      system: `You write direct-response ecommerce pages and advertorials for a dropshipping brand. You write inside a layout that is already decided, replacing placeholder text with copy that is specific, honest and in the requested tone, and you may add a section when the layout is missing one the page needs. Write at a sixth-grade reading level, show rather than tell, and give the reader a reason to buy in the avatar's own terms.\n\n${knowledge('pages', 'offers', 'sophistication', 'honesty')}`,
       prompt,
       schema: BLOCKS_SCHEMA,
       name: 'page_blocks',
     })
-    const byId = new Map(parsed.blocks.map((entry) => [entry.id, entry.values]))
-    const rewritten = blocks.map((block) => {
-      const values = byId.get(block.id)
-      if (!values) return block
-      const settings = { ...block.settings }
-      for (const { key, value } of values) {
-        if (typeof settings[key] === 'string' && !NOT_TEXT.test(key) && typeof value === 'string' && value.trim()) settings[key] = value
-      }
-      return { ...block, settings }
-    })
-    return { blocks: rewritten, source: 'model' }
+    return { blocks: applyAuthoring(blocks, parsed), source: 'model' }
   } catch (error) {
     log.warn(`${describe(choice)} could not write the ${input.format.name} version; keeping the rules text: ${error instanceof Error ? error.message : String(error)}`)
     return { blocks, source: 'rules' }

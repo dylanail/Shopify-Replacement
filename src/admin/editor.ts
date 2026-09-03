@@ -1,5 +1,5 @@
 import { escapeHtml } from '../lib/http.ts'
-import { blockGroups, BLOCKS } from '../pages/blocks.ts'
+import { blockGroups, BLOCKS, type BlockDefinition } from '../pages/blocks.ts'
 import type { Page } from '../pages/store.ts'
 
 /**
@@ -15,10 +15,11 @@ import type { Page } from '../pages/store.ts'
  * HTML mode is the same page with a code editor instead of the block list —
  * for cloned pages and for people who would rather type.
  */
-export function editorPage(input: { page: Page; storeSlug: string; products: Array<{ id: string; title: string }> }): string {
+export function editorPage(input: { page: Page; storeSlug: string; products: Array<{ id: string; title: string }>; custom?: BlockDefinition[] }): string {
   const { page } = input
-  const definitions = BLOCKS.map((block) => ({ type: block.type, name: block.name, group: block.group, icon: block.icon, description: block.description, schema: block.schema }))
-  const groups = blockGroups().map((group) => ({ group: group.group, types: group.blocks.map((block) => block.type) }))
+  const custom = input.custom ?? []
+  const definitions = [...BLOCKS, ...custom].map((block) => ({ type: block.type, name: block.name, group: block.group, icon: block.icon, description: block.description, schema: block.schema }))
+  const groups = blockGroups(custom).map((group) => ({ group: group.group, types: group.blocks.map((block) => block.type) }))
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Edit: ${escapeHtml(page.title)} — Amboras</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

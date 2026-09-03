@@ -5,7 +5,8 @@ import { listProducts } from '../domain/catalog.ts'
 import { listReviews } from '../domain/reviews.ts'
 import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '../domain/ops.ts'
 import type { Store } from '../control/stores.ts'
-import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockInstance } from './blocks.ts'
+import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
+import { customDefinitions } from './custom-blocks.ts'
 
 export type Page = {
   id: string
@@ -79,8 +80,7 @@ function uniqueHandle(db: Db, storeId: string, title: string, ignoreId?: string)
   return candidate
 }
 
-export function newBlock(type: string, settings: Record<string, unknown> = {}): BlockInstance {
-  const definition = blockDefinition(type)
+export function newBlock(type: string, settings: Record<string, unknown> = {}, definition: BlockDefinition | null = blockDefinition(type)): BlockInstance {
   return { id: id('blk', 8), type, settings: { ...(definition ? defaultsFor(definition) : {}), ...settings } }
 }
 
@@ -341,6 +341,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
     base,
     currency,
     brand: store.brand,
+    custom: customDefinitions(db, store.id),
     products: products.map((product) => ({
       id: product.id,
       handle: product.handle,

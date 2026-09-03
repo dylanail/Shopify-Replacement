@@ -44,6 +44,8 @@ import { deleteQueueItem, getQueueItem, queuePhotoBriefs, queueUgcConcepts, setQ
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
 import { homeTemplate, newBlock, offerTemplate, quizTemplate, salesTemplate } from '../pages/store.ts'
+import { customCatalog, customDefinitions, deleteCustomBlock, upsertCustomBlock } from '../pages/custom-blocks.ts'
+import type { CustomField } from '../pages/blocks.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
@@ -319,14 +321,38 @@ export function adminRouter(): Router {
     const found = getPage(db(), current.store.id, ctx.params.id as string)
     if (!found) throw notFound('No such page')
     const products = listProducts(db(), current.store.id, { status: 'published', limit: 100 }).map((product) => ({ id: product.id, title: product.title }))
-    return html(editorPage({ page: found, storeSlug: current.store.slug, products }))
+    return html(editorPage({ page: found, storeSlug: current.store.slug, products, custom: customDefinitions(db(), current.store.id) }))
+  })
+
+  /* A block the store defines for itself: fields as "key|label|type" lines, a template, its css. */
+  router.post('/admin/blocks', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const fields: CustomField[] = String(body.fields ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [key = '', label = '', type = 'string', fallback = ''] = line.split('|').map((part) => part.trim())
+      const kind = type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string'
+      return { key, label: label || key, type: kind, ...(type === 'text' ? { multiline: true } : {}), ...(fallback ? { default: kind === 'number' ? Number(fallback) : kind === 'boolean' ? fallback === 'true' : fallback } : {}) }
+    })
+    try {
+      const block = upsertCustomBlock(db(), current.store.id, { type: String(body.type ?? '').trim() || undefined, name: String(body.name ?? '').trim(), description: String(body.description ?? ''), icon: String(body.icon ?? '✚'), fields, template: String(body.template ?? ''), css: String(body.css ?? ''), source: 'owner' })
+      return back(ctx, `Block "${block.name}" saved as ${block.type}. It is in the builder palette under Custom.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  router.post('/admin/blocks/:type/delete', (ctx) => {
+    const current = session(ctx)
+    deleteCustomBlock(db(), current.store.id, ctx.params.type as string)
+    return back(ctx, 'Block removed. Pages that used it show a note where it was until you replace it.')
   })
 
   router.post('/admin/pages/:id/save', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
     const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
-    const unknown = blocks.find((block) => !blockDefinition(block.type))
+    const custom = new Set(customDefinitions(db(), current.store.id).map((definition) => definition.type))
+    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type))
     if (unknown) return { error: `Unknown block type ${unknown.type}` }
     const seo = (body.seo ?? {}) as Record<string, unknown>
     const updated = updatePage(db(), current.store.id, ctx.params.id as string, {
@@ -1099,7 +1125,7 @@ export function adminRouter(): Router {
     const goal = (['offer', 'advertorial', 'quiz', 'pdp', 'home'].includes(String(body.goal)) ? String(body.goal) : 'offer') as PageGoal
     const product = body.productId ? getProduct(db(), current.store.id, String(body.productId)) : null
     const avatar = body.avatarId ? getAvatar(db(), current.store.id, String(body.avatarId)) : listAvatars(db(), current.store.id).find((entry) => entry.selected) ?? null
-    const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? '') })
+    const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? ''), custom: customCatalog(db(), current.store.id) })
     const created = createPage(db(), current.store.id, { title: `${product ? `${product.title} — ` : ''}${goal} page (suggested)`, kind: goal === 'advertorial' ? 'advertorial' : 'landing', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product ? { productId: product.id } : {}) })
     return redirect(`/admin/pages/${created.id}/edit?flash=${encodeURIComponent(`${suggestion.blocks.length} blocks laid out (${suggestion.source}). ${suggestion.note}`)}`)
   })

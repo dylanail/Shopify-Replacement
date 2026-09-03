@@ -21,7 +21,12 @@ import { saveUpload } from '../src/lib/uploads.ts'
 import { auditHtml, auditStore, contrast } from '../src/storefront/health.ts'
 import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
-import { renderBlock, blockDefinition, type BlockContext } from '../src/pages/blocks.ts'
+import { renderBlock, blockDefinition, customDefinition, renderTemplate, type BlockContext } from '../src/pages/blocks.ts'
+import { customCatalog, customDefinitions, listCustomBlocks, upsertCustomBlock } from '../src/pages/custom-blocks.ts'
+import { acceptSuggestion } from '../src/creative/briefs.ts'
+import { applyAuthoring } from '../src/agent/directions.ts'
+import { editorPage } from '../src/admin/editor.ts'
+import { getPage } from '../src/pages/store.ts'
 import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
@@ -529,6 +534,78 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   const residue = auditHtml('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><style>:focus-visible{outline:2px solid}</style></head><body><a class="skip" href="#main">Skip</a><main id="main"><h1>T</h1><p>[confirm] Dr Name says so</p><a href="#">Terms</a><img src="/placeholder-image.png" alt="x"><p>0 people bought this today</p></main></body></html>', { path: '/p' })
   const found = residue.issues.map((issue) => issue.check)
   for (const expected of ['unconfirmed', 'dead-link', 'placeholder', 'zero-counter']) assert.ok(found.includes(expected), `finds ${expected}`)
+})
+
+test('a store can define its own blocks, and the model can add sections the catalog lacks', async () => {
+  const { db, store, product } = shop()
+  const context: BlockContext = blockContextFor(db, store, '/s/x')
+
+  // The template language: escaped by default, raw on request, each over lines and their parts, if/else, the product.
+  const out = renderTemplate('<h2>{{headline}}</h2>{{#if sub}}<p>{{sub}}</p>{{else}}<p>none</p>{{/if}}<ul>{{#each items}}<li data-n="{{@index}}">{{0}} — {{{1}}}</li>{{/each}}</ul>{{product.title}} {{product.price}}', { headline: '<b>Hi</b>', sub: '', items: 'A|<i>one</i>\nB|two' }, context)
+  assert.match(out, /&lt;b&gt;Hi&lt;\/b&gt;/, 'values are escaped')
+  assert.match(out, /<p>none<\/p>/)
+  assert.match(out, /<li data-n="1">A — <i>one<\/i><\/li><li data-n="2">B — two<\/li>/)
+  assert.match(out, /Total Blackout Blind \$79\.00/)
+
+  // A definition is checked before it is stored: reserved and undeclared keys, scripts, a bad type.
+  assert.throws(() => customDefinition({ type: 'strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /type must be "custom-"/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<p>{{headline}}</p>' }), /no field "headline"/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [{ key: 'width', type: 'string' }], template: '<p>{{width}}</p>' }), /reserved/)
+  assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no scripts/)
+
+  // Stored, it renders through the same path as the catalog and shows in the editor palette under Custom.
+  const block = upsertCustomBlock(db, store.id, { name: 'Ingredient strip', description: 'A row of ingredient chips with a percentage each', fields: [{ key: 'headline', type: 'string', default: 'What is in it' }, { key: 'items', type: 'string', multiline: true, default: 'Amla|100%' }], template: '<h2 class="head">{{headline}}</h2><div class="cols">{{#each items}}<div class="col"><h3>{{0}}</h3><p>{{1}}</p></div>{{/each}}</div>', css: '.chip{color:red}', source: 'model' })
+  assert.equal(block.type, 'custom-ingredient-strip')
+  assert.equal(listCustomBlocks(db, store.id).length, 1)
+  const fresh = blockContextFor(db, store, '/s/x')
+  assert.equal(fresh.custom?.length, 1)
+  const html = renderBlock({ id: 'c1', type: block.type, settings: { items: 'Amla|100%\nNothing else|0%' } }, fresh)
+  assert.match(html, /What is in it/)
+  assert.match(html, /<h3>Amla<\/h3><p>100%<\/p>/)
+  assert.match(html, /<style data-custom="custom-ingredient-strip">\.chip\{color:red\}<\/style>/)
+  assert.match(html, /class="blk blk--custom-ingredient-strip/, 'it is wrapped like every other block')
+  assert.match(renderBlock({ id: 'c2', type: block.type, settings: {} }, context), /Unknown block/, 'without the store context it is unknown, never a crash')
+  const page = createPage(db, store.id, { title: 'P', blocks: [] })
+  const editor = editorPage({ page, storeSlug: store.slug, products: [], custom: customDefinitions(db, store.id) })
+  assert.match(editor, /"type":"custom-ingredient-strip"/)
+  assert.match(editor, /"group":"Custom"/)
+  assert.deepEqual(customCatalog(db, store.id)[0]?.fields, ['headline', 'items'])
+
+  // The tools: list, define, place; and custom-html when nothing fits.
+  const actor = { type: 'user' as const, id: 'u' }
+  const listed = await execute('list_blocks', {}, { db, storeId: store.id, actor, page: 'ai' })
+  assert.match(listed.summary, /1 of this store's own/)
+  const defined = await execute('create_block', { name: 'Press marquee', description: 'Logos scrolling', fields: [{ key: 'names', type: 'string', multiline: true, default: 'A\nB' }], template: '<div class="logos">{{#each names}}<span>{{.}}</span>{{/each}}</div>' }, { db, storeId: store.id, actor, page: 'ai' })
+  assert.match(defined.summary, /custom-press-marquee/)
+  await execute('add_block', { pageId: page.id, type: 'custom-press-marquee', settings: { names: 'Vogue\nGQ' }, position: 0 }, { db, storeId: store.id, actor, page: 'ai' })
+  await execute('add_block', { pageId: page.id, type: 'custom-html', settings: { html: '<p class="lead">A section no block does.</p>' } }, { db, storeId: store.id, actor, page: 'ai' })
+  await assert.rejects(execute('add_block', { pageId: page.id, type: 'no-such-block' }, { db, storeId: store.id, actor, page: 'ai' }), /list_blocks|create_block/)
+  const placed = getPage(db, store.id, page.id)!
+  assert.deepEqual(placed.blocks.map((entry) => entry.type), ['custom-press-marquee', 'custom-html'])
+  const rendered = renderBlock(placed.blocks[0]!, blockContextFor(db, store, '/s/x'))
+  assert.match(rendered, /<span>Vogue<\/span><span>GQ<\/span>/)
+
+  // The layout suggester keeps catalog types, the store's own, and custom-html only when it carries HTML.
+  const accepted = acceptSuggestion({ blocks: [{ type: 'hero', why: 'promise' }, { type: 'custom-press-marquee', why: 'press' }, { type: 'custom-html', why: 'empty', html: '' }, { type: 'custom-html', why: 'a table', html: '<table></table>' }, { type: 'made-up', why: 'no' }, { type: 'buy-box', why: 'offer' }] }, customCatalog(db, store.id), product)
+  assert.deepEqual(accepted.map((entry) => entry.type), ['hero', 'custom-press-marquee', 'custom-html', 'buy-box'])
+  assert.equal(accepted[2]?.settings?.html, '<table></table>')
+  assert.equal(accepted[3]?.settings?.productId, product.id)
+
+  // The page writer can insert a section after a block; unknown types, empty HTML and scripts are dropped.
+  const blocks = [{ id: 'h1', type: 'headline', settings: { text: 'Old' } }, { id: 'f', type: 'footer', settings: {} }]
+  const written = applyAuthoring(blocks, {
+    blocks: [{ id: 'h1', values: [{ key: 'text', value: 'New' }] }],
+    additions: [
+      { after: 'h1', type: 'steps', values: [{ key: 'headline', value: 'Three steps' }, { key: 'items', value: 'One|First|\nTwo|Second|' }] },
+      { after: 'h1', type: 'custom-html', values: [{ key: 'html', value: '<p>Extra</p>' }] },
+      { after: '', type: 'custom-html', values: [{ key: 'html', value: '<script>x()</script>' }] },
+      { after: 'f', type: 'nonsense', values: [] },
+      { after: 'f', type: 'custom-code', values: [{ key: 'js', value: 'x()' }] },
+    ],
+  })
+  assert.deepEqual(written.map((entry) => entry.type), ['headline', 'custom-html', 'steps', 'footer'])
+  assert.equal(written[0]?.settings.text, 'New')
+  assert.equal(written[2]?.settings.headline, 'Three steps')
 })
 
 test('behaviour events and funnel split tests are counted per session and judged on revenue per session', () => {

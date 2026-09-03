@@ -186,13 +186,14 @@ export async function queueUgcConcepts(db: Db, storeId: string, product: Product
 /* ------------------------------------------------------- block suggestions */
 
 export type PageGoal = 'offer' | 'advertorial' | 'quiz' | 'pdp' | 'home'
+export type CatalogEntry = { type: string; name: string; description: string; fields?: string[] }
 
 export type BlockSuggestion = { type: string; why: string; settings?: Record<string, unknown> }
 
 const CATALOG = BLOCKS.map((block) => ({ type: block.type, name: block.name, description: block.description }))
 
 const SUGGEST_SCHEMA = S.obj({
-  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly.'), why: S.str('One line: the job this block does at this point on the page.') }), 'The page, top to bottom: eight to twenty blocks.'),
+  blocks: S.arr(S.obj({ type: S.str('A block type from the catalog, exactly; or "custom-html" for a section no block does, with its HTML in html.'), why: S.str('One line: the job this block does at this point on the page.'), html: S.str('Only for custom-html: the section\'s HTML, using the theme classes (head, lead, cols, col, checks, btn, micro). Empty otherwise.') }), 'The page, top to bottom: eight to twenty blocks.'),
   note: S.str('One sentence on the shape chosen and why.'),
 })
 
@@ -283,29 +284,46 @@ export function rulesSuggestBlocks(goal: PageGoal, product: { id: string } | nul
   }
 }
 
-export async function suggestBlocks(choice: ModelChoice | null, input: { goal: PageGoal; product: Product | null; research: Research | null; avatar: Avatar | null; direction?: string }): Promise<{ blocks: BlockSuggestion[]; note: string; source: 'model' | 'rules' }> {
+/**
+ * What the model returned, kept to what can render: catalog types, the
+ * store's own blocks, and a custom-html section when it wrote one. A
+ * buy box is wired to the product; anything unknown is dropped.
+ */
+export function acceptSuggestion(parsed: { blocks?: Array<BlockSuggestion & { html?: string }>; note?: string }, custom: CatalogEntry[], product: { id: string } | null): BlockSuggestion[] {
+  const known = new Set([...CATALOG.map((entry) => entry.type), ...custom.map((entry) => entry.type)])
+  return (parsed.blocks ?? [])
+    .filter((entry) => known.has(entry.type) && (entry.type !== 'custom-html' || Boolean(entry.html?.trim())))
+    .map(({ html, ...entry }) => {
+      if (entry.type === 'buy-box' && product) return { ...entry, settings: { productId: product.id, buyNow: true } }
+      if (entry.type === 'custom-html') return { ...entry, settings: { html: String(html ?? '') } }
+      return entry
+    })
+}
+
+export async function suggestBlocks(choice: ModelChoice | null, input: { goal: PageGoal; product: Product | null; research: Research | null; avatar: Avatar | null; direction?: string; custom?: CatalogEntry[] }): Promise<{ blocks: BlockSuggestion[]; note: string; source: 'model' | 'rules' }> {
   const rules = rulesSuggestBlocks(input.goal, input.product)
   if (!choice) return { blocks: rules, note: 'The default order for this kind of page.', source: 'rules' }
   try {
+    const custom = input.custom ?? []
     const prompt = [
       `Kind of page: ${input.goal}. ${input.direction ? `Direction: ${input.direction}` : ''}`,
       input.product ? `Product: ${input.product.title} — ${input.product.subtitle}. ${input.product.description.slice(0, 600)}` : 'No product yet.',
       input.avatar ? `Avatar: ${input.avatar.name}: ${input.avatar.who} Angle: ${input.avatar.angle}` : '',
       input.research ? `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections.map((entry) => entry.objection), competitors: input.research.competitors.map((entry) => entry.name) })}` : '',
       `Blocks available (use the type exactly):\n${JSON.stringify(CATALOG)}`,
-      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta.',
+      custom.length ? `Blocks this store defined for itself (use these too):\n${JSON.stringify(custom)}` : '',
+      'Choose the blocks and their order for this page, with the job each does. Every page ends with a footer; a selling page has a buy-box (or offer-box) and a sticky-cta. If the page needs a section no block does, add it as type "custom-html" with the section\'s HTML in html, using the theme classes (head, lead, eyebrow, cols, col, checks, btn, micro) so it matches the rest; prefer a catalog block whenever one fits.',
     ]
       .filter(Boolean)
       .join('\n\n')
-    const parsed = await completeJson<{ blocks: BlockSuggestion[]; note: string }>(choice, {
+    const parsed = await completeJson<{ blocks: Array<BlockSuggestion & { html?: string }>; note: string }>(choice, {
       task: 'pages',
-      system: `You lay out direct-response pages for a dropshipping brand from a fixed block catalog. You decide order and purpose, not copy.\n\n${knowledge('pages', 'offers')}`,
+      system: `You lay out direct-response pages for a dropshipping brand from a block catalog, and you can write a section yourself when the catalog has none for it. You decide order and purpose, not copy.\n\n${knowledge('pages', 'offers')}`,
       prompt,
       schema: SUGGEST_SCHEMA,
       name: 'page_layout',
     })
-    const known = new Set(CATALOG.map((entry) => entry.type))
-    const blocks = (parsed.blocks ?? []).filter((entry) => known.has(entry.type)).map((entry) => (entry.type === 'buy-box' && input.product ? { ...entry, settings: { productId: input.product.id, buyNow: true } } : entry))
+    const blocks = acceptSuggestion(parsed, custom, input.product)
     return blocks.length >= 3 ? { blocks, note: parsed.note ?? '', source: 'model' } : { blocks: rules, note: 'The model returned too little; the default order stands.', source: 'rules' }
   } catch (error) {
     log.warn(`${describe(choice)} could not suggest a layout; using the rules: ${error instanceof Error ? error.message : String(error)}`)
