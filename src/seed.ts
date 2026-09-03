@@ -1,0 +1,143 @@
+import { getDb } from './lib/db.ts'
+import { logger } from './lib/log.ts'
+import './agent/tools/index.ts'
+import { register } from './control/auth.ts'
+import { install } from './control/plugins.ts'
+import { publish, updateStore } from './control/stores.ts'
+import { addToCart, applyCode, createCart } from './domain/cart.ts'
+import { listProducts } from './domain/catalog.ts'
+import { completeCart, fulfillOrder } from './domain/orders.ts'
+import { createReview, moderate } from './domain/reviews.ts'
+import { createArticle, createBlog } from './domain/content.ts'
+import { sessionFor, track } from './analytics/events.ts'
+import { onboard } from './agent/onboarding.ts'
+
+const log = logger('seed')
+
+const REVIEWS = [
+  { rating: 5, author: 'Marisol A.', body: 'Four months of six-round sparring and the stitching has not moved. The leather has darkened where my knuckles sit, which I did not expect to like as much as I do.' },
+  { rating: 5, author: 'Dev P.', body: 'My old gloves went soft at the wrist inside a year. These have not. The lace-up takes longer and it is worth it every single time.' },
+  { rating: 4, author: 'Tomas R.', body: 'Break-in took about two weeks and was genuinely uncomfortable for the first few sessions. After that they are the best gloves I have owned.' },
+  { rating: 5, author: 'Jian L.', body: 'The leather smells like a saddlery and the padding is firm rather than mushy. My partner has stopped complaining about my hooks.' },
+  { rating: 4, author: 'Priya N.', body: 'Sizing runs true. I take 14oz for bag work and 16oz for sparring and both fit the same hand wrap without fighting me.' },
+  { rating: 5, author: 'Owen B.', body: 'I asked about a repair and got a real answer from a person in two hours. That is worth the price on its own.' },
+  { rating: 3, author: 'Kaz M.', body: 'Very good gloves, slow shipping. Fourteen days is what they say and fourteen days is what it was, but I wanted them sooner.' },
+  { rating: 5, author: 'Elena V.', body: 'The custom stitching with my initials came out cleaner than the sample photo. Worth the extra wait.' },
+]
+
+const ORDERS = [
+  { email: 'marisol@example.com', name: 'Marisol Aguilar', code: 'WELCOME10', quantities: [1, 2] },
+  { email: 'dev@example.com', name: 'Dev Patel', code: '', quantities: [1] },
+  { email: 'tomas@example.com', name: 'Tomas Rivera', code: '', quantities: [2, 1] },
+  { email: 'jian@example.com', name: 'Jian Liu', code: 'WELCOME10', quantities: [1] },
+  { email: 'priya@example.com', name: 'Priya Nair', code: '', quantities: [1, 1] },
+  { email: 'owen@example.com', name: 'Owen Blake', code: '', quantities: [3] },
+]
+
+/**
+ * Seeds one demo store the same way a real merchant gets one: through
+ * onboarding, through the tool registry, through checkout. Nothing here writes
+ * a row a customer could not have produced, which is why the dashboard numbers
+ * on a fresh install are numbers you can trust.
+ */
+async function main() {
+  const db = getDb()
+  const email = process.env.SEED_EMAIL ?? 'you@example.com'
+  const password = process.env.SEED_PASSWORD ?? 'change-me-please'
+
+  const existing = db.one<{ id: string }>('SELECT id FROM users WHERE email = ?', email.toLowerCase())
+  if (existing) {
+    log.info(`${email} already exists — nothing to seed. Delete data/amboras.db to start over.`)
+    return
+  }
+
+  const user = register(db, { email, password, name: process.env.SEED_NAME ?? 'Franz' })
+  log.info(`created ${email}`)
+
+  const result = await onboard(db, {
+    ownerId: user.id,
+    prompt:
+      'A high-converting hand-stitched boxing gear store called Ironjaw & Co, in the style of a 1920s heritage leather atelier — ' +
+      'sepia parchment tones, deep burgundy accents, vintage serif typography — built in Mexico City.',
+    planSlug: 'starter',
+  })
+  const store = result.store
+  log.info(`built ${store.name} (${result.summaries.length} steps, ${result.failures.length} failures)`)
+
+  updateStore(db, store.id, { brand: { announcement: 'HAND-STITCHED IN MEXICO CITY · 14-DAY BUILD TIME · FREE FREIGHT OVER $200' } })
+
+  const products = listProducts(db, store.id, { status: 'published', limit: 10 })
+  const hero = products[0]
+
+  install(db, store.id, 'exit-intent', { headline: 'Before you go', body: 'Take 10% off your first pair.', code: 'WELCOME10' })
+  install(db, store.id, 'contact-form', {})
+
+  const blog = createBlog(db, store.id, 'Journal')
+  createArticle(db, store.id, blog.id, {
+    title: 'Why we still lace',
+    body:
+      'A velcro cuff is faster and it is what most gyms hand you. It is also the first thing to fail, because the hook side fills with dust and sweat and stops holding after a season.\n\n' +
+      'A lace-up cuff takes a partner and thirty seconds. In exchange it holds the wrist where you set it, for the life of the glove, and it can be replaced for the cost of a lace.\n\n' +
+      'We sell both. We wear the laces.',
+    status: 'published',
+  })
+
+  if (hero) {
+    for (const review of REVIEWS) {
+      const created = createReview(db, store.id, { productId: hero.id, rating: review.rating, author: review.author, body: review.body, verified: true })
+      if (review.rating >= 4) moderate(db, store.id, created.id, 'approved')
+    }
+    log.info(`${REVIEWS.length} reviews on ${hero.title}`)
+  }
+
+  // Traffic first, so the funnel has denominators that make sense.
+  for (let index = 0; index < 240; index++) {
+    const session = sessionFor(db, store.id, { ip: `203.0.113.${index % 200}`, userAgent: `seed/${index % 7}` })
+    track(db, store.id, session, 'view.page', { path: '/' })
+    if (index % 2 === 0) {
+      const product = products[index % Math.max(1, products.length)]
+      track(db, store.id, session, 'view.product', { path: `/products/${product?.handle ?? ''}`, ...(product ? { productId: product.id } : {}) })
+    }
+    if (index % 5 === 0) track(db, store.id, session, 'cart.add', { path: '/cart' })
+    if (index % 11 === 0) track(db, store.id, session, 'checkout.start', { path: '/checkout' })
+  }
+
+  for (const order of ORDERS) {
+    const cart = createCart(db, store.id)
+    order.quantities.forEach((quantity, index) => {
+      const product = products[index % Math.max(1, products.length)]
+      const variant = product?.variants[0]
+      if (variant) addToCart(db, store.id, cart.id, variant.id, quantity)
+    })
+    if (order.code) applyCode(db, store.id, cart.id, order.code)
+    const placed = completeCart(db, store.id, cart.id, {
+      email: order.email,
+      name: order.name,
+      marketing: true,
+      address: { name: order.name, line1: '12 Calle Regina', city: 'Mexico City', postal: '06080', country: 'MX' },
+    })
+    const session = sessionFor(db, store.id, { ip: `198.51.100.${placed.displayId % 250}`, userAgent: 'seed/checkout' })
+    track(db, store.id, session, 'checkout.complete', { path: '/checkout', amountCents: placed.totalCents })
+    if (placed.displayId % 2 === 0) fulfillOrder(db, store.id, placed.id, { provider: 'manual', tracking: `IJ${placed.displayId}MX` })
+  }
+  log.info(`${ORDERS.length} orders placed through the real checkout`)
+
+  // Demo orders are then spread back across a fortnight. Everything above went
+  // through the real checkout — this only moves the timestamps so the revenue
+  // chart has a shape, rather than one spike on the day you installed it.
+  const placedOrders = db.all<{ id: string }>('SELECT id FROM orders WHERE store_id = ? ORDER BY display_id', store.id)
+  placedOrders.forEach((row, index) => {
+    const at = new Date(Date.now() - (placedOrders.length - index) * 2 * 86400000).toISOString()
+    db.run('UPDATE orders SET created_at = ?, updated_at = ? WHERE id = ?', at, at, row.id)
+  })
+
+  publish(db, store.id)
+  log.info(`published ${store.name}`)
+
+  log.info('')
+  log.info(`  sign in at http://localhost:${process.env.PORT ?? 4100}/login`)
+  log.info(`  ${email} / ${password}`)
+  log.info(`  storefront: http://localhost:${process.env.PORT ?? 4100}/s/${store.slug}`)
+}
+
+await main()

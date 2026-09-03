@@ -1,0 +1,16 @@
+{
+  "name": "amboras",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-native commerce platform: control plane, commerce core, agent runtime, generated storefronts.",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "dev": "node --watch --disable-warning=ExperimentalWarning src/main.ts",
+    "seed": "node --disable-warning=ExperimentalWarning src/seed.ts",
+    "reset": "rm -rf data && node --disable-warning=ExperimentalWarning src/seed.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
