@@ -2,7 +2,7 @@ import { getStore } from '../../control/stores.ts'
 import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { DEFAULT_TIERS, listBundles, upsertBundle, type BundleTier } from '../../domain/bundles.ts'
 import { clonePage } from '../../pages/clone.ts'
-import { advertorialTemplate, blankTemplate, createPage, landingTemplate, listPages, updatePage } from '../../pages/store.ts'
+import { advertorialTemplate, blankTemplate, createPage, homeTemplate, landingTemplate, listPages, offerTemplate, quizTemplate, salesTemplate, updatePage } from '../../pages/store.ts'
 import { blockDefinition } from '../../pages/blocks.ts'
 import { latestResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
@@ -11,9 +11,9 @@ export const pageTools: Tool[] = defineTools([
   {
     name: 'create_page',
     area: 'store',
-    description: 'Create a landing page or advertorial from a template, wired to a product and the research on file. Opens as a draft in the page builder.',
+    description: 'Create a page from a template, wired to a product and the research on file: sales (the long funnel page, buy box on top), offer (the short funnel landing page), advertorial (listicle), quiz, landing, home, or blank. Opens as a draft in the page builder.',
     schema: {
-      template: { type: 'string', enum: ['advertorial', 'landing', 'blank'], default: 'advertorial' },
+      template: { type: 'string', enum: ['sales', 'offer', 'advertorial', 'quiz', 'landing', 'home', 'blank'], default: 'advertorial' },
       title: { type: 'string' },
       productId: { type: 'string', help: 'Defaults to the first published product.' },
       publish: { type: 'boolean', default: false },
@@ -29,10 +29,12 @@ export const pageTools: Tool[] = defineTools([
         research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
       }
       const template = args.template as string
-      const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : blankTemplate()
+      const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'sales' ? salesTemplate(input) : template === 'home' ? homeTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
+      const titles: Record<string, string> = { advertorial: `Why people are switching to ${product?.title ?? store.name}`, sales: `${product?.title ?? store.name} — the sales page`, offer: `${product?.title ?? store.name} — save today`, quiz: `Find your ${product?.title ?? 'fit'}`, home: `${store.name} — home` }
       const created = createPage(ctx.db, ctx.storeId, {
-        title: (args.title as string) || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? store.name}` : `${product?.title ?? store.name} — offer`),
+        title: (args.title as string) || titles[template] || `${product?.title ?? store.name} — offer`,
         kind: template === 'advertorial' ? 'advertorial' : 'landing',
+        ...(template === 'offer' || template === 'sales' ? { role: 'offer' as const } : {}),
         blocks,
         status: args.publish ? 'published' : 'draft',
       })

@@ -631,7 +631,7 @@ export function pagesPage(ctx: Ctx): string {
     <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
-      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="offer">Offer page (the funnel landing page)</option><option value="advertorial">Advertorial (listicle)</option><option value="quiz">Quiz funnel</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
+      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="sales">Sales page (the long Funnelish page, buy box on top)</option><option value="offer">Offer page (the short funnel landing page)</option><option value="advertorial">Advertorial (listicle)</option><option value="quiz">Quiz funnel</option><option value="landing">Product landing page</option><option value="home">Home page (for a store)</option><option value="blank">Blank</option></select></div>
       <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
       <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
       <button class="btn primary" type="submit">Create and open the editor</button></form>

@@ -22,7 +22,7 @@ import { auditHtml, auditStore, contrast } from '../src/storefront/health.ts'
 import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
 import { renderBlock, blockDefinition, type BlockContext } from '../src/pages/blocks.ts'
-import { advertorialTemplate, createPage, offerTemplate, quizTemplate } from '../src/pages/store.ts'
+import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
@@ -461,6 +461,72 @@ test('legal pages, the popup and the quiz block render from the store\'s own con
   const offer = offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' }, research: null })
   assert.equal(offer[1]?.type, 'countdown', 'the saving with a timer is above the fold')
   assert.ok(offer.some((block) => block.type === 'buy-box'))
+})
+
+test('the blocks, templates, popup kinds and hygiene checks learned from the reference pages', () => {
+  const { db, store, product } = shop()
+  const context: BlockContext = blockContextFor(db, store, '/s/x')
+  const shape = { id: product.id, title: product.title, image: '', subtitle: '' }
+
+  // The buy box carries the reference skeleton: bullets, offer label, ship line, chips, the note, the guarantee.
+  const buy = renderBlock({ id: 'b1', type: 'buy-box', settings: { productId: product.id, eyebrow: 'Sleep-specialist designed', bullets: 'Blocks every bit of light|even at noon\nInstalls in five minutes|no drilling', offerLabel: 'Limited time offer', chips: '🚚|Free shipping\n⛨|90-day guarantee', note: 'Results vary.', guaranteeHeadline: 'The empty-box promise', guaranteeText: 'Send it back, box or no box.' } }, context)
+  assert.match(buy, /Sleep-specialist designed/)
+  assert.match(buy, /<b>Blocks every bit of light<\/b>/)
+  assert.match(buy, /offer-label/)
+  assert.match(buy, /shipline/, 'the arrival line comes from the delivery estimate')
+  assert.match(buy, /90-day guarantee/)
+  assert.match(buy, /The empty-box promise/)
+  assert.ok(!buy.includes('class="rating"'), 'no rating line without real reviews')
+
+  // The sticky bar can carry the product and its price.
+  const sticky = renderBlock({ id: 's1', type: 'sticky-cta', settings: { label: 'Buy now', href: '#offer', productId: product.id } }, context)
+  assert.match(sticky, /Total Blackout Blind/)
+  assert.match(sticky, /\$79\.00/)
+
+  // Honesty: survey stats need a source; the rating line renders nothing without reviews.
+  assert.match(renderBlock({ id: 'st', type: 'stats', settings: { items: '76%|felt better' } }, context), /need a source/)
+  assert.match(renderBlock({ id: 'st2', type: 'stats', settings: { items: '76%|felt better', source: 'Survey of 500 customers, May 2026' } }, context), /76%/)
+  assert.equal(renderBlock({ id: 'r', type: 'rating-line', settings: {} }, context), '')
+
+  // The new blocks render their lines.
+  assert.match(renderBlock({ id: 't', type: 'timeline', settings: { items: 'Week 1|Build the habit|Less light.' } }, context), /Build the habit/)
+  assert.match(renderBlock({ id: 'c', type: 'cost-stack', settings: { items: 'Blackout curtains|$400', total: 'Total: $400' } }, context), /<tfoot>/)
+  assert.match(renderBlock({ id: 'i', type: 'included', settings: { items: 'The blind||\nThe fitting kit|$19|' } }, context), /1 free gift included/)
+  assert.match(renderBlock({ id: 'o', type: 'offer-stack', settings: { items: 'The blind|\nThe guide|$27', price: 'Today: $79' } }, context), /<s>\$27<\/s> <b>FREE<\/b>/)
+  assert.match(renderBlock({ id: 'a', type: 'alternatives', settings: { items: 'curtains|They leak at the edges.' } }, context), /Instead of curtains:/)
+  assert.match(renderBlock({ id: 'ci', type: 'citations', settings: { items: 'Darkness helps|Sleep 2019|Quote|https://example.org' } }, context), /Read the study/)
+  for (const type of ['benefit-bullets', 'image-grid', 'steps', 'expert-quote', 'press-quotes', 'ingredients', 'audience']) assert.ok(blockDefinition(type), `${type} is in the catalog`)
+
+  // The sales page is the Funnelish shape: buy box near the top, the argument below, the sticky button carrying the product.
+  const sales = salesTemplate({ storeName: store.name, product: shape, research: null })
+  const types = sales.map((block) => block.type)
+  assert.ok(types.indexOf('buy-box') < types.indexOf('image-grid'), 'the buy box comes before the persuasion')
+  for (const type of ['timeline', 'alternatives', 'offer-stack', 'cost-stack', 'audience', 'steps', 'sticky-cta', 'disclaimer']) assert.ok(types.includes(type), `sales page has ${type}`)
+  assert.equal(sales.find((block) => block.type === 'sticky-cta')?.settings.productId, product.id)
+  const home = homeTemplate({ storeName: store.name, product: shape, research: null })
+  assert.ok(home.some((block) => block.type === 'featured-products') && home.some((block) => block.type === 'email-signup'))
+  // A page from the sales template is found by the page plan as the sales page.
+  setBuildMode(db, store.id, 'copy-funnel')
+  createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done')
+
+  // The popup offers one thing: an email, the deal, or the quiz; it says how long the code is good for.
+  const offerPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, kind: 'offer', headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Claim it', href: '#offer', validDays: 7, dismissDays: 7 })
+  assert.match(offerPopup, /Use code <strong>TEN<\/strong>/)
+  assert.match(offerPopup, /data-popup-go/)
+  assert.ok(!offerPopup.includes('<form'), 'the offer kind asks for nothing')
+  assert.match(offerPopup, /Valid for 7 days\./)
+  const quizPopup = popupHtml('/s/x', { enabled: true, trigger: 'delay', after: 5, kind: 'quiz', headline: 'Find yours', text: '', code: '', buttonLabel: '', dismissDays: 7 })
+  assert.match(quizPopup, /href="\/pages\/quiz"/)
+  assert.match(quizPopup, /Take the quiz/)
+  const emailPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Go', validDays: 3, dismissDays: 7 })
+  assert.match(emailPopup, /<form/)
+  assert.match(emailPopup, /Valid for 3 days after sign-up\./)
+
+  // The health report flags template residue: unconfirmed facts, dead links, placeholder images, counters at zero.
+  const residue = auditHtml('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><style>:focus-visible{outline:2px solid}</style></head><body><a class="skip" href="#main">Skip</a><main id="main"><h1>T</h1><p>[confirm] Dr Name says so</p><a href="#">Terms</a><img src="/placeholder-image.png" alt="x"><p>0 people bought this today</p></main></body></html>', { path: '/p' })
+  const found = residue.issues.map((issue) => issue.check)
+  for (const expected of ['unconfirmed', 'dead-link', 'placeholder', 'zero-counter']) assert.ok(found.includes(expected), `finds ${expected}`)
 })
 
 test('behaviour events and funnel split tests are counted per session and judged on revenue per session', () => {

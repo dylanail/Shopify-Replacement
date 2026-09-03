@@ -43,7 +43,7 @@ import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAva
 import { deleteQueueItem, getQueueItem, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
-import { newBlock, offerTemplate, quizTemplate } from '../pages/store.ts'
+import { homeTemplate, newBlock, offerTemplate, quizTemplate, salesTemplate } from '../pages/store.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
@@ -275,10 +275,11 @@ export function adminRouter(): Router {
       research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
     }
     const template = String(body.template ?? 'blank')
-    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
+    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'sales' ? salesTemplate(input) : template === 'home' ? homeTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
     const created = createPage(db(), current.store.id, {
-      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : template === 'offer' ? `${product?.title ?? current.store.name} — save today` : template === 'quiz' ? `Find your ${product?.title ?? 'fit'}` : 'New page'),
+      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : template === 'offer' ? `${product?.title ?? current.store.name} — save today` : template === 'sales' ? `${product?.title ?? current.store.name} — the sales page` : template === 'home' ? `${current.store.name} — home` : template === 'quiz' ? `Find your ${product?.title ?? 'fit'}` : 'New page'),
       kind: template === 'advertorial' ? 'advertorial' : 'landing',
+      ...(template === 'offer' || template === 'sales' ? { role: 'offer' as const } : {}),
       blocks,
     })
     return redirect(`/admin/pages/${created.id}/edit`)
@@ -1109,7 +1110,8 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     const trigger = ['exit', 'delay', 'scroll'].includes(String(body.trigger)) ? (String(body.trigger) as 'exit') : 'exit'
-    setTheme(db(), current.store.id, { popup: { enabled: body.enabled === 'true', trigger, after: Number(body.after ?? 20) || 20, headline: String(body.headline ?? ''), text: String(body.text ?? ''), code: String(body.code ?? '').trim(), buttonLabel: String(body.buttonLabel ?? 'Send it'), dismissDays: Number(body.dismissDays ?? 7) || 7 } }, { build: 'Popup edited' })
+    const kind = (['email', 'offer', 'quiz'] as const).find((entry) => entry === String(body.kind ?? '')) ?? 'email'
+    setTheme(db(), current.store.id, { popup: { enabled: body.enabled === 'true', trigger, after: Number(body.after ?? 20) || 20, kind, headline: String(body.headline ?? ''), text: String(body.text ?? ''), code: String(body.code ?? '').trim(), buttonLabel: String(body.buttonLabel ?? 'Send it'), href: String(body.href ?? '#offer').trim() || '#offer', validDays: Math.max(0, Number(body.validDays ?? 0) || 0), image: String(body.image ?? '').trim(), dismissDays: Number(body.dismissDays ?? 7) || 7 } }, { build: 'Popup edited' })
     return back(ctx, body.enabled === 'true' ? 'Popup saved to the draft. Publish to make it live.' : 'Popup is off in the draft.')
   })
 

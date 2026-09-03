@@ -256,6 +256,77 @@ export function quizTemplate(input: TemplateInput): BlockInstance[] {
   ]
 }
 
+/**
+ * The long-form sales page, the Funnelish shape read from the reference
+ * funnels (docs/knowledge/reference-pages.md): the buy box at the top with
+ * its bullets, ship line, chips and guarantee; then the persuasion for the
+ * scroller — the problem as image scenes, the reframe, the mechanism in
+ * three verbs, the timeline, the expert, the dream outcomes, the audience,
+ * proof, the steps, the offer stack, the comparison, the objections, the
+ * guarantee — and the sticky button. Every CTA anchors to the buy box.
+ */
+export function salesTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  const triggers = (input.research?.triggers ?? []).slice(0, 4)
+  const name = product?.title ?? input.storeName
+  return [
+    newBlock('announcement-bar', { text: 'LIMITED-TIME OFFER · FREE SHIPPING TODAY' }),
+    newBlock('header', { cta: 'Get the offer', ctaHref: '#offer' }),
+    newBlock('rating-line', { ...(product ? { productId: product.id } : {}) }),
+    newBlock('headline', { level: 'h1', eyebrow: 'Tired of fixes that come with side effects, need a prescription, or do nothing?', text: `${name}: the one that works the first time you use it`, sub: product?.subtitle ?? '', align: 'center', padding: 'small' }),
+    ...(product
+      ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise', bullets: (triggers.length ? triggers : ['Holds up at hour 8', 'Works anywhere', 'No routine to keep']).map((line) => `${line}|`).join('\n'), offerLabel: 'Limited time offer', cta: 'Buy now & save', chips: '🚚|Free shipping\n⛨|90-day money-back guarantee\n🔒|Secure checkout', guaranteeHeadline: 'Feel the difference or it is free', guaranteeText: 'Use it every day for 90 days. If it is not what you hoped, email us and we refund every penny.' })]
+      : [newBlock('offer-box', {})]),
+    newBlock('review-wall', { headline: '', count: 1, ...(product ? { productId: product.id } : {}), padding: 'small' }),
+    newBlock('image-grid', { headline: 'If this has become the worst part of your day, you are not imagining it', sub: 'The moments customers described to us before they found it.', items: '|By mid-afternoon it turns into a deep ache.\n|Long drives leave it on fire.\n|Getting up takes a brace and a deep breath.\n|You shift and shift and never get comfortable.', perRow: 4, bridge: 'Here is what nobody told you: it was never you. It is the gap the usual fix leaves.' }),
+    newBlock('headline', { level: 'h2', eyebrow: 'The root cause', text: 'It was never your fault. It is the gap the usual fix leaves.', sub: 'Name the mechanism: what actually creates the result, in two sentences an eleven-year-old follows.' }),
+    newBlock('alternatives', {}),
+    ...(product ? [newBlock('image-with-text', { image: product.image, eyebrow: 'Introducing', headline: `${name}: built to fix it at the source`, text: 'Say what it does that the alternatives cannot, and the one number that proves it.', cta: 'Get the offer', ctaHref: '#offer' })] : []),
+    newBlock('multicolumn', { headline: 'It takes one second — here is how', columns: '1|Offload|The first thing it does, the moment it is used.\n2|Align|The second thing, and why that matters.\n3|Hold|Why it is still doing it at 5 p.m., not just at 9 a.m.' }),
+    newBlock('timeline', { headline: 'What relief feels like, week by week' }),
+    newBlock('expert-quote', {}),
+    newBlock('benefit-bullets', { headline: 'Get your life back, one day at a time', items: 'Sit through the whole drive|no stops to stretch\nMake it to 5 p.m.|without the lockup\nTake the long trip|to see the grandkids' }),
+    newBlock('image-grid', { headline: 'And it goes everywhere you go', items: '|In the car\n|At the desk\n|On the porch\n|On the go', perRow: 4 }),
+    newBlock('audience', {}),
+    newBlock('review-wall', { headline: 'From people who bought it', count: 6, ...(product ? { productId: product.id } : {}) }),
+    newBlock('steps', { headline: 'Three seconds to set up' }),
+    newBlock('offer-stack', { headline: 'Special offer on now', items: `${name}|\n90-day money-back guarantee|\nFree priority shipping|\nThe quick-start guide|[confirm value]`, totalValue: '', price: '', cta: 'Claim the offer', href: '#offer' }),
+    ...(input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : [newBlock('comparison', {})]),
+    newBlock('cost-stack', {}),
+    ...(input.research?.objections.length ? [newBlock('faq', { headline: 'Before you decide', items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') })] : [newBlock('faq', {})]),
+    newBlock('guarantee', { days: 90, headline: 'Your order is protected by a 90-day guarantee' }),
+    newBlock('sticky-cta', { label: 'Buy now & save', href: '#offer', ...(product ? { productId: product.id } : {}) }),
+    newBlock('disclaimer', { text: 'Individual results vary. Statements on this page have not been evaluated by a regulator and the product is not intended to diagnose, treat, cure or prevent any disease. Any person shown is a model unless stated.' }),
+    newBlock('footer', {}),
+  ]
+}
+
+/**
+ * The home page of a store, from Flovir, Honex and SlideBelts: announcement
+ * with the offer in one line, navigation, the hero with three bullets, the
+ * press, one idea and one number per section, the catalog, proof, the offer
+ * restated, the list, and a footer with real contact details.
+ */
+export function homeTemplate(input: TemplateInput): BlockInstance[] {
+  const product = input.product
+  return [
+    newBlock('announcement-bar', { text: 'FREE SHIPPING ON EVERY ORDER · 30-DAY RETURNS' }),
+    newBlock('header', { showNav: true, cta: 'Shop now', ctaHref: product ? '#offer' : '/collections/all' }),
+    newBlock('hero', { headline: product ? `${product.title}: the one people do not believe until they try it` : `Welcome to ${input.storeName}`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'Shop now', ctaHref: product ? '#offer' : '/collections/all', height: 'large' }),
+    newBlock('benefit-bullets', { headline: '', items: 'The first thing it does|in one line\nThe second|in one line\nThe guarantee|in one line', align: 'center' }),
+    newBlock('logos', {}),
+    newBlock('rating-line', {}),
+    ...(product ? [newBlock('image-with-text', { image: product.image, headline: 'One idea, one number', text: 'Every section on a home page carries one idea and one number: "14 days in a carry-on", "$75 saved on the first trip".', cta: 'See it', ctaHref: '#offer' })] : []),
+    newBlock('featured-products', { headline: 'Best sellers', count: 3 }),
+    newBlock('review-wall', { headline: 'What people say', count: 3 }),
+    newBlock('trust-badges', {}),
+    ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: false, background: 'raise', showImage: true, cta: 'Add to cart' })] : []),
+    newBlock('faq', { headline: 'Questions' }),
+    newBlock('email-signup', { headline: '0% spam. 100% offers.', text: 'Join the list for the next offer first.' }),
+    newBlock('footer', {}),
+  ]
+}
+
 export function blankTemplate(): BlockInstance[] {
   return [newBlock('header', {}), newBlock('headline', { level: 'h1', text: 'A new page' }), newBlock('rich-text', {}), newBlock('footer', {})]
 }
@@ -382,6 +453,26 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .qstep{border:0;padding:0;margin:0}.qstep legend{margin-inline:auto}.qopts{display:grid;gap:.6rem;max-width:26rem;margin:1rem auto 0}
 .qopt{border:1px solid var(--line);background:var(--raise);color:var(--ink);border-radius:var(--radius);padding:.9rem 1rem;font:inherit;cursor:pointer;text-align:left}.qopt:hover{border-color:var(--primary)}
 .qresult .qproduct{display:flex;gap:1rem;align-items:center;justify-content:center;text-align:left;margin:1rem 0}.qresult .qproduct img{width:96px;height:96px;object-fit:cover;border-radius:var(--radius)}
+.checks{list-style:none;padding:0;margin:.8rem 0;display:grid;gap:.45rem}.checks li{display:flex;gap:.6rem;align-items:flex-start}.checks i{font-style:normal;color:var(--primary);font-weight:700;flex:0 0 auto}
+.offer-label{display:inline-block;font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--primary);border:1px solid var(--primary);border-radius:999px;padding:.35rem .6rem;margin:.6rem 0 .2rem}
+.shipline{display:flex;gap:.5rem;align-items:center;font-size:.9rem;margin:0}.shipline .dot{width:9px;height:9px;border-radius:999px;background:#2f7a4f;box-shadow:0 0 0 3px rgba(47,122,79,.18)}
+.chips{margin-top:.8rem;justify-content:flex-start}
+.guarantee-inline{display:flex;gap:.8rem;align-items:flex-start;margin-top:1rem;border:1px solid var(--line);border-radius:var(--radius);padding:.8rem 1rem;background:var(--raise)}.guarantee-inline i{font-style:normal;font-size:1.4rem;color:var(--primary)}.guarantee-inline p{margin:.2rem 0 0;font-size:.9rem;color:var(--muted)}
+.rating a{text-decoration:none;color:inherit}
+.sticky-product{display:flex;gap:.6rem;align-items:center;min-width:0}.sticky-product img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.sticky-product b{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scenes .scene{margin:0}.scene img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.scene figcaption{font-size:.9rem;margin-top:.5rem}.bridge{font-family:var(--display);font-size:1.25rem;margin-top:1.4rem}
+.steps{list-style:none;padding:0;margin:1.4rem 0 0;display:grid;gap:1.6rem;grid-template-columns:repeat(3,1fr)}.step img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:var(--radius);margin-bottom:.6rem}.step .num{font-family:var(--display);color:var(--primary);font-size:1.6rem}.step h3{margin:.2rem 0 .3rem}.step p{margin:0;color:var(--muted);font-size:.94rem}
+.timeline{list-style:none;padding:0;margin:1rem 0 0;display:grid;gap:1rem}.timeline li{display:grid;grid-template-columns:7rem 1fr;gap:1rem;border-left:3px solid var(--primary);padding-left:1rem}.timeline .when{font:600 11px/1.4 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--primary);padding-top:.35rem}.timeline h3{margin:0 0 .2rem}.timeline p{margin:0;color:var(--muted);font-size:.94rem}
+.alts{margin:1rem 0 0;display:grid;gap:.9rem}.alts dt{font-weight:600}.alts dd{margin:.15rem 0 0;color:var(--muted)}
+.coststack{width:100%;border-collapse:collapse;margin-top:1rem}.coststack td,.coststack th{padding:.55rem 0;border-bottom:1px solid var(--line);text-align:left}.coststack td:last-child{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.coststack tfoot th{border-bottom:0;padding-top:.8rem;font-family:var(--display);font-size:1.15rem}
+.offerstack{max-width:34rem}.offerstack .checks{text-align:left}.offerstack .price-lg{margin:.4rem 0 .8rem}
+.included{list-style:none;padding:0;margin:1rem 0 .4rem;display:grid;gap:.5rem}.included li{display:flex;gap:.7rem;align-items:center;border:1px solid var(--line);border-radius:var(--radius);padding:.55rem .8rem;background:var(--raise)}.included img{width:40px;height:40px;object-fit:cover;border-radius:var(--radius)}.included i{font-style:normal}.included span{flex:1}.included em{font-style:normal;font-weight:600;color:var(--primary);font-size:.85rem}.included em s{color:var(--muted);font-weight:400}
+.expert{display:flex;gap:1.2rem;align-items:flex-start;margin:0}.expert img{width:96px;height:96px;object-fit:cover;border-radius:999px;flex:0 0 auto}.expert blockquote{margin:.3rem 0 .6rem;font-family:var(--display);font-size:1.2rem;line-height:1.35}.expert figcaption b{display:block}.expert figcaption .micro{display:block}
+.press{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:1rem}.press blockquote{margin:0;border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.1rem;background:var(--raise)}.press p{margin:0 0 .5rem;font-family:var(--display);font-size:1.05rem}.press cite{font-style:normal;font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.citations{list-style:none;padding:0;margin:1rem 0;display:grid;gap:1rem;counter-reset:cite}.citations li{border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.1rem;counter-increment:cite}.citations li::before{content:counter(cite,decimal-leading-zero);font:600 11px/1 var(--body);letter-spacing:.14em;color:var(--primary)}.citations h3{margin:.3rem 0 .4rem}.citations blockquote{margin:0 0 .5rem;color:var(--muted);font-size:.94rem;border-left:2px solid var(--line);padding-left:.8rem}.citations a{font-size:.86rem}
+.ingredients img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius);margin-bottom:.5rem}
+.stats{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:1.2rem 0 .6rem}.stats b{display:block;font-family:var(--display);font-size:clamp(2rem,5vw,3rem);line-height:1;color:var(--primary)}.stats span{display:block;margin-top:.4rem;color:var(--muted);font-size:.9rem}
+@media (max-width:820px){.steps{grid-template-columns:1fr}.timeline li{grid-template-columns:1fr;gap:.2rem}.expert{flex-direction:column}}
 @media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}}
 @media (max-width:520px){.cols{grid-template-columns:1fr}}
 `

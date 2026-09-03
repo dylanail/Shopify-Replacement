@@ -157,6 +157,8 @@ main:focus{outline:none}
 .popup-x{position:absolute;top:.5rem;right:.5rem;width:36px;height:36px;border:0;background:transparent;font-size:1.4rem;cursor:pointer;color:inherit;border-radius:999px}
 .popup-x:hover{background:var(--raise)}
 .popup .signup{display:flex;gap:.5rem;margin:0}.popup .signup input{flex:1;min-width:0}
+.popup-img{width:calc(100% + 4rem);margin:-2rem -2rem 1.2rem;border-radius:var(--radius) var(--radius) 0 0;aspect-ratio:2/1;object-fit:cover}
+.popup-code{font-family:var(--display);font-size:1.3rem;letter-spacing:.06em;margin:0 0 .8rem}
 @media (max-width:640px){.popup{align-items:flex-end}.popup-card{max-width:none}}
 .stickybar .t{font-family:var(--display);font-size:1rem}.stickybar .p{font-size:.85rem;color:var(--muted)}
 .stickybar .btn{padding:.8rem 1.2rem}
@@ -210,6 +212,9 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
 .checkout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);min-height:100vh}
 .co-main{padding:2.2rem clamp(1rem,5vw,4rem) 3rem;max-width:44rem;justify-self:end;width:100%}
 .co-side{background:var(--raise);border-left:1px solid var(--line);padding:2.2rem clamp(1rem,4vw,3rem);position:sticky;top:0;height:100vh;overflow:auto}
+.co-proof{margin-top:2rem;display:grid;gap:1.2rem}
+.co-guarantee{display:flex;gap:.8rem;align-items:flex-start;border:1px solid var(--line);border-radius:var(--radius);padding:.9rem 1rem;background:var(--raise)}.co-guarantee i{font-style:normal;font-size:1.4rem;color:var(--primary)}.co-guarantee b{display:block}.co-guarantee p{margin:.2rem 0 0}
+.co-reviews{grid-template-columns:1fr}
 .co-logo{display:inline-block;font-family:var(--display);font-size:1.4rem;letter-spacing:.06em;text-transform:uppercase;text-decoration:none;margin-bottom:1.6rem}
 .co-block{padding-block:1.2rem}.co-block h2{font-family:var(--body);font-weight:600;font-size:1.05rem;margin-bottom:.8rem}
 .co-block .field{margin-bottom:.6rem}

@@ -1,6 +1,8 @@
 import { escapeHtml } from '../lib/http.ts'
 import type { Popup } from '../domain/types.ts'
 
+const e = escapeHtml
+
 /**
  * What the page sends back about itself, and the one popup.
  *
@@ -23,24 +25,29 @@ addEventListener('pagehide',flush);document.addEventListener('visibilitychange',
 })();</script>`
 }
 
-export const DEFAULT_POPUP: Popup = { enabled: false, trigger: 'exit', after: 20, headline: 'Before you go', text: 'Leave your email and the offer is yours.', code: '', buttonLabel: 'Send it', dismissDays: 7 }
+export const DEFAULT_POPUP: Popup = { enabled: false, trigger: 'exit', after: 20, kind: 'email', headline: 'Before you go', text: 'Leave your email and the offer is yours.', code: '', buttonLabel: 'Send it', href: '#offer', validDays: 7, image: '', dismissDays: 7 }
 
 /** The popup markup and its runtime. Nothing renders when it is off. */
 export function popupHtml(base: string, popup: Popup | undefined): string {
   if (!popup?.enabled) return ''
-  const e = escapeHtml
-  return `<div class="popup" id="popup" hidden role="dialog" aria-modal="true" aria-labelledby="popup-h" data-trigger="${e(popup.trigger)}" data-after="${Number(popup.after) || 0}" data-days="${Number(popup.dismissDays) || 7}">
-<div class="popup-card"><button type="button" class="popup-x" aria-label="Close">×</button>
+  const kind = popup.kind ?? 'email'
+  const valid = popup.validDays ? `<p class="micro">Valid for ${Number(popup.validDays)} day${Number(popup.validDays) === 1 ? '' : 's'}${kind === 'email' ? ' after sign-up' : ''}.</p>` : ''
+  const body =
+    kind === 'email'
+      ? `<form method="post" action="${e(base)}/subscribe" class="signup" data-popup-form><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="source" value="popup"><button class="btn" type="submit">${e(popup.buttonLabel || 'Send it')}</button></form>
+<p class="micro" data-popup-done hidden>${popup.code ? `You are in. Your code: <strong>${e(popup.code)}</strong>` : 'You are in.'}</p>${valid}`
+      : `${popup.code ? `<p class="popup-code">Use code <strong>${e(popup.code)}</strong></p>` : ''}<p><a class="btn" href="${e(popup.href || (kind === 'quiz' ? '/pages/quiz' : '#offer'))}" data-popup-go>${e(popup.buttonLabel || (kind === 'quiz' ? 'Take the quiz' : 'Claim it'))}</a></p>${valid}`
+  return `<div class="popup" id="popup" hidden role="dialog" aria-modal="true" aria-labelledby="popup-h" data-trigger="${e(popup.trigger)}" data-after="${Number(popup.after) || 0}" data-days="${Number(popup.dismissDays) || 7}" data-kind="${e(kind)}">
+<div class="popup-card">${popup.image ? `<img class="popup-img" src="${e(popup.image)}" alt="" loading="lazy">` : ''}<button type="button" class="popup-x" aria-label="Close">×</button>
 <h2 id="popup-h">${e(popup.headline)}</h2>${popup.text ? `<p>${e(popup.text)}</p>` : ''}
-<form method="post" action="${e(base)}/subscribe" class="signup" data-popup-form><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="source" value="popup"><button class="btn" type="submit">${e(popup.buttonLabel || 'Send it')}</button></form>
-<p class="micro" data-popup-done hidden>${popup.code ? `You are in. Your code: <strong>${e(popup.code)}</strong>` : 'You are in.'}</p>
-</div></div>
+${body}</div>
 <script>(function(){var p=document.getElementById('popup');if(!p)return;var K='amboras_popup_until',now=Date.now();try{if(Number(localStorage.getItem(K)||0)>now)return}catch(e){}
 var shown=false,after=Number(p.dataset.after||0),days=Number(p.dataset.days||7),last=null;
 function show(){if(shown)return;shown=true;last=document.activeElement;p.hidden=false;var i=p.querySelector('input[type=email]');i&&i.focus();window.__track&&window.__track('popup.show',{trigger:p.dataset.trigger})}
 function close(){p.hidden=true;try{localStorage.setItem(K,String(now+days*86400000))}catch(e){}last&&last.focus&&last.focus()}
 p.querySelector('.popup-x').addEventListener('click',close);p.addEventListener('click',function(ev){if(ev.target===p)close()});document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!p.hidden)close()});
 var t=p.dataset.trigger;if(t==='delay'){setTimeout(show,after*1000)}else if(t==='scroll'){addEventListener('scroll',function(){var h=document.documentElement;if((h.scrollTop+innerHeight)/Math.max(1,h.scrollHeight)*100>=after)show()},{passive:true})}else{document.addEventListener('mouseleave',function(ev){if(ev.clientY<=0)show()});if(matchMedia('(hover: none)').matches)setTimeout(show,Math.max(8,after)*1000)}
-var f=p.querySelector('[data-popup-form]');f.addEventListener('submit',function(ev){ev.preventDefault();var d=new FormData(f);fetch(f.action,{method:'POST',body:new URLSearchParams(d),keepalive:true}).catch(function(){});f.hidden=true;p.querySelector('[data-popup-done]').hidden=false;window.__track&&window.__track('popup.submit',{});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
+var g=p.querySelector('[data-popup-go]');g&&g.addEventListener('click',function(){window.__track&&window.__track('popup.submit',{kind:p.dataset.kind});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
+var f=p.querySelector('[data-popup-form]');f&&f.addEventListener('submit',function(ev){ev.preventDefault();var d=new FormData(f);fetch(f.action,{method:'POST',body:new URLSearchParams(d),keepalive:true}).catch(function(){});f.hidden=true;p.querySelector('[data-popup-done]').hidden=false;window.__track&&window.__track('popup.submit',{});try{localStorage.setItem(K,String(now+365*86400000))}catch(e){}});
 })();</script>`
 }

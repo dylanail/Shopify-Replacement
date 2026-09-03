@@ -239,15 +239,18 @@ export function creativePage(ctx: Ctx): string {
 export function popupCard(ctx: Ctx): string {
   const draft = environment(ctx.db, ctx.store.id, 'draft')
   const popup = { ...DEFAULT_POPUP, ...(draft.theme.popup ?? {}) }
-  return `<div class="card" id="popup"><h2>Popup</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">One popup, on exit intent, after a delay or at a scroll depth. It asks for an email and can hand over a code. Dismissed for the days you set; never over the buy box on a phone.</p>
+  return `<div class="card" id="popup"><h2>Popup</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">One popup, on exit intent, after a delay or at a scroll depth. It offers one thing: an email for a code, the deal itself, or the quiz. Says how long the code is good for. Dismissed for the days you set; never over the buy box on a phone; never on the checkout.</p>
     <form method="post" action="/admin/popup">
       <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="enabled" value="true" ${popup.enabled ? 'checked' : ''}> Show the popup</label>
       <div class="row"><div class="field" style="flex:1"><label>Trigger</label><select name="trigger">${(['exit', 'delay', 'scroll'] as const).map((trigger) => `<option ${trigger === popup.trigger ? 'selected' : ''}>${trigger}</option>`).join('')}</select></div>
         <div class="field" style="flex:1"><label>After (seconds for delay, percent for scroll)</label><input name="after" value="${popup.after}"></div>
         <div class="field" style="flex:1"><label>Dismiss for (days)</label><input name="dismissDays" value="${popup.dismissDays}"></div></div>
+      <div class="field"><label>What it offers</label><select name="kind">${([['email', 'An email for a code (the welcome popup)'], ['offer', 'The deal itself: the code and a button to the buy box'], ['quiz', 'The quiz: a button to the quiz page']] as const).map(([kind, label]) => `<option value="${kind}" ${(popup.kind ?? 'email') === kind ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="field"><label>Headline</label><input name="headline" value="${e(popup.headline)}"></div>
       <div class="field"><label>Text</label><input name="text" value="${e(popup.text)}"></div>
       <div class="row"><div class="field" style="flex:1"><label>Code to hand over (optional)</label><input name="code" value="${e(popup.code)}" placeholder="WELCOME10"></div><div class="field" style="flex:1"><label>Button</label><input name="buttonLabel" value="${e(popup.buttonLabel)}"></div></div>
+      <div class="row"><div class="field" style="flex:1"><label>Button goes to (offer and quiz kinds)</label><input name="href" value="${e(popup.href ?? '#offer')}" placeholder="#offer or /pages/quiz"></div><div class="field" style="flex:1"><label>Valid for (days; 0 says nothing)</label><input name="validDays" value="${popup.validDays ?? 0}"></div></div>
+      <div class="field"><label>Image at the top (optional URL)</label><input name="image" value="${e(popup.image ?? '')}"></div>
       <button class="btn primary" type="submit">Save to draft</button></form></div>`
 }
 
