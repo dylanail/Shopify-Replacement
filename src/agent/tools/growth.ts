@@ -13,6 +13,9 @@ import { BENCHMARK, funnel, kpis, recentEvents, topProducts, type Range } from '
 import { listSends, sendEmail } from '../../email/send.ts'
 import { TEMPLATES, type TemplateKey } from '../../email/templates.ts'
 import { readBrief } from '../copy.ts'
+import { authorCampaign } from '../brand.ts'
+import { modelFor } from '../models.ts'
+import { latestResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const TEMPLATE_KEYS = TEMPLATES.map((template) => template.key)
@@ -145,7 +148,7 @@ export const growthTools: Tool[] = defineTools([
     area: 'emails',
     description: 'Draft a marketing email from a brief, with three subject lines to choose between.',
     schema: { brief: { type: 'string', required: true }, productId: { type: 'string' } },
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const products = listProducts(ctx.db, ctx.storeId, { status: 'published', limit: 3 })
       const featured = args.productId ? products.find((product) => product.id === args.productId) ?? products[0] : products[0]
@@ -166,10 +169,17 @@ export const growthTools: Tool[] = defineTools([
       ]
         .filter((line) => line !== undefined)
         .join('\n')
+      const written = await authorCampaign(modelFor(ctx.db, ctx.storeId, 'ads'), {
+        store: { name: store?.name ?? 'the store', voice: store?.brand.voice ?? '', slogan: store?.brand.slogan ?? '' },
+        brief: args.brief as string,
+        product: featured ? { title: featured.title, subtitle: featured.subtitle || featured.description.split('. ')[0] || '', price: format(Math.min(...featured.variants.map((variant) => variant.priceCents)), store?.currency ?? 'USD') } : null,
+        research: latestResearch(ctx.db, ctx.storeId),
+        fallback: { subjects, body },
+      })
       return {
-        summary: `Drafted a campaign with three subject lines. Nothing has been sent.`,
-        data: { subjects, body },
-        artifacts: [{ type: 'table', columns: ['#', 'Subject line'], rows: subjects.map((subject, index) => [String(index + 1), subject]) }, { type: 'note', text: body }],
+        summary: `Drafted a campaign with three subject lines${written.source === 'rules' ? ' (rules writer; set a model key for real copy)' : ''}. Nothing has been sent.`,
+        data: { subjects: written.subjects, body: written.body },
+        artifacts: [{ type: 'table', columns: ['#', 'Subject line'], rows: written.subjects.map((subject, index) => [String(index + 1), subject]) }, { type: 'note', text: written.body }],
       }
     },
   },

@@ -1,7 +1,11 @@
 import { json, now, type Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
-import { latestResearch, type Persona } from './research.ts'
+import { logger } from '../lib/log.ts'
+import { latestResearch, type Persona, type Research } from './research.ts'
 import { readDirection, type Direction, type Tone } from './directions.ts'
+import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+
+const log = logger('avatars')
 
 /**
  * Avatars.
@@ -86,19 +90,68 @@ export function hooksFor(persona: Persona, triggers: string[]): string[] {
   return hooks.slice(0, 5)
 }
 
+const TONES: Tone[] = ['plain', 'urgent', 'premium', 'warm', 'clinical', 'playful', 'blunt']
+
+const AVATARS_SCHEMA = S.obj({
+  avatars: S.arr(
+    S.obj({
+      name: S.str('"The serious amateur" — a label the owner will recognise.'),
+      who: S.str('Who they are, one or two sentences with concrete detail.'),
+      wants: S.str('The outcome they are buying.'),
+      fears: S.str('What they are afraid of getting wrong.'),
+      buysWhen: S.str('The moment that triggers the purchase.'),
+      share: S.num('Fraction of buyers, 0 to 1; shares add up to 1.'),
+      angle: S.str('The angle that reaches this person, in five to eight words.'),
+      hooks: S.arr(S.str(), 'Five first lines for an ad aimed at this person.'),
+      tone: S.enumOf(TONES, 'The tone that lands with them.'),
+      objection: S.str('The objection they raise first.'),
+      answer: S.str('The answer that gets past it.'),
+    }),
+    'Three to five avatars, biggest share first.',
+  ),
+})
+
+async function modelAvatars(choice: ModelChoice, research: Research): Promise<AvatarInput[]> {
+  const prompt = [
+    `Customer research on file:\n${JSON.stringify({ category: research.category, positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, competitors: research.competitors, proofPoints: research.proofPoints })}`,
+    'Turn the personas into avatars a media buyer can write to: one person each, with the angle that reaches them, five scroll-stopping hooks in their language, the tone, and the objection they raise first with its answer. Keep the persona names from the research where they fit.',
+  ].join('\n\n')
+  const parsed = await completeJson<{ avatars: Array<Omit<AvatarInput, 'source' | 'selected'>> }>(choice, {
+    task: 'research',
+    system: 'You write customer avatars for a dropshipping brand that sells through paid social. Specific people, real language, no invented statistics.',
+    prompt,
+    schema: AVATARS_SCHEMA,
+    name: 'avatars',
+    maxTokens: 6000,
+  })
+  return (parsed.avatars ?? []).map((avatar) => ({ ...avatar, tone: TONES.includes(avatar.tone as Tone) ? avatar.tone : 'plain', hooks: (avatar.hooks ?? []).slice(0, 5), source: 'research' as const, selected: true }))
+}
+
 /**
- * Reads the research on file into avatars. Existing avatars with the same
- * name are left alone: the merchant's edits are theirs, and re-running research
+ * Reads the research on file into avatars. With a model it writes them;
+ * without one the personas are mapped by rules. Existing avatars with the
+ * same name are left alone: the merchant's edits are theirs, and re-running
  * should add what is new, not overwrite what they fixed.
  */
-export function suggestAvatars(db: Db, storeId: string): Avatar[] {
+export async function suggestAvatars(db: Db, storeId: string, model?: ModelChoice | null): Promise<Avatar[]> {
   const research = latestResearch(db, storeId)
   if (!research) return listAvatars(db, storeId)
+  const choice = model === undefined ? modelFor(db, storeId, 'research') : model
+  let suggested: AvatarInput[]
+  try {
+    suggested = choice ? await modelAvatars(choice, research) : []
+    if (choice) log.info(`avatars written by ${describe(choice)}`)
+  } catch (error) {
+    log.warn(`${describe(choice)} could not write avatars; mapping the personas instead: ${error instanceof Error ? error.message : String(error)}`)
+    suggested = []
+  }
+  if (!suggested.length) suggested = research.audience.map((persona, index) => personaToAvatar(persona, research.triggers, research.objections, index))
   const existing = new Set(listAvatars(db, storeId).map((avatar) => avatar.name.toLowerCase()))
-  research.audience.forEach((persona, index) => {
-    if (existing.has(persona.name.toLowerCase())) return
-    saveAvatar(db, storeId, personaToAvatar(persona, research.triggers, research.objections, index))
-  })
+  for (const avatar of suggested) {
+    if (!avatar.name?.trim() || existing.has(avatar.name.toLowerCase())) continue
+    saveAvatar(db, storeId, avatar)
+    existing.add(avatar.name.toLowerCase())
+  }
   return listAvatars(db, storeId)
 }
 

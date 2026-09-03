@@ -479,6 +479,15 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX ad_inspiration_store ON ad_inspiration(store_id);
     `,
   },
+  {
+    name: '008_models_per_store',
+    sql: `
+    -- Which model writes what, per store: {"research":"anthropic:claude-opus-5"}.
+    -- Empty means the environment default. The plan and credit columns from
+    -- the SaaS scaffolding stay in place but nothing reads them any more.
+    ALTER TABLE stores ADD COLUMN models TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
 ]
 
 function migrate(db: Db) {

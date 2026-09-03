@@ -8,7 +8,7 @@ import { deleteAvatar, saveAvatar, suggestAvatars } from '../agent/avatars.ts'
 import { applyCompetitor, deleteCompetitor, getCompetitor, readCompetitor, saveCompetitor, type AngleKind } from '../agent/angles.ts'
 import * as growth from './growth-pages.ts'
 import { install, invalidateStorefrontConfig, uninstall } from '../control/plugins.ts'
-import { PLANS, PlanLimitError, planBySlug } from '../control/plans.ts'
+import { catalog, modelFor, parseChoice, TASKS, type Task } from '../agent/models.ts'
 import { listTodos, recordAudit, refreshTodos, seedTodos } from '../control/todos.ts'
 import { createCollection, listProducts, updateProduct, updateVariant } from '../domain/catalog.ts'
 import { fulfillOrder, refundOrder } from '../domain/orders.ts'
@@ -71,6 +71,10 @@ function page(ctx: Ctx, current: Session, active: string, title: string, body: s
       publish: publishState(db, current.store.id),
       userName: current.user.name || current.user.email.split('@')[0] || 'there',
       storeUrl: storeUrl(ctx, current.store),
+      modelLabel: (() => {
+        const choice = modelFor(db, current.store.id, 'planner')
+        return choice ? `Answering with ${choice.model}` : 'No model key set: a short list of patterns answers instead'
+      })(),
     }),
   )
 }
@@ -174,7 +178,6 @@ export function adminRouter(): Router {
     const result = await onboard(db(), {
       ownerId: user.id,
       prompt,
-      ...(body.planSlug ? { planSlug: String(body.planSlug) } : {}),
       ...(referenceImage ? { referenceImage } : {}),
       ...(siteUrl ? { referenceUrl: siteUrl } : {}),
     })
@@ -404,7 +407,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products', confirmed: true })
+      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
       const productId = (result.data as { id?: string })?.id
       return redirect(productId ? `/admin/products/${productId}?flash=${encodeURIComponent(result.summary)}` : `/admin/products?flash=${encodeURIComponent(result.summary)}`)
     } catch (error) {
@@ -876,7 +879,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const read = await readInspiration({ url: String(body.url ?? ''), text: String(body.text ?? ''), brand: String(body.brand ?? '') })
+      const read = await readInspiration({ url: String(body.url ?? ''), text: String(body.text ?? ''), brand: String(body.brand ?? '') }, undefined, modelFor(db(), current.store.id, 'extraction'))
       const saved = saveInspiration(db(), current.store.id, read)
       return back(ctx, `Kept "${saved.hook.slice(0, 60)}" (${saved.angle}).${saved.notes ? ` ${saved.notes}` : ''}`)
     } catch (error) {
@@ -892,9 +895,9 @@ export function adminRouter(): Router {
 
   /* ------------------------------------------------------------ avatars */
 
-  router.post('/admin/avatars/suggest', (ctx) => {
+  router.post('/admin/avatars/suggest', async (ctx) => {
     const current = session(ctx)
-    const avatars = suggestAvatars(db(), current.store.id)
+    const avatars = await suggestAvatars(db(), current.store.id)
     return back(ctx, avatars.length ? `${avatars.length} avatars on file.` : '!Run research first; avatars are suggested from it.')
   })
 
@@ -936,7 +939,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const angle = await readCompetitor({ url: String(body.url ?? ''), html: String(body.html ?? '') })
+      const angle = await readCompetitor({ url: String(body.url ?? ''), html: String(body.html ?? '') }, undefined, modelFor(db(), current.store.id, 'extraction'))
       const record = saveCompetitor(db(), current.store.id, { productId: String(body.productId ?? ''), angle })
       return back(ctx, `${record.brand || 'The page'} runs the ${record.angle} angle${record.headline ? `: "${record.headline.slice(0, 70)}"` : ''}. Edit what was pulled below.${record.notes.length ? ` ${record.notes.join(' ')}` : ''}`)
     } catch (error) {
@@ -1053,12 +1056,19 @@ export function adminRouter(): Router {
     }
   })
 
-  router.post('/admin/plan', async (ctx) => {
+  /** Which model writes what, per store. Empty means the environment default. */
+  router.post('/admin/settings/models', async (ctx) => {
     const current = session(ctx)
-    requireRole(db(), current.user.id, current.store.id, 'owner')
     const body = await ctx.body()
-    updateStore(db(), current.store.id, { planSlug: String(body.planSlug ?? 'free') })
-    return back(ctx, `Now on ${planBySlug(String(body.planSlug ?? 'free')).name}.`)
+    const models: Partial<Record<Task, string>> = {}
+    for (const task of TASKS) {
+      const value = String(body[task.id] ?? '')
+      const choice = parseChoice(value)
+      if (choice && catalog().some((entry) => entry.provider === choice.provider && entry.model === choice.model)) models[task.id] = value
+    }
+    updateStore(db(), current.store.id, { models })
+    recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'set_models', diff: models })
+    return back(ctx, 'Model choices saved for this store.')
   })
 
   /* ------------------------------------------------------------- the agent */
@@ -1073,7 +1083,6 @@ export function adminRouter(): Router {
       userId: current.user.id,
       text,
       page: String(body.page ?? ''),
-      confirmed: body.confirmed === 'true',
     })
     return back(ctx, result.failures.length ? `!${result.failures[0]}` : undefined)
   })

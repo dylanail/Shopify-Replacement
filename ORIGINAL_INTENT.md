@@ -421,6 +421,11 @@ beyond product import.
 
 ## Part 4 — What the next session should do
 
+> **Status.** The carry-overs were reconsidered and resolved; the verdict per
+> item is at the top of `docs/DARWIN_INHERITANCE.md`. Steps 1, 2 and the
+> deployment half of step 3 below are done; "storefront as a real build" and
+> the admin rewrite are deferred with reasons; step 5 is untouched.
+
 ### North star
 
 Make this the most capable version of what Part 1 describes: **one

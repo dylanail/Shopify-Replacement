@@ -33,8 +33,6 @@ export type ToolContext = {
   storeId: string
   actor: { type: 'user' | 'agent'; id: string }
   page?: string
-  /** Confirmed by a human for this turn. Risky tools refuse without it. */
-  confirmed?: boolean
   emit?: (event: { area: ToolArea; tool: string; status: 'running' | 'done' | 'failed'; summary?: string }) => void
 }
 
@@ -43,7 +41,7 @@ export type Tool = {
   area: ToolArea
   description: string
   schema: Schema
-  /** `confirm` tools change money, delete data, or reach outside the store. */
+  /** `confirm` marks tools that move money, delete data or reach outside the store. It is recorded in the audit row; it does not gate the call. */
   risk?: 'safe' | 'confirm'
   handler: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult> | ToolResult
 }
@@ -83,9 +81,9 @@ export function toolDefinitions(names?: string[]) {
 }
 
 export class ToolRefusal extends Error {
-  readonly kind: 'unknown' | 'invalid' | 'needs_confirmation'
+  readonly kind: 'unknown' | 'invalid'
   readonly detail: unknown
-  constructor(kind: 'unknown' | 'invalid' | 'needs_confirmation', message: string, detail?: unknown) {
+  constructor(kind: 'unknown' | 'invalid', message: string, detail?: unknown) {
     super(message)
     this.name = 'ToolRefusal'
     this.kind = kind
@@ -97,11 +95,12 @@ export class ToolRefusal extends Error {
  * The executor. Every tool call — from the chat panel, the onboarding
  * orchestrator, a plugin, or a model — goes through here and nowhere else.
  *
- * The model proposes; this disposes. Arguments are validated against the
- * tool's own schema before the handler exists in the call stack, risky tools
- * refuse without a human confirmation for the turn, and the audit row is
- * written whether the call succeeded or not — the log is a record of what was
- * attempted, not of what worked.
+ * Arguments are validated against the tool's own schema before the handler
+ * exists in the call stack, and the audit row is written whether the call
+ * succeeded or not — the log is a record of what was attempted, not of what
+ * worked. Tools execute; there is no per-turn permission gate. What keeps a
+ * store safe is that the assistant only ever edits the draft environment and
+ * that publishing is a separate, deliberate step with a rollback.
  */
 export async function execute(name: string, rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
   const tool = getTool(name)
@@ -111,10 +110,6 @@ export async function execute(name: string, rawArgs: unknown, ctx: ToolContext):
   if (!validated.ok) {
     throw new ToolRefusal('invalid', `${name} was called with arguments it cannot accept.`, validated.issues)
   }
-  if (tool.risk === 'confirm' && !ctx.confirmed) {
-    throw new ToolRefusal('needs_confirmation', `${name} changes something that is hard to undo. Confirm it first.`, validated.value)
-  }
-
   ctx.emit?.({ area: tool.area, tool: name, status: 'running' })
   try {
     const result = await tool.handler(validated.value, ctx)
@@ -124,7 +119,7 @@ export async function execute(name: string, rawArgs: unknown, ctx: ToolContext):
       actorId: ctx.actor.id,
       action: name,
       target: tool.area,
-      diff: { args: validated.value, summary: result.summary },
+      diff: { args: validated.value, summary: result.summary, ...(tool.risk === 'confirm' ? { risk: 'confirm' } : {}) },
     })
     ctx.emit?.({ area: tool.area, tool: name, status: 'done', summary: result.summary })
     return result

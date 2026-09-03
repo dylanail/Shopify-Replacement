@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { getDb } from './lib/db.ts'
-import { escapeHtml, html, HttpError, makeCtx, Raw, redirect, Router, send, sendError, type Ctx } from './lib/http.ts'
+import { HttpError, makeCtx, Raw, redirect, send, sendError, type Ctx } from './lib/http.ts'
 import { logger } from './lib/log.ts'
 import { renderSvg } from './agent/images.ts'
 import { readUpload } from './lib/uploads.ts'
@@ -10,7 +10,7 @@ import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
 import { storeForHost, type Store } from './control/stores.ts'
-import { marketingHome } from './marketing.ts'
+import { tlsAllowed } from './control/domains.ts'
 
 const log = logger('server')
 const PORT = Number(process.env.PORT ?? 4100)
@@ -72,6 +72,17 @@ const server = createServer(async (req, res) => {
       await send(res, { ok: true, uptime: Math.round(process.uptime()) })
       return
     }
+    // Caddy asks here before issuing a certificate on demand. Only names this
+    // deployment actually serves get one: the admin host, the storefront root
+    // and its subdomains, and custom domains that have verified as hosted.
+    if (ctx.url.pathname === '/_edge/tls-ask') {
+      const domain = (ctx.query.get('domain') ?? '').trim().toLowerCase()
+      if (domain && tlsAllowed(getDb(), domain, ROOT_DOMAIN)) {
+        await send(res, { ok: true, domain })
+        return
+      }
+      throw new HttpError(404, 'Not a hostname this deployment serves')
+    }
 
     const store = resolveStorefront(ctx)
     if (store) {
@@ -95,13 +106,9 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    // Personal mode: there is nothing to sell at the root. It is the admin.
+    // This deployment is one person's: there is nothing to sell at the root. It is the admin.
     if (ctx.url.pathname === '/') {
       await send(res, redirect('/admin'), req)
-      return
-    }
-    if (ctx.url.pathname === '/about-this-platform') {
-      await send(res, html(marketingHome()), req)
       return
     }
     throw new HttpError(404, 'Nothing here')

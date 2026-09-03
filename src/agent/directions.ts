@@ -3,6 +3,10 @@ import type { Research } from './research.ts'
 import type { Brief } from './copy.ts'
 import { newBlock } from '../pages/store.ts'
 import type { BlockInstance } from '../pages/blocks.ts'
+import { logger } from '../lib/log.ts'
+import { completeJson, describe, S, type ModelChoice } from './models.ts'
+
+const log = logger('directions')
 
 /**
  * Formats and direction.
@@ -11,8 +15,8 @@ import type { BlockInstance } from '../pages/blocks.ts'
  * story, problem-agitate-solve — and a direction is what the merchant typed:
  * "make it urgent", "premium, no hype", "for gift buyers". Both are read into
  * a small set of decisions (tone words, which sections lead, what the
- * headline pattern is), and the same decisions drive the rules writer and the
- * model prompt, so switching a key on does not change what a format *means*.
+ * headline pattern is). The format decides the layout; the model writes the
+ * words in it; the rules writers below fill the layout when there is no model.
  */
 export type Tone = 'plain' | 'urgent' | 'premium' | 'warm' | 'clinical' | 'playful' | 'blunt'
 
@@ -209,39 +213,64 @@ export function redirectContent(content: ProductContent, direction: Direction): 
 
 /* ---------------------------------------------------------------- model */
 
+/** Block types whose settings carry the words a reader sees. */
+const TEXT_BLOCKS = new Set(['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box', 'comparison', 'announcement-bar', 'guarantee', 'byline', 'publication-bar', 'sticky-cta', 'progress-bar', 'countdown', 'review-wall', 'bundle-offer', 'buy-box'])
+/** Setting keys that are addresses, ids or media, never prose. */
+const NOT_TEXT = /^(src|href|image|images|productId|ctaHref|url|id|video|link|collectionId|background|align|width|padding|level|height|overlay|minutes|percent|count|number|showImage|buyNow)$/
+
+const BLOCKS_SCHEMA = S.obj({
+  blocks: S.arr(
+    S.obj({
+      id: S.str('The block id, unchanged.'),
+      values: S.arr(S.obj({ key: S.str('The setting key, unchanged.'), value: S.str('The new text.') }), 'Only the text settings you rewrote.'),
+    }),
+  ),
+})
+
 /**
- * With a key, the model rewrites the words inside the blocks the format laid
- * out — never the layout. It gets the format, the direction verbatim, the
- * research and the product, and returns replacement settings keyed by block
- * id. Anything it does not return keeps the rules text.
+ * With a model, it writes the words inside the blocks the format laid out —
+ * never the layout. It gets the format, the direction verbatim, the avatar,
+ * the research and the product, and returns replacement text per block.
+ * Line formats ("label|value" per line) are the block's own contract and are
+ * preserved. Anything it does not return keeps the rules text.
  */
-export async function modelRewrite(blocks: BlockInstance[], input: WriterInput): Promise<BlockInstance[]> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return blocks
+export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInstance[], input: WriterInput): Promise<{ blocks: BlockInstance[]; source: 'model' | 'rules' }> {
+  if (!choice) return { blocks, source: 'rules' }
   const textual = blocks
-    .filter((block) => ['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box'].includes(block.type))
-    .map((block) => ({ id: block.id, type: block.type, settings: block.settings }))
+    .filter((block) => TEXT_BLOCKS.has(block.type))
+    .map((block) => ({ id: block.id, type: block.type, settings: Object.fromEntries(Object.entries(block.settings).filter(([key, value]) => typeof value === 'string' && !NOT_TEXT.test(key))) }))
+    .filter((block) => Object.keys(block.settings).length)
+  if (!textual.length) return { blocks, source: 'rules' }
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.AMBORAS_MODEL ?? 'claude-sonnet-4-5',
-        max_tokens: 6000,
-        system: 'You write direct-response ecommerce pages. Rewrite ONLY the text values in the blocks you are given, in the format and direction described. Keep every key, keep the "label|value" line formats, never invent statistics or reviews. Reply with a JSON array of {id, settings} and nothing else.',
-        messages: [{ role: 'user', content: `Format: ${input.format.name} — ${input.format.description}\nDirection from the merchant: ${input.direction.raw || '(none)'}\nProduct: ${input.product.title}. ${input.product.subtitle}. ${input.product.description.slice(0, 800)}\nResearch: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections, audience: input.research.audience.map((persona) => persona.name) })}\n\nBlocks:\n${JSON.stringify(textual)}` }],
-      }),
+    const { direction, format, product, research, store } = input
+    const prompt = [
+      `Store: ${store.name}. Product: ${product.title}. ${product.subtitle}\n${product.description.slice(0, 1200)}`,
+      `Format: ${format.name} (${format.kind}) — ${format.description}`,
+      `Direction from the owner, verbatim: ${direction.raw || '(none)'}\nRead as: tone ${direction.tone}; audience ${direction.audience || '(unspecified)'}; angle ${direction.angle || '(unspecified)'}; must say: ${direction.mustSay.join(' / ') || '(nothing)'}${direction.avatar ? `; written to the avatar "${direction.avatar}"` : ''}`,
+      `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
+      `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
+      'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Never invent reviews, statistics or names.',
+    ].join('\n\n')
+    const parsed = await completeJson<{ blocks: Array<{ id: string; values: Array<{ key: string; value: string }> }> }>(choice, {
+      task: 'pages',
+      system: 'You write direct-response ecommerce pages and advertorials for a dropshipping brand. You write inside a layout that is already decided, replacing placeholder text with copy that is specific, honest and in the requested tone.',
+      prompt,
+      schema: BLOCKS_SCHEMA,
+      name: 'page_blocks',
     })
-    if (!response.ok) return blocks
-    const payload = (await response.json()) as { content?: Array<{ type: string; text?: string }> }
-    const text = payload.content?.find((block) => block.type === 'text')?.text ?? ''
-    const start = text.indexOf('[')
-    const end = text.lastIndexOf(']')
-    if (start === -1 || end === -1) return blocks
-    const replacements = JSON.parse(text.slice(start, end + 1)) as Array<{ id: string; settings: Record<string, unknown> }>
-    const byId = new Map(replacements.map((entry) => [entry.id, entry.settings]))
-    return blocks.map((block) => (byId.has(block.id) ? { ...block, settings: { ...block.settings, ...byId.get(block.id) } } : block))
-  } catch {
-    return blocks
+    const byId = new Map(parsed.blocks.map((entry) => [entry.id, entry.values]))
+    const rewritten = blocks.map((block) => {
+      const values = byId.get(block.id)
+      if (!values) return block
+      const settings = { ...block.settings }
+      for (const { key, value } of values) {
+        if (typeof settings[key] === 'string' && !NOT_TEXT.test(key) && typeof value === 'string' && value.trim()) settings[key] = value
+      }
+      return { ...block, settings }
+    })
+    return { blocks: rewritten, source: 'model' }
+  } catch (error) {
+    log.warn(`${describe(choice)} could not write the ${input.format.name} version; keeping the rules text: ${error instanceof Error ? error.message : String(error)}`)
+    return { blocks, source: 'rules' }
   }
 }

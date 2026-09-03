@@ -70,7 +70,6 @@ async function main() {
     prompt:
       'A high-converting hand-stitched boxing gear store called Ironjaw & Co, in the style of a 1920s heritage leather atelier — ' +
       'sepia parchment tones, deep burgundy accents, vintage serif typography — built in Mexico City.',
-    planSlug: 'starter',
   })
   const store = result.store
   log.info(`built ${store.name} (${result.summaries.length} steps, ${result.failures.length} failures)`)
@@ -200,7 +199,7 @@ async function main() {
     log.info('two pdp versions in a split test, a story advertorial, and a funnel with bump, upsell and downsell')
 
     // Avatars from the research, a competitor read for its angle, a swipe file, and ads written to the coach.
-    const avatars = suggestAvatars(db, store.id)
+    const avatars = await suggestAvatars(db, store.id)
     const coach = avatars.find((avatar) => /coach/i.test(avatar.name))
     saveCompetitor(db, store.id, {
       productId: hero.id,

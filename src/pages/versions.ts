@@ -4,7 +4,8 @@ import { getProduct } from '../domain/catalog.ts'
 import type { Product } from '../domain/types.ts'
 import type { Store } from '../control/stores.ts'
 import { readBrief } from '../agent/copy.ts'
-import { ADVERTORIAL_FORMATS, PDP_FORMATS, formatById, modelRewrite, readDirection, writeAdvertorial, writePdp } from '../agent/directions.ts'
+import { ADVERTORIAL_FORMATS, PDP_FORMATS, authorBlocks, formatById, readDirection, writeAdvertorial, writePdp } from '../agent/directions.ts'
+import { modelFor } from '../agent/models.ts'
 import { latestResearch, rulesResearch } from '../agent/research.ts'
 import { directionFor, getAvatar, listAvatars } from '../agent/avatars.ts'
 import { createPage, getPage, listPages, updatePage, type Page } from './store.ts'
@@ -38,12 +39,13 @@ export async function generateVersions(db: Db, store: Store, request: VersionReq
   const direction = directionFor(request.direction ?? '', avatar)
   const catalog = request.kind === 'pdp' ? PDP_FORMATS : ADVERTORIAL_FORMATS
   const wanted = request.formats?.length ? request.formats : suggestFormats(request.kind, direction).slice(0, request.count ?? 3)
+  const model = modelFor(db, store.id, 'pages')
   const created: Page[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId, request.kind)
     const input = { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format }
     const drafted = request.kind === 'pdp' ? writePdp(input) : writeAdvertorial(input)
-    const blocks = await modelRewrite(drafted, input)
+    const { blocks } = await authorBlocks(model, drafted, input)
     created.push(
       createPage(db, store.id, {
         title: `${product.title} — ${format.name}${avatar ? ` · ${avatar.name}` : ''}${direction.raw ? ` (${direction.raw.slice(0, 40)})` : ''}`,

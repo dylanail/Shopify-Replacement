@@ -3,64 +3,47 @@ import { listPromotions } from '../domain/promotions.ts'
 import { getStore } from '../control/stores.ts'
 import type { Db } from '../lib/db.ts'
 import { logger } from '../lib/log.ts'
-import { toolDefinitions } from './registry.ts'
+import { getTool, toolDefinitions } from './registry.ts'
+import { modelFor, planWithTools, type ModelChoice, type Turn } from './models.ts'
 import type { PlannedStep } from './runtime.ts'
 
 const log = logger('planner')
 
-export type PlanContext = { db: Db; storeId: string; page?: string }
+export type PlanContext = { db: Db; storeId: string; page?: string; history?: Turn[] }
 
 export type Plan = {
   steps: PlannedStep[]
   /** What the assistant says before it starts working. */
   preamble: string
   source: 'model' | 'rules'
+  model?: string
 }
 
 /* ------------------------------------------------------------------ the model */
 
-type AnthropicBlock = { type: string; name?: string; input?: Record<string, unknown>; text?: string }
-
 /**
- * With a key configured the model plans: it is given the real tool schemas and
- * the store's current state, and its tool_use blocks become the run's steps.
- * The model never executes anything itself — the registry's executor still
- * validates every argument and still refuses the risky calls.
+ * The model plans. It is given the store's current state, the recent
+ * conversation and the real tool schemas; its tool calls become the run's
+ * steps and its words become the reply. The model never executes anything
+ * itself — the registry's executor still validates every argument.
  */
-async function modelPlan(prompt: string, context: PlanContext): Promise<Plan | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return null
+async function modelPlan(prompt: string, context: PlanContext, choice: ModelChoice): Promise<Plan | { error: string }> {
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.AMBORAS_MODEL ?? 'claude-sonnet-4-5',
-        max_tokens: 2048,
-        system: systemPrompt(context),
-        tools: toolDefinitions(),
-        messages: [{ role: 'user', content: prompt }],
-      }),
+    const reply = await planWithTools(choice, {
+      system: systemPrompt(context),
+      history: context.history ?? [],
+      prompt,
+      tools: toolDefinitions(),
     })
-    if (!response.ok) {
-      log.warn(`model planner returned ${response.status}; falling back to rules`)
-      return null
-    }
-    const payload = (await response.json()) as { content?: AnthropicBlock[] }
-    const blocks = payload.content ?? []
-    const steps = blocks
-      .filter((block) => block.type === 'tool_use' && block.name)
-      .map((block) => ({ tool: block.name as string, args: block.input ?? {} }))
-    const preamble = blocks
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text ?? '')
-      .join(' ')
-      .trim()
-    if (!steps.length && !preamble) return null
-    return { steps, preamble, source: 'model' }
+    const steps: PlannedStep[] = reply.calls.map((call) => {
+      const tool = getTool(call.name)
+      return { tool: call.name, args: call.args, ...(tool ? { area: tool.area } : {}) }
+    })
+    return { steps, preamble: reply.text, source: 'model', model: choice.model }
   } catch (error) {
-    log.warn(`model planner unreachable: ${error instanceof Error ? error.message : String(error)}`)
-    return null
+    const message = error instanceof Error ? error.message : String(error)
+    log.warn(`${choice.model} could not plan: ${message}`)
+    return { error: message }
   }
 }
 
@@ -69,13 +52,14 @@ function systemPrompt(context: PlanContext): string {
   const products = listProducts(context.db, context.storeId, { limit: 20 })
   const promotions = listPromotions(context.db, context.storeId)
   return [
-    `You run the admin of "${store?.name ?? 'a store'}" on Amboras. You act by calling tools; you do not describe what the merchant should click.`,
+    `You run the admin of "${store?.name ?? 'a store'}", a dropshipping store on Amboras, for its owner. You act by calling tools; you do not describe what the owner should click.`,
     store?.brand.voice ? `Store voice: ${store.brand.voice}` : '',
-    context.page ? `The merchant is on the ${context.page} page — prefer tools relevant to it.` : '',
+    context.page ? `The owner is on the ${context.page} page; prefer tools relevant to it.` : '',
     `Currency is ${store?.currency ?? 'USD'} and every amount you pass is in minor units (cents).`,
     products.length ? `Products: ${products.map((product) => `${product.title} (${product.id})`).join(', ')}` : 'The catalog is empty.',
     promotions.length ? `Promotions: ${promotions.map((promotion) => `${promotion.title}${promotion.code ? ` [${promotion.code}]` : ''}`).join(', ')}` : '',
-    `Prefer one tool call that does the job over three that approximate it. If something is genuinely ambiguous, say so instead of guessing at a destructive call.`,
+    `A question gets an answer in words, from the tools that read the store. An instruction gets the tool calls that carry it out, and one line saying what you are doing. Prefer one call that does the job over three that approximate it. Everything you change lands on the draft; publishing is the owner's separate step.`,
+    `If a request is genuinely ambiguous about something destructive (a delete, a refund, an email to customers), say what you would do and ask, instead of guessing.`,
   ]
     .filter(Boolean)
     .join('\n')
@@ -92,12 +76,9 @@ const money = (raw?: string) => (raw ? Math.round(parseFloat(raw.replace(/[^0-9.
 const quoted = (input: string) => /["'“]([^"'”]{2,80})["'”]/.exec(input)?.[1]
 
 /**
- * The rules planner.
- *
- * This is not a fallback nobody exercises: with no API key, no network and no
- * budget, the whole product still has to work, so these rules are the floor
- * under every demo, every test and every offline deployment. They cover the
- * things merchants actually type at an admin.
+ * The rules planner: scaffolding for a deployment with no model key, and the
+ * floor under the tests. It maps the things people actually type at an admin
+ * onto tools, and says so when it is guessing.
  */
 const RULES: Rule[] = [
   {
@@ -121,6 +102,14 @@ const RULES: Rule[] = [
           },
         ],
       }
+    },
+  },
+  {
+    match: /\bdelete\b.*\b(product|prod_[a-z0-9]+)\b/i,
+    build(_groups, input) {
+      const productId = /\b(prod_[a-z0-9]+)\b/i.exec(input)?.[1]
+      if (!productId) return { preamble: 'Say which product to delete, by id or from the product list.', steps: [{ tool: 'list_products', area: 'products', args: { limit: 20 } }] }
+      return { preamble: `Deleting ${productId}.`, steps: [{ tool: 'delete_product', area: 'products', args: { productId } }] }
     },
   },
   {
@@ -321,13 +310,22 @@ export function rulesPlan(prompt: string, context: PlanContext): Plan {
   return {
     steps: [{ tool: 'get_kpis', area: 'analytics', args: { range: '7d' } }],
     preamble:
-      'I am not sure which of my tools that maps to. Here is where the store stands — or tell me plainly what to change (a product, a discount, the homepage, a domain) and I will do it.',
+      'No model is configured, so I matched that against a short list of patterns and it fit none of them. Here is where the store stands — or tell me plainly what to change (a product, a discount, the homepage, a domain). Set ANTHROPIC_API_KEY or OPENAI_API_KEY and I will understand the rest.',
     source: 'rules',
   }
 }
 
 export async function plan(prompt: string, context: PlanContext): Promise<Plan> {
-  return (await modelPlan(prompt, context)) ?? rulesPlan(prompt, context)
+  const choice = modelFor(context.db, context.storeId, 'planner')
+  if (!choice) return rulesPlan(prompt, context)
+  const planned = await modelPlan(prompt, context, choice)
+  if ('error' in planned) {
+    // The model was configured and failed; the rules answer, and say so, rather than pretending.
+    const fallback = rulesPlan(prompt, context)
+    return { ...fallback, preamble: `${choice.model} was unreachable (${planned.error}), so this is the rules planner: ${fallback.preamble}` }
+  }
+  if (!planned.steps.length && !planned.preamble) return { steps: [], preamble: 'I did not find anything to do with that. Say what should change, or ask a question about the store.', source: 'model', model: choice.model }
+  return planned
 }
 
 /** The reply the merchant reads once the run finishes. */

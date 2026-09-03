@@ -1,0 +1,35 @@
+# The whole platform on one VPS: the app, and Caddy in front terminating TLS
+# for the admin host, the storefront subdomains and every custom domain a
+# store verifies. See docs/DEPLOY.md.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "4100"
+      AMBORAS_DB: /app/data/amboras.db
+    volumes:
+      - app_data:/app/data
+    expose:
+      - "4100"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:

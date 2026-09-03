@@ -1,7 +1,7 @@
 import { json, now, type Db, type Row } from '../lib/db.ts'
 import { id, storeSlug, token } from '../lib/ids.ts'
 import type { Brand, Theme } from '../domain/types.ts'
-import { planBySlug, type Plan } from './plans.ts'
+import type { Task } from '../agent/models.ts'
 
 export type StoreEnvironment = {
   id: string
@@ -20,12 +20,12 @@ export type Store = {
   ownerId: string
   name: string
   slug: string
-  planSlug: string
   currency: string
   brand: Brand
   status: 'draft' | 'live' | 'paused'
   prompt: string
-  creditsUsed: number
+  /** Which model writes what for this store; empty entries take the environment default. */
+  models: Partial<Record<Task, string>>
   referenceImage: string
   referenceUrl: string
   createdAt: string
@@ -46,12 +46,11 @@ function rowToStore(row: Row): Store {
     ownerId: row.owner_id as string,
     name: row.name as string,
     slug: row.slug as string,
-    planSlug: row.plan_slug as string,
     currency: row.currency as string,
     brand: json(row.brand, {} as Brand),
     status: row.status as Store['status'],
     prompt: row.prompt as string,
-    creditsUsed: row.credits_used as number,
+    models: json(row.models, {} as Partial<Record<Task, string>>),
     referenceImage: (row.reference_image as string) ?? '',
     referenceUrl: (row.reference_url as string) ?? '',
     createdAt: row.created_at as string,
@@ -61,7 +60,7 @@ function rowToStore(row: Row): Store {
 export function createStore(
   db: Db,
   ownerId: string,
-  input: { name: string; prompt?: string; currency?: string; planSlug?: string; referenceImage?: string; referenceUrl?: string },
+  input: { name: string; prompt?: string; currency?: string; referenceImage?: string; referenceUrl?: string },
 ): Store {
   const storeId = id('store')
   const timestamp = now()
@@ -71,12 +70,11 @@ export function createStore(
       owner_id: ownerId,
       name: input.name,
       slug: storeSlug(input.name),
-      plan_slug: input.planSlug ?? 'owner',
       currency: (input.currency ?? 'USD').toUpperCase(),
       brand: {},
       status: 'draft',
       prompt: input.prompt ?? '',
-      credits_used: 0,
+      models: {},
       reference_image: input.referenceImage ?? '',
       reference_url: input.referenceUrl ?? '',
       created_at: timestamp,
@@ -124,7 +122,7 @@ export function listStores(db: Db, userId: string): Store[] {
 export function updateStore(
   db: Db,
   storeId: string,
-  patch: Partial<Pick<Store, 'name' | 'currency' | 'status' | 'planSlug' | 'referenceImage' | 'referenceUrl'>> & { brand?: Brand },
+  patch: Partial<Pick<Store, 'name' | 'currency' | 'status' | 'referenceImage' | 'referenceUrl' | 'models'>> & { brand?: Brand },
 ): Store {
   const store = getStore(db, storeId)
   if (!store) throw new Error(`No store ${storeId}`)
@@ -132,17 +130,12 @@ export function updateStore(
   if (patch.name !== undefined) values.name = patch.name
   if (patch.currency !== undefined) values.currency = patch.currency.toUpperCase()
   if (patch.status !== undefined) values.status = patch.status
-  if (patch.planSlug !== undefined) values.plan_slug = patch.planSlug
+  if (patch.models !== undefined) values.models = patch.models
   if (patch.referenceImage !== undefined) values.reference_image = patch.referenceImage
   if (patch.referenceUrl !== undefined) values.reference_url = patch.referenceUrl
   if (patch.brand !== undefined) values.brand = { ...store.brand, ...patch.brand }
   db.update('stores', storeId, values)
   return getStore(db, storeId) as Store
-}
-
-export function planFor(db: Db, storeId: string): Plan {
-  const store = getStore(db, storeId)
-  return planBySlug(store?.planSlug ?? 'free')
 }
 
 /* --------------------------------------------------------------- environments */

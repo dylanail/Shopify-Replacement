@@ -1,7 +1,8 @@
 import { getStore } from '../../control/stores.ts'
 import { listProducts, updateProduct } from '../../domain/catalog.ts'
 import { format } from '../../lib/money.ts'
-import { contentFor } from '../pages.ts'
+import { authorContentFor } from '../pages.ts'
+import { modelFor } from '../models.ts'
 import { latestResearch, runResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
@@ -20,18 +21,21 @@ export const researchTools: Tool[] = defineTools([
       if (!store) throw new Error('No store')
       const research = await runResearch(ctx.db, ctx.storeId, {
         prompt: (args.brief as string) || store.prompt || store.name,
+        currency: store.currency,
         ...(args.siteUrl ? { siteUrl: args.siteUrl as string } : store.referenceUrl ? { siteUrl: store.referenceUrl } : {}),
       })
       let rewritten = 0
       if (args.rewritePages) {
+        const model = modelFor(ctx.db, ctx.storeId, 'pages')
         for (const product of listProducts(ctx.db, ctx.storeId, { limit: 200 })) {
-          updateProduct(ctx.db, ctx.storeId, product.id, { content: contentFor(research, store.prompt, product) })
+          const { content } = await authorContentFor(model, research, { name: store.name, prompt: store.prompt, ...(store.brand.voice ? { voice: store.brand.voice } : {}), currency: store.currency }, product)
+          updateProduct(ctx.db, ctx.storeId, product.id, { content })
           rewritten++
         }
       }
       return {
         summary:
-          `Research done (${research.source}): ${research.audience.length} audiences, ${research.objections.length} objections answered, ` +
+          `Research done (${research.source === 'rules' ? 'category rules; set a model key for real research' : `written by ${research.model}`}): ${research.audience.length} audiences, ${research.objections.length} objections answered, ` +
           `${research.competitors.length} competitors, price anchor ${format(research.priceAnchor.midCents, store.currency)}` +
           (rewritten ? `; rewrote ${rewritten} product pages.` : '.'),
         data: research,

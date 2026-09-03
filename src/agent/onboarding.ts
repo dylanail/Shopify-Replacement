@@ -1,29 +1,29 @@
 import type { Db } from '../lib/db.ts'
+import { logger } from '../lib/log.ts'
 import { createStore, getStore, setTheme, type Store } from '../control/stores.ts'
 import { seedDefaultRegion } from '../domain/regions.ts'
 import { seedTodos, refreshTodos } from '../control/todos.ts'
 import { upsertSeoPage } from '../seo/schema.ts'
-import { announcement, brandName, collectionPlan, draftProducts, paletteFor, promotionPlan, readBrief } from './copy.ts'
-import { runResearch } from './research.ts'
+import { paletteFor, promotionPlan, readBrief, type Brief } from './copy.ts'
+import { authorBrandKit, type BrandKit } from './brand.ts'
+import { authorResearch, readSite, saveResearch, type AuthoredResearch } from './research.ts'
+import { describe, modelFor } from './models.ts'
 import { listCollections, listProducts } from '../domain/catalog.ts'
 import { createRun, runToCompletion, type PlannedStep, type Run } from './runtime.ts'
+
+const log = logger('onboarding')
 
 /**
  * One sentence to a live store.
  *
- * The branches below are what actually makes this feel like a machine rather
- * than a form: naming, catalog, brand and merchandising run at the same time
- * and the merchant watches four things happen at once. They are separate
- * branches because they genuinely do not depend on each other — only the
- * product photography depends on the product existing, and that is why it sits
- * *inside* the catalog branch rather than beside it.
+ * Research is written first, then the brand kit from it, then the store
+ * exists and the run builds it: naming, catalog, brand and merchandising in
+ * parallel branches, because they genuinely do not depend on each other. Only
+ * the product photography depends on the product existing, which is why it
+ * sits *inside* the catalog branch rather than beside it.
  */
-export function planOnboarding(prompt: string, opts: { referenceImage?: string } = {}): { steps: PlannedStep[]; brandLabel: string } {
-  const brief = readBrief(prompt)
-  const name = brandName(brief)
-  const palette = paletteFor(brief)
-  const products = draftProducts(brief, name)
-
+export function planOnboarding(kit: BrandKit, brief: Brief, opts: { referenceImage?: string } = {}): PlannedStep[] {
+  const palette = paletteFor({ ...brief, mood: kit.mood })
   const steps: PlannedStep[] = []
 
   steps.push({
@@ -31,29 +31,32 @@ export function planOnboarding(prompt: string, opts: { referenceImage?: string }
     area: 'store',
     tool: 'set_brand',
     args: {
-      name,
+      name: kit.name,
+      slogan: kit.slogan,
+      description: kit.description,
+      voice: kit.voice,
       primary: palette.primary,
       secondary: palette.secondary,
       paper: palette.paper,
       ink: palette.ink,
-      announcement: announcement(brief),
+      announcement: kit.announcement,
     },
   })
+  const hero = kit.products[0]
   steps.push({
     branch: 'brand',
     area: 'store',
     tool: 'generate_hero_image',
     args: {
-      scene: `${products[0]?.title ?? brief.category} on a plain ground, ${brief.material}, single soft light`,
-      headline: name.toUpperCase(),
-      sub: brief.material.charAt(0).toUpperCase() + brief.material.slice(1) + `, made in ${brief.place}`,
+      scene: `${hero?.title ?? brief.category} on a plain ground, single soft light`,
+      headline: kit.name.toUpperCase(),
+      sub: kit.slogan,
     },
   })
 
-  products.forEach((product, index) => {
-    const branch = `catalog-${index}`
+  kit.products.forEach((product, index) => {
     steps.push({
-      branch,
+      branch: `catalog-${index}`,
       area: 'products',
       tool: 'create_product',
       args: {
@@ -85,19 +88,19 @@ export function planOnboarding(prompt: string, opts: { referenceImage?: string }
       },
     })
   }
-  for (const collection of collectionPlan(brief)) {
+  for (const collection of kit.collections) {
     steps.push({ branch: 'merchandising', area: 'organization', tool: 'create_collection', args: { title: collection.title, description: collection.description } })
   }
 
-  return { steps, brandLabel: name }
+  return steps
 }
 
 function phaseTwo(db: Db, storeId: string): PlannedStep[] {
   const products = listProducts(db, storeId, { status: 'published', limit: 20 })
   const collections = listCollections(db, storeId)
   const steps: PlannedStep[] = []
-  const everything = collections.find((collection) => /new arrivals/i.test(collection.title))
-  const essentials = collections.find((collection) => /essentials/i.test(collection.title))
+  const everything = collections.find((collection) => /new arrivals/i.test(collection.title)) ?? collections[0]
+  const essentials = collections.find((collection) => /essentials/i.test(collection.title)) ?? collections[1]
   if (everything) {
     steps.push({
       branch: 'merch',
@@ -106,7 +109,7 @@ function phaseTwo(db: Db, storeId: string): PlannedStep[] {
       args: { collectionId: everything.id, productIds: products.map((product) => product.id), mode: 'set' },
     })
   }
-  if (essentials) {
+  if (essentials && essentials.id !== everything?.id) {
     steps.push({
       branch: 'merch',
       area: 'organization',
@@ -119,48 +122,56 @@ function phaseTwo(db: Db, storeId: string): PlannedStep[] {
   return steps
 }
 
-export type OnboardingResult = { store: Store; run: Run; summaries: string[]; failures: string[] }
+export type OnboardingResult = { store: Store; run: Run; summaries: string[]; failures: string[]; research: AuthoredResearch; kit: BrandKit }
 
 /**
- * Creates the store, then runs the plan. The store row exists before any tool
- * fires so the preview URL is real from the first second — the merchant can
- * open it and watch products appear, rather than staring at a spinner.
+ * Research, then the brand kit, then the store, then the run. The store row
+ * exists before any tool fires so the preview URL is real from the first
+ * second — the merchant can open it and watch products appear.
  */
 export async function onboard(
   db: Db,
-  input: { ownerId: string; prompt: string; currency?: string; planSlug?: string; referenceImage?: string; referenceUrl?: string },
+  input: { ownerId: string; prompt: string; currency?: string; referenceImage?: string; referenceUrl?: string },
 ): Promise<OnboardingResult> {
   const brief = readBrief(input.prompt)
-  const { steps, brandLabel } = planOnboarding(input.prompt, { ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}) })
+  const currency = (input.currency ?? 'USD').toUpperCase()
+  const notes: string[] = []
+  let sourceText = ''
+  if (input.referenceUrl) {
+    const site = await readSite(input.referenceUrl)
+    sourceText = site.text
+    notes.push(...site.notes)
+  }
+  if (input.referenceImage) notes.push('The merchant supplied a product photograph; imagery is derived from it.')
+
+  // Research first, and on its own: the brand kit and every product page read it.
+  const researchModel = modelFor(db, null, 'research')
+  const research = await authorResearch(researchModel, brief, { sourceText, notes, currency, hasSite: Boolean(input.referenceUrl && sourceText) })
+  const kit = await authorBrandKit(modelFor(db, null, 'brand'), brief, research.research, { currency })
+  log.info(`research by ${describe(researchModel)}, brand kit by ${kit.source === 'model' ? kit.model : 'rules'}: ${kit.name}`)
+
   const store = createStore(db, input.ownerId, {
-    name: brandLabel,
+    name: kit.name,
     prompt: input.prompt,
-    ...(input.currency ? { currency: input.currency } : {}),
-    ...(input.planSlug ? { planSlug: input.planSlug } : {}),
+    currency,
     ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}),
     ...(input.referenceUrl ? { referenceUrl: input.referenceUrl } : {}),
   })
-
-  // Research runs before anything is written, and on its own: the catalog
-  // branch reads it, so it cannot be a sibling of the catalog branch.
-  await runResearch(db, store.id, {
-    prompt: input.prompt,
-    ...(input.referenceUrl ? { siteUrl: input.referenceUrl } : {}),
-    ...(input.referenceImage ? { imageNote: 'The merchant supplied a product photograph; imagery is derived from it.' } : {}),
-  })
+  saveResearch(db, store.id, research, input.prompt)
   seedDefaultRegion(db, store.id, store.currency)
   seedTodos(db, store.id)
   setTheme(db, store.id, {
-    template: brief.mood === 'monochrome' ? 'gallery' : 'atelier',
+    template: kit.mood === 'monochrome' ? 'gallery' : 'atelier',
     nav: [
       { label: 'Shop', href: '/collections/all' },
       { label: 'Journal', href: '/blogs/journal' },
       { label: 'About', href: '/pages/about' },
     ],
   }, { build: `Generated from: "${input.prompt.slice(0, 80)}"` })
-  upsertSeoPage(db, store.id, { path: '/', title: brandLabel, description: `${brandLabel} — ${brief.material}, made in ${brief.place}.`, keyword: brief.category })
+  upsertSeoPage(db, store.id, { path: '/', title: kit.name, description: kit.slogan, keyword: research.research.category })
 
-  const actor = { actor: { type: 'agent' as const, id: 'onboarding' }, confirmed: true, page: 'onboarding' }
+  const actor = { actor: { type: 'agent' as const, id: 'onboarding' }, page: 'onboarding' }
+  const steps = planOnboarding(kit, brief, { ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}) })
   const run = createRun(db, { storeId: store.id, kind: 'onboarding', prompt: input.prompt, steps })
   const outcome = await runToCompletion(db, run.id, actor)
 
@@ -183,5 +194,7 @@ export async function onboard(
     run: outcome.run,
     summaries: outcome.results.map((result) => result.summary),
     failures: outcome.failures,
+    research,
+    kit,
   }
 }

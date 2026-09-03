@@ -49,7 +49,7 @@ let slug = ''
 test('the root is the admin, and login and register are served', async () => {
   assert.equal((await call('/')).status, 302)
   assert.equal((await call('/')).location, '/admin')
-  assert.match((await call('/about-this-platform')).text, /AI-native/)
+  assert.equal((await call('/about-this-platform')).status, 404, 'there is no marketing site; this is one person\'s admin')
   assert.equal((await call('/login')).status, 200)
   assert.equal((await call('/healthz')).status, 200)
   assert.equal((await call('/nope')).status, 404)
@@ -70,7 +70,7 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.match(short.location, /error=/, 'a two-word prompt is refused rather than guessed at')
 
   const built = await call('/onboarding', {
-    form: { prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City', planSlug: 'starter' },
+    form: { prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City' },
   })
   assert.match(built.location, /^\/admin\?flash=/)
   assert.match(decodeURIComponent(built.location), /Ironjaw & Co is built/)
@@ -104,12 +104,16 @@ test('the assistant executes a real change from the panel', async () => {
   assert.match(ai.text, /Created The Road Bag/)
 })
 
-test('a risky action is refused from the panel until it is confirmed', async () => {
+test('a risky action from the panel executes, is audited, and the panel carries no permission checkbox', async () => {
   const products = await call('/admin/products?search=Road')
   const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
-  const refused = await call('/admin/ask', { form: { text: `delete product ${productId}`, page: 'products' } })
-  assert.equal(refused.status, 302)
-  assert.match((await call('/admin/products')).text, /The Road Bag/, 'still there')
+  assert.ok(!products.text.includes('Allow risky actions'), 'the per-turn gate is gone')
+  const deleted = await call('/admin/ask', { form: { text: `delete product ${productId}`, page: 'products' } })
+  assert.equal(deleted.status, 302)
+  const row = `href="/admin/products/${productId}" style="text-decoration:none"`
+  assert.ok(products.text.includes(row), 'the table row was there')
+  assert.ok(!(await call('/admin/products')).text.includes(row), `gone from the catalog (${flashOf(deleted.location)})`)
+  assert.match((await call('/admin/settings')).text, /delete_product/, 'and the audit says so')
 })
 
 test('the generated storefront serves a home page, a PDP and its structured data', async () => {
@@ -229,7 +233,7 @@ test('a second store can be started from the admin, with a photo, and both show 
   assert.match(hub.text, /Start a new store/)
   assert.match(hub.text, /Ironjaw/)
 
-  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products', planSlug: 'launch' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
+  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
   assert.match(decodeURIComponent(built.location), /Marrow Lab is built/)
 
   const dashboard = await call('/admin')

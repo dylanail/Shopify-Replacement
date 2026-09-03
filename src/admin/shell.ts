@@ -42,6 +42,8 @@ export type ShellInput = {
   publish: { label: string; ready: boolean; reason: string }
   userName: string
   storeUrl: string
+  /** Which model answers the panel, for the header line. */
+  modelLabel?: string
 }
 
 /**
@@ -90,7 +92,7 @@ export function shell(input: ShellInput): string {
   <aside class="panel">
     <header>
       <div class="panel-title">◮ Amboras Business Assistant <span class="beta">Beta</span></div>
-      <p class="muted">It runs the tools. It does not tell you where to click.</p>
+      <p class="muted">It runs the tools. It does not tell you where to click.${input.modelLabel ? ` ${escapeHtml(input.modelLabel)}.` : ''}</p>
     </header>
     <div class="thread" id="thread">
       ${input.messages.length
@@ -102,7 +104,7 @@ export function shell(input: ShellInput): string {
       <input type="hidden" name="page" value="${escapeHtml(input.active)}">
       <textarea name="text" id="ask" rows="2" placeholder="Ask a question, or tell it what to change…" required></textarea>
       <div class="composer-row">
-        <label class="confirm"><input type="checkbox" name="confirmed" value="true"> Allow risky actions</label>
+        <span class="confirm">Edits land on the draft; publish when it looks right.</span>
         <button class="send" type="submit" aria-label="Send">▶</button>
       </div>
     </form>

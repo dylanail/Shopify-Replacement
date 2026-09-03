@@ -8,7 +8,7 @@ import { getProduct, listProducts } from '../src/domain/catalog.ts'
 import { createReview, moderate } from '../src/domain/reviews.ts'
 import { saveUpload } from '../src/lib/uploads.ts'
 import { generate, imageModels, imagePrompt, defaultProvider, useImageTransport } from '../src/agent/images.ts'
-import { attachDomain, checkDomain, dnsPlan, domainsFor, REGISTRARS, type Resolver } from '../src/control/domains.ts'
+import { attachDomain, checkDomain, dnsPlan, domainsFor, REGISTRARS, tlsAllowed, type Resolver } from '../src/control/domains.ts'
 import { directionFor, listAvatars, saveAvatar, suggestAvatars, shortWho } from '../src/agent/avatars.ts'
 import { applyCompetitor, classifyAngle, directionFrom, extractAngle, readCompetitor, saveCompetitor } from '../src/agent/angles.ts'
 import { AD_FORMATS, draftAds, limitWarnings, patternInspiration, PLATFORMS, readInspiration, reviseAd, saveAd, searchAdLibrary, useAdLibraryTransport, writeAd, type AdInput } from '../src/agent/ads.ts'
@@ -200,22 +200,26 @@ test('a forwarded domain verifies by following the redirect', async () => {
   assert.equal(domainsFor(db, store.id)[0]?.ssl, 'pending', 'forwarding issues no certificate here; the registrar serves the redirect')
 })
 
-test('connect_domain and check_domain are tools, and the manual override needs confirmation', async () => {
+test('connect_domain and check_domain are tools, and a verified hosted domain is cleared for a certificate', async () => {
   const { db, user } = fresh()
   const store = createStore(db, user.id, { name: 'Ironjaw', prompt: 'boxing' })
   const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
   const attached = await execute('connect_domain', { hostname: 'ironjaw.co', registrar: 'porkbun' }, ctx)
   assert.match(attached.summary, /3 records to add at porkbun/)
-  await assert.rejects(execute('mark_domain_verified', { hostname: 'ironjaw.co' }, ctx), /confirm/i)
-  await execute('mark_domain_verified', { hostname: 'ironjaw.co' }, { ...ctx, confirmed: true })
+  assert.equal(tlsAllowed(db, 'ironjaw.co', ''), false, 'not until it verifies')
+  await execute('mark_domain_verified', { hostname: 'ironjaw.co' }, ctx)
   assert.equal(domainsFor(db, store.id)[0]?.status, 'verified')
+  assert.equal(tlsAllowed(db, 'ironjaw.co', ''), true)
+  assert.equal(tlsAllowed(db, 'www.ironjaw.co', ''), true, 'www and apex are one')
+  assert.equal(tlsAllowed(db, 'evil.example', ''), false)
+  assert.equal(tlsAllowed(db, 'shop.amboras.test', 'amboras.test'), true, 'subdomains of the storefront root')
 })
 
 /* ----------------------------------------------------------------- avatars */
 
 test('avatars are suggested from research, edited by hand, and read into a direction', async () => {
   const { db, store } = await seeded()
-  const avatars = suggestAvatars(db, store.id)
+  const avatars = await suggestAvatars(db, store.id)
   assert.ok(avatars.length >= 3, 'one per research persona')
   const amateur = avatars.find((avatar) => /serious amateur/i.test(avatar.name))!
   assert.equal(amateur.angle, 'wrist support that survives a year')
@@ -225,7 +229,7 @@ test('avatars are suggested from research, edited by hand, and read into a direc
 
   // Edits survive a re-suggest.
   saveAvatar(db, store.id, { id: amateur.id, name: amateur.name, angle: 'padding that protects a partner', tone: 'blunt' })
-  suggestAvatars(db, store.id)
+  await suggestAvatars(db, store.id)
   const kept = listAvatars(db, store.id).find((avatar) => avatar.id === amateur.id)!
   assert.equal(kept.angle, 'padding that protects a partner')
   assert.equal(listAvatars(db, store.id).length, avatars.length, 'no duplicates')
@@ -244,7 +248,7 @@ test('avatars are suggested from research, edited by hand, and read into a direc
 
 test('versions take an avatar, and it shows in the title and the audience line', async () => {
   const { db, store, product } = await seeded()
-  const gift = suggestAvatars(db, store.id).find((avatar) => /gift/i.test(avatar.name))!
+  const gift = (await suggestAvatars(db, store.id)).find((avatar) => /gift/i.test(avatar.name))!
   const [page] = await generateVersions(db, store, { productId: product.id, kind: 'pdp', formats: ['benefit'], avatarId: gift.id })
   assert.match(page!.title, /The gift buyer/)
   assert.match(JSON.stringify(page!.blocks), /gift buyers/i)
@@ -390,7 +394,7 @@ test('ads are drafted per product from the research on file, edited field by fie
   const { db, store, product } = await seeded()
   createReview(db, store.id, { productId: product.id, rating: 5, title: 'Solid', body: 'Four months of six-round sparring and the stitching has not moved at all, which surprised me.', author: 'Marisol A.', verified: true })
   moderate(db, store.id, db.one<{ id: string }>('SELECT id FROM reviews WHERE store_id = ?', store.id)!.id, 'approved')
-  suggestAvatars(db, store.id)
+  await suggestAvatars(db, store.id)
   const ads = await draftAds(db, store, { productId: product.id, platform: 'meta', direction: 'for coaches, focus on the repair guarantee', count: 3 })
   assert.equal(ads.length, 3)
   assert.ok(ads.every((ad) => ad.platform === 'meta' && ad.status === 'draft' && ad.avatarId), 'each written to the first selected avatar')

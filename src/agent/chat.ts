@@ -80,7 +80,7 @@ export type AskResult = { user: ChatMessage; assistant: ChatMessage; runId: stri
  */
 export async function ask(
   db: Db,
-  input: { storeId: string; userId: string; text: string; page?: string; confirmed?: boolean },
+  input: { storeId: string; userId: string; text: string; page?: string },
 ): Promise<AskResult> {
   const sessionId = sessionFor(db, input.storeId)
   const user = append(db, input.storeId, sessionId, {
@@ -91,7 +91,8 @@ export async function ask(
     artifacts: [],
   })
 
-  const planned = await plan(input.text, { db, storeId: input.storeId, ...(input.page ? { page: input.page } : {}) })
+  const prior = history(db, input.storeId, 12).filter((message) => message.id !== user.id && (message.role === 'user' || message.role === 'assistant'))
+  const planned = await plan(input.text, { db, storeId: input.storeId, ...(input.page ? { page: input.page } : {}), history: prior.map((message) => ({ role: message.role as 'user' | 'assistant', content: message.content })) })
   const run = createRun(db, {
     storeId: input.storeId,
     kind: 'chat',
@@ -103,7 +104,6 @@ export async function ask(
   const outcome = await runToCompletion(db, run.id, {
     actor: { type: 'agent', id: input.userId },
     ...(input.page ? { page: input.page } : {}),
-    confirmed: input.confirmed ?? false,
   })
 
   const assistant = append(db, input.storeId, sessionId, {

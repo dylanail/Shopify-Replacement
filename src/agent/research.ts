@@ -2,6 +2,7 @@ import { json, now, type Db } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
 import { logger } from '../lib/log.ts'
 import { readBrief, type Brief } from './copy.ts'
+import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
 
 const log = logger('research')
 
@@ -39,7 +40,8 @@ export type Research = {
   sourceNotes: string[]
 }
 
-export type ResearchRecord = Research & { id: string; source: 'rules' | 'model' | 'model+site'; brief: string; createdAt: string }
+export type ResearchSource = 'rules' | 'model' | 'model+site'
+export type ResearchRecord = Research & { id: string; source: ResearchSource; model: string; brief: string; createdAt: string }
 
 /* ------------------------------------------------------------ the knowledge */
 
@@ -204,43 +206,96 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
 
 /* --------------------------------------------------------------- the model */
 
-async function modelResearch(brief: Brief, sourceText: string, sourceNotes: string[]): Promise<Research | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return null
-  const baseline = rulesResearch(brief, sourceNotes)
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.AMBORAS_MODEL ?? 'claude-sonnet-4-5',
-        max_tokens: 4000,
-        system:
-          'You are a DTC growth strategist doing customer research for a new store. Reply with one JSON object and nothing else, matching the schema of the example exactly. Be specific to the brief; never invent statistics. Prices are integers in minor units.',
-        messages: [
-          {
-            role: 'user',
-            content: `Brief: ${brief.prompt}\n\nCategory: ${brief.category}\n\n${sourceText ? `Source material from the merchant's existing site or image:\n${sourceText.slice(0, 6000)}\n\n` : ''}Example of the exact shape to return:\n${JSON.stringify(baseline)}`,
-          },
-        ],
-      }),
-    })
-    if (!response.ok) {
-      log.warn(`model research returned ${response.status}; using rules`)
-      return null
-    }
-    const payload = (await response.json()) as { content?: Array<{ type: string; text?: string }> }
-    const text = payload.content?.find((block) => block.type === 'text')?.text ?? ''
-    const start = text.indexOf('{')
-    const end = text.lastIndexOf('}')
-    if (start === -1 || end === -1) return null
-    const parsed = JSON.parse(text.slice(start, end + 1)) as Partial<Research>
-    // The model fills in; the rules guarantee every field exists.
-    return { ...baseline, ...parsed, sourceNotes: [...sourceNotes, ...(parsed.sourceNotes ?? [])] }
-  } catch (error) {
-    log.warn(`model research unreachable: ${error instanceof Error ? error.message : String(error)}`)
-    return null
+export const RESEARCH_SCHEMA = S.obj({
+  category: S.str('The product category in two or three plain words.'),
+  positioning: S.str('One sentence: what this brand is for whom, against what, at what price position.'),
+  audience: S.arr(
+    S.obj({
+      name: S.str('"The serious amateur" — a label the owner will recognise.'),
+      who: S.str('Who they are, in a sentence with concrete detail.'),
+      wants: S.str('The outcome they are buying.'),
+      fears: S.str('What they are afraid of getting wrong.'),
+      buysWhen: S.str('The moment that triggers the purchase.'),
+      share: S.num('Fraction of buyers, 0 to 1; the shares add up to 1.'),
+    }),
+    'Three to five buyer personas, biggest first.',
+  ),
+  triggers: S.arr(S.str(), 'Four to six purchase triggers: the event or frustration that makes someone go looking.'),
+  objections: S.arr(S.obj({ objection: S.str('In the buyer\'s own words.'), answer: S.str('The honest answer the page should give.') }), 'Four to six objections, most common first.'),
+  competitors: S.arr(
+    S.obj({ name: S.str('A real brand if you are sure of it, otherwise a type: "Amazon generics".'), angle: S.str('What they lead with.'), priceBand: S.str('"$40–80"'), weakness: S.str('Where they lose buyers.') }),
+    'Three or four competitors or competitor types.',
+  ),
+  priceAnchor: S.obj({
+    lowCents: S.int('Mass-market price, minor units.'),
+    midCents: S.int('Where this brand should sit, minor units.'),
+    highCents: S.int('The bespoke or premium ceiling, minor units.'),
+    note: S.str('One sentence on why the middle number is right.'),
+  }),
+  keywords: S.arr(S.str(), 'Six to ten search phrases buyers actually type.'),
+  proofPoints: S.arr(S.str(), 'Five to seven short claims the pages can make. Only things the brief supports, or promises the brand should make (returns, guarantee); never invented numbers.'),
+  comparison: S.obj({
+    rows: S.arr(S.obj({ label: S.str('The criterion.'), us: S.str('This brand.'), them: S.str('The usual alternative.') }), 'Four to six rows for the comparison table.'),
+  }),
+  sourceNotes: S.arr(S.str(), 'What the source material told you, one note per fact. Empty when there was none.'),
+})
+
+type ModelResearch = Omit<Research, 'comparison'> & { comparison: { rows: Research['comparison']['rows'] } }
+
+const RESEARCH_SYSTEM = `You are a direct-response strategist doing customer research for a dropshipping brand that sells through paid social, advertorials and a Shopify-style store. Write the record from what you know about this category and its buyers. Be specific to the brief. Never invent statistics, review counts, study names or awards. When you do not know a competitor by name, describe the type. Prices are integers in minor units (cents) of the given currency. Do not invent a place of manufacture or a material the brief does not give; write around what you do not know.`
+
+/**
+ * The model authors the record. The rules baseline is not shown to it: a
+ * generic record in the prompt produces a generic answer, and the point of
+ * the model is to know things about this category the rules do not.
+ */
+async function modelResearch(choice: ModelChoice, brief: Brief, sourceText: string, currency: string): Promise<Research> {
+  const prompt = [
+    `Brief from the owner: ${brief.prompt}`,
+    `Category guess from the brief: ${brief.category === 'goods' ? '(none; decide from the brief)' : brief.category}`,
+    `Currency: ${currency}`,
+    sourceText ? `Source material from the owner's existing site (read it for positioning, claims and price; quote what is useful into sourceNotes):\n${sourceText.slice(0, 12000)}` : 'No source material was given.',
+    `Write the full research record. Personas biggest first with shares summing to 1; triggers are moments, not adjectives; every objection gets the answer a good page would give; the comparison rows are the criteria this brand wins on against the usual alternative.`,
+  ].join('\n\n')
+  const parsed = await completeJson<ModelResearch>(choice, { task: 'research', system: RESEARCH_SYSTEM, prompt, schema: RESEARCH_SCHEMA, name: 'customer_research' })
+  return normalizeResearch(parsed, brief)
+}
+
+/** Shares are normalised and every list is present, so the pages never trip on a thin record. */
+function normalizeResearch(parsed: ModelResearch, brief: Brief): Research {
+  const baseline = rulesResearch(brief)
+  const audience = (parsed.audience?.length ? parsed.audience : baseline.audience).map((persona) => ({ ...persona, share: Math.max(0, Number(persona.share) || 0) }))
+  const total = audience.reduce((sum, persona) => sum + persona.share, 0) || 1
+  const rows = parsed.comparison?.rows?.length ? parsed.comparison.rows : baseline.comparison.rows
+  return {
+    category: parsed.category?.trim() || brief.category,
+    positioning: parsed.positioning?.trim() || baseline.positioning,
+    audience: audience.map((persona) => ({ ...persona, share: Math.round((persona.share / total) * 100) / 100 })),
+    triggers: parsed.triggers?.length ? parsed.triggers : baseline.triggers,
+    objections: parsed.objections?.length ? parsed.objections : baseline.objections,
+    competitors: parsed.competitors?.length ? parsed.competitors : baseline.competitors,
+    priceAnchor: parsed.priceAnchor?.midCents ? parsed.priceAnchor : baseline.priceAnchor,
+    keywords: parsed.keywords?.length ? parsed.keywords : baseline.keywords,
+    proofPoints: parsed.proofPoints?.length ? parsed.proofPoints : baseline.proofPoints,
+    comparison: { us: rows.map((row) => row.us), them: rows.map((row) => row.them), rows },
+    sourceNotes: parsed.sourceNotes ?? [],
   }
+}
+
+export type AuthoredResearch = { research: Research; source: ResearchSource; model: string }
+
+/**
+ * Research, authored. With a model it writes the record from the brief and
+ * the source; without one the category rules stand in and the record says so.
+ * A configured model that fails is an error the caller sees, not a silent
+ * downgrade to rules.
+ */
+export async function authorResearch(choice: ModelChoice | null, brief: Brief, input: { sourceText?: string; notes?: string[]; currency?: string; hasSite?: boolean } = {}): Promise<AuthoredResearch> {
+  const notes = input.notes ?? []
+  if (!choice) return { research: rulesResearch(brief, notes), source: 'rules', model: '' }
+  const research = await modelResearch(choice, brief, input.sourceText ?? '', input.currency ?? 'USD')
+  log.info(`research written by ${describe(choice)} for "${brief.prompt.slice(0, 60)}"`)
+  return { research: { ...research, sourceNotes: [...notes, ...research.sourceNotes] }, source: input.hasSite ? 'model+site' : 'model', model: choice.model }
 }
 
 /* --------------------------------------------------------------- the source */
@@ -278,10 +333,17 @@ function strip(html: string): string {
 
 /* --------------------------------------------------------------- the record */
 
+export function saveResearch(db: Db, storeId: string, authored: AuthoredResearch, brief: string): ResearchRecord {
+  const recordId = id('res')
+  const createdAt = now()
+  db.insert('store_research', { id: recordId, store_id: storeId, source: authored.source, brief, body: { ...authored.research, model: authored.model }, created_at: createdAt })
+  return { ...authored.research, id: recordId, source: authored.source, model: authored.model, brief, createdAt }
+}
+
 export async function runResearch(
   db: Db,
   storeId: string,
-  input: { prompt: string; siteUrl?: string; imageNote?: string },
+  input: { prompt: string; siteUrl?: string; imageNote?: string; currency?: string; model?: ModelChoice | null },
 ): Promise<ResearchRecord> {
   const brief = readBrief(input.prompt)
   const notes: string[] = []
@@ -292,13 +354,9 @@ export async function runResearch(
     notes.push(...site.notes)
   }
   if (input.imageNote) notes.push(input.imageNote)
-
-  const modelled = await modelResearch(brief, sourceText, notes)
-  const research = modelled ?? rulesResearch(brief, notes)
-  const source: ResearchRecord['source'] = modelled ? (input.siteUrl ? 'model+site' : 'model') : 'rules'
-  const recordId = id('res')
-  db.insert('store_research', { id: recordId, store_id: storeId, source, brief: input.prompt, body: research, created_at: now() })
-  return { ...research, id: recordId, source, brief: input.prompt, createdAt: now() }
+  const choice = input.model === undefined ? modelFor(db, storeId, 'research') : input.model
+  const authored = await authorResearch(choice, brief, { sourceText, notes, ...(input.currency ? { currency: input.currency } : {}), hasSite: Boolean(input.siteUrl && sourceText) })
+  return saveResearch(db, storeId, authored, input.prompt)
 }
 
 export function latestResearch(db: Db, storeId: string): ResearchRecord | null {
@@ -307,7 +365,8 @@ export function latestResearch(db: Db, storeId: string): ResearchRecord | null {
     storeId,
   )
   if (!row) return null
-  return { ...json<Research>(row.body, rulesResearch(readBrief(row.brief))), id: row.id, source: row.source, brief: row.brief, createdAt: row.created_at }
+  const { model = '', ...body } = json<Research & { model?: string }>(row.body, rulesResearch(readBrief(row.brief)))
+  return { ...body, id: row.id, source: row.source, model, brief: row.brief, createdAt: row.created_at }
 }
 
 function capitalize(input: string): string {

@@ -12,6 +12,7 @@ import { latestResearch, rulesResearch, type Research } from './research.ts'
 import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
 import type { Direction } from './directions.ts'
+import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
 
 const log = logger('ads')
 
@@ -238,31 +239,68 @@ export function writeAd(input: AdInput): AdCopy {
 
 /* -------------------------------------------------------------------- model */
 
-async function modelRewriteAd(copy: AdCopy, input: AdInput): Promise<AdCopy> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return copy
+const AD_SCHEMA = S.obj({
+  hooks: S.arr(S.str(), 'Ten first lines, best first. For the "hooks" format these are the whole ad.'),
+  primaryText: S.str('The body copy. Empty for search ads.'),
+  headline: S.str('Within the platform limit.'),
+  description: S.str('Within the platform limit; empty where the platform has none.'),
+  cta: S.str('The button text.'),
+  headlines: S.arr(S.str(), 'Search ads only: up to fifteen headlines of at most 30 characters. Empty otherwise.'),
+  descriptions: S.arr(S.str(), 'Search ads only: up to four descriptions of at most 90 characters. Empty otherwise.'),
+  script: S.arr(S.obj({ beat: S.str('Hook, Problem, Reveal, Demo, Proof, Offer'), seconds: S.str('"0–3"'), line: S.str('What is said.'), visual: S.str('What is on screen.') }), 'Video formats only: six timed beats. Empty otherwise.'),
+  angle: S.str('The angle this ad runs, in a few words.'),
+  notes: S.arr(S.str(), 'One to three notes for the media buyer: creative, audience, what to test.'),
+})
+
+/**
+ * The model writes the ad. It gets the platform limits, the format's shape
+ * (the rules draft shows which fields the format fills), the research, the
+ * avatar, the direction, the real reviews and the swipe file, and writes the
+ * copy fresh. Testimonials only ever quote the approved reviews it is given.
+ */
+async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInput): Promise<AdCopy> {
+  if (!choice) return draft
+  if (input.format.id === 'testimonial' && !draft.primaryText) return draft
+  const limits = PLATFORMS.find((entry) => entry.id === input.platform)
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.AMBORAS_MODEL ?? 'claude-sonnet-4-5',
-        max_tokens: 3000,
-        system: 'You write direct-response ads for ecommerce. Rewrite the text values in the JSON you are given — hooks, primaryText, headline, description, headlines, descriptions, script lines — in the format, platform and direction described. Keep every key and array length. Respect the platform character limits. Never invent reviews, statistics or names. Reply with the JSON object only.',
-        messages: [{ role: 'user', content: `Platform: ${input.platform}\nFormat: ${input.format.name} — ${input.format.description}\nDirection from the merchant: ${input.direction.raw || '(none)'}\nAvatar: ${input.avatar ? JSON.stringify(input.avatar) : '(none)'}\nProduct: ${input.product.title}. ${input.product.subtitle}. ${input.product.description.slice(0, 600)}\nResearch: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections, proofPoints: input.research.proofPoints })}\nInspiration (patterns to learn from, not copy): ${JSON.stringify(input.inspiration.slice(0, 5).map((entry) => ({ hook: entry.hook, angle: entry.angle })))}\n\n${JSON.stringify(copy)}` }],
-      }),
+    const prompt = [
+      `Platform: ${limits?.name ?? input.platform}. Limits: primary text ${limits?.limits.primary || 'none'} characters before truncation, headline ${limits?.limits.headline || 'none'}, description ${limits?.limits.description || 'none'}. ${limits?.note ?? ''}`,
+      `Format: ${input.format.name} — ${input.format.description}${input.format.video ? ' This is a video format: fill the script with six timed beats.' : ''}${input.format.id === 'search' ? ' Fill headlines and descriptions; leave primaryText empty.' : ''}`,
+      `Direction from the owner, verbatim: ${input.direction.raw || '(none)'}\nRead as: tone ${input.direction.tone}; audience ${input.direction.audience || '(unspecified)'}; angle ${input.direction.angle || '(unspecified)'}; must say: ${input.direction.mustSay.join(' / ') || '(nothing)'}`,
+      input.avatar ? `Written to this avatar: ${JSON.stringify({ name: input.avatar.name, who: input.avatar.who, wants: input.avatar.wants, fears: input.avatar.fears, angle: input.avatar.angle, hooks: input.avatar.hooks, objection: input.avatar.objection, answer: input.avatar.answer })}` : 'No avatar; write to the main research persona.',
+      `Product: ${input.product.title}. ${input.product.subtitle}\n${input.product.description.slice(0, 900)}\nPrice from ${money(Math.min(...input.product.variants.map((variant) => variant.priceCents)), input.store.currency)}. Guarantee on the page: ${input.product.content.guarantee || '(none written)'}`,
+      input.bundle?.tiers.some((tier) => tier.discountPercent > 0) ? `Bundle tiers on the product: ${input.bundle.tiers.map((tier) => `${tier.label} (${tier.discountPercent}% off)`).join(', ')}` : 'No bundle on this product.',
+      `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections, proofPoints: input.research.proofPoints, competitors: input.research.competitors, keywords: input.research.keywords })}`,
+      input.reviews.length ? `Approved reviews on file (the only source for any quote; use first names only):\n${JSON.stringify(input.reviews.slice(0, 6))}` : 'No approved reviews on file: do not quote anyone.',
+      input.inspiration.length ? `Swipe file, patterns to learn from and not copy: ${JSON.stringify(input.inspiration.slice(0, 6).map((entry) => ({ hook: entry.hook, angle: entry.angle })))}` : '',
+      `The rules draft below shows which fields this format fills and the shape of each. Write your own copy in those fields; leave the others as they are.\n${JSON.stringify({ hooks: draft.hooks, primaryText: draft.primaryText, headline: draft.headline, description: draft.description, cta: draft.cta, headlines: draft.headlines, descriptions: draft.descriptions, script: draft.script })}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    const parsed = await completeJson<Omit<AdCopy, 'avatar'>>(choice, {
+      task: 'ads',
+      system: 'You write direct-response ads for a dropshipping brand that buys paid social and search traffic. Hooks stop the scroll; the body earns the click; the offer closes. Respect the platform character limits exactly. Never invent reviews, statistics, names or certifications; quote only the reviews you are given, first name only.',
+      prompt,
+      schema: AD_SCHEMA,
+      name: 'ad_copy',
     })
-    if (!response.ok) return copy
-    const payload = (await response.json()) as { content?: Array<{ type: string; text?: string }> }
-    const text = payload.content?.find((block) => block.type === 'text')?.text ?? ''
-    const start = text.indexOf('{')
-    const end = text.lastIndexOf('}')
-    if (start === -1 || end === -1) return copy
-    const parsed = JSON.parse(text.slice(start, end + 1)) as Partial<AdCopy>
-    return { ...copy, ...parsed, notes: copy.notes }
+    const clean = (list: string[] | undefined, max: number) => (list ?? []).map((line) => line.trim()).filter(Boolean).slice(0, max)
+    return {
+      hooks: clean(parsed.hooks, 10).length ? clean(parsed.hooks, 10) : draft.hooks,
+      primaryText: input.format.id === 'search' ? '' : parsed.primaryText?.trim() || draft.primaryText,
+      headline: parsed.headline?.trim() || draft.headline,
+      description: parsed.description?.trim() ?? draft.description,
+      cta: parsed.cta?.trim() || draft.cta,
+      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15).length ? clean(parsed.headlines, 15) : draft.headlines) : [],
+      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4).length ? clean(parsed.descriptions, 4) : draft.descriptions) : [],
+      script: input.format.video ? (parsed.script?.length ? parsed.script.slice(0, 8) : draft.script) : [],
+      angle: parsed.angle?.trim() || draft.angle,
+      avatar: draft.avatar,
+      notes: [...clean(parsed.notes, 3), ...draft.notes.filter((note) => /approved reviews|Tiers come from|No bundle/.test(note))].filter(Boolean),
+    }
   } catch (error) {
-    log.warn(`model ad rewrite unreachable: ${error instanceof Error ? error.message : String(error)}`)
-    return copy
+    log.warn(`${describe(choice)} could not write the ${input.format.name} ad; keeping the rules draft: ${error instanceof Error ? error.message : String(error)}`)
+    return draft
   }
 }
 
@@ -305,7 +343,7 @@ export async function draftAds(db: Db, store: Store, request: DraftRequest): Pro
   for (const formatId of wanted) {
     const format = formatById(formatId)
     const input = { ...probe, format }
-    const body = await modelRewriteAd(writeAd(input), input)
+    const body = await authorAd(modelFor(db, store.id, 'ads'), writeAd(input), input)
     created.push(
       saveAd(db, store.id, {
         productId: product.id,
@@ -329,7 +367,7 @@ export async function reviseAd(db: Db, store: Store, adId: string, direction: st
   const product = getProduct(db, store.id, ad.productId)
   if (!product) throw new Error('The product behind this ad is gone')
   const input = adInput(db, store, product, { direction, avatarId: ad.avatarId, platform: ad.platform, format: formatById(ad.format) })
-  const body = await modelRewriteAd(writeAd(input), input)
+  const body = await authorAd(modelFor(db, store.id, 'ads'), writeAd(input), input)
   return saveAd(db, store.id, { id: ad.id, direction, body })
 }
 
@@ -570,14 +608,14 @@ export async function searchAdLibrary(query: string, opts: { country?: string; l
 }
 
 /** A URL or pasted ad text, read into one inspiration record. Not saved until the merchant keeps it. */
-export async function readInspiration(input: { url?: string; text?: string; brand?: string }, fetcher?: Fetcher): Promise<Inspiration> {
+export async function readInspiration(input: { url?: string; text?: string; brand?: string }, fetcher?: Fetcher, model: ModelChoice | null = null): Promise<Inspiration> {
   if (input.text?.trim()) {
     const lines = input.text.trim().split('\n').map((line) => line.trim()).filter(Boolean)
     const hook = lines[0] ?? ''
     return { id: '', source: 'paste', brand: input.brand ?? '', url: input.url ?? '', hook, primaryText: lines.join('\n'), headline: '', angle: classifyAngle(input.text), format: '', notes: '', startedAt: '', createdAt: '' }
   }
   if (!input.url) throw new Error('Give a URL or paste the ad')
-  const angle = await readCompetitor({ url: input.url }, fetcher)
+  const angle = await readCompetitor({ url: input.url }, fetcher, model)
   return { id: '', source: 'url', brand: input.brand || angle.brand, url: input.url, hook: angle.hooks[0] ?? angle.headline, primaryText: [angle.headline, angle.subheadline, ...angle.benefits.slice(0, 3)].filter(Boolean).join('\n'), headline: angle.headline, angle: angle.angle, format: '', notes: angle.notes.join(' '), startedAt: '', createdAt: '' }
 }
 
