@@ -7,6 +7,7 @@ import { readBrief } from '../agent/copy.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, authorBlocks, formatById, readDirection, writeAdvertorial, writePdp } from '../agent/directions.ts'
 import { modelFor } from '../agent/models.ts'
 import { latestResearch, rulesResearch } from '../agent/research.ts'
+import { latestDoc, type MarketAnalysis } from '../agent/market.ts'
 import { directionFor, getAvatar, listAvatars } from '../agent/avatars.ts'
 import { createPage, getPage, listPages, updatePage, type Page } from './store.ts'
 
@@ -40,10 +41,13 @@ export async function generateVersions(db: Db, store: Store, request: VersionReq
   const catalog = request.kind === 'pdp' ? PDP_FORMATS : ADVERTORIAL_FORMATS
   const wanted = request.formats?.length ? request.formats : suggestFormats(request.kind, direction).slice(0, request.count ?? 3)
   const model = modelFor(db, store.id, 'pages')
+  // The Market tab's analysis, if this store has run one: what the writer needs
+  // to pick an awareness level, a sophistication reset and the mechanism.
+  const market = latestDoc<MarketAnalysis>(db, store.id, 'analysis')?.body ?? null
   const created: Page[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId, request.kind)
-    const input = { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format }
+    const input = { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format, market }
     const drafted = request.kind === 'pdp' ? writePdp(input) : writeAdvertorial(input)
     const { blocks } = await authorBlocks(model, drafted, input)
     created.push(
@@ -97,7 +101,25 @@ export function pickPdpVersion(db: Db, storeId: string, product: Product, sessio
   return live[0] ?? null
 }
 
-export type VersionStats = { pageId: string; title: string; format: string; weight: number; status: string; views: number; carts: number; purchases: number; revenueCents: number; conversion: number }
+export type VersionStats = {
+  pageId: string
+  title: string
+  format: string
+  weight: number
+  status: string
+  views: number
+  carts: number
+  purchases: number
+  revenueCents: number
+  conversion: number
+  /**
+   * AOV × conversion rate. docs/knowledge/offers.md: "Measure revenue per
+   * session, not conversion alone" — $249 × 0.42% loses to $222 × 3.09%, and
+   * a version that converts worse at a higher order value can be the winner.
+   * Funnels were compared on it and page versions were not.
+   */
+  revenuePerSessionCents: number
+}
 
 /**
  * Per-version numbers from the event stream.
@@ -117,7 +139,7 @@ export function versionStats(db: Db, storeId: string, productId: string): Versio
       storeId,
       page.id,
     )
-    const empty = { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0 }
+    const empty = { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0, revenuePerSessionCents: 0 }
     if (!seen.length) return empty
     // One OR-ed pair per session: its id, and the moment it first saw this
     // version. SQLite has no tuple IN, and the alternative is a query per
@@ -135,7 +157,8 @@ export function versionStats(db: Db, storeId: string, productId: string): Versio
       storeId,
       ...params,
     )
-    return { ...empty, views: seen.length, carts, purchases: purchases?.c ?? 0, revenueCents: purchases?.total ?? 0, conversion: seen.length ? (purchases?.c ?? 0) / seen.length : 0 }
+    const revenue = purchases?.total ?? 0
+    return { ...empty, views: seen.length, carts, purchases: purchases?.c ?? 0, revenueCents: revenue, conversion: seen.length ? (purchases?.c ?? 0) / seen.length : 0, revenuePerSessionCents: seen.length ? Math.round(revenue / seen.length) : 0 }
   })
 }
 

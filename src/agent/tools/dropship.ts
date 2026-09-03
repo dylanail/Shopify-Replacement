@@ -54,10 +54,15 @@ export const dropshipTools: Tool[] = defineTools([
     handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const rows = versionStats(ctx.db, ctx.storeId, args.productId as string)
-      const best = [...rows].filter((row) => row.views >= 20).sort((a, b) => b.conversion - a.conversion)[0]
+      // Revenue per session, not conversion: the course is explicit that a page
+      // converting worse at a higher order value can be the winner.
+      const best = [...rows].filter((row) => row.views >= 20).sort((a, b) => b.revenuePerSessionCents - a.revenuePerSessionCents)[0]
+      const currency = store?.currency ?? 'USD'
       return {
-        summary: rows.length ? `${rows.length} versions. ${best ? `${best.format} leads at ${(best.conversion * 100).toFixed(1)}% on ${best.views} views.` : 'Not enough views to call yet.'}` : 'No versions for that product.',
-        artifacts: [{ type: 'table', columns: ['Version', 'Weight', 'Views', 'Carts', 'Sales', 'Revenue', 'CVR'], rows: rows.map((row) => [row.format, String(row.weight), String(row.views), String(row.carts), String(row.purchases), format(row.revenueCents, store?.currency ?? 'USD'), `${(row.conversion * 100).toFixed(1)}%`]) }],
+        summary: rows.length
+          ? `${rows.length} versions. ${best ? `${best.format} leads on ${format(best.revenuePerSessionCents, currency)} per session (${(best.conversion * 100).toFixed(1)}% of ${best.views} views).` : 'Not enough views to call yet.'}`
+          : 'No versions for that product.',
+        artifacts: [{ type: 'table', columns: ['Version', 'Weight', 'Views', 'Carts', 'Sales', 'Revenue', 'CVR', 'Rev / session'], rows: rows.map((row) => [row.format, String(row.weight), String(row.views), String(row.carts), String(row.purchases), format(row.revenueCents, currency), `${(row.conversion * 100).toFixed(1)}%`, format(row.revenuePerSessionCents, currency)]) }],
       }
     },
   },

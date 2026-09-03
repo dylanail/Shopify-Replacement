@@ -222,13 +222,18 @@ function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
   const stats = versionStats(ctx.db, ctx.store.id, product.id)
   const advertorials = versionsFor(ctx.db, ctx.store.id, product.id).filter((page) => page.role === 'advertorial')
   const currency = ctx.store.currency
+  // The leader is the one earning most per visit, and only once there is
+  // enough traffic to mean anything.
+  const best = [...stats].filter((row) => row.views >= 20).sort((a, b) => b.revenuePerSessionCents - a.revenuePerSessionCents)[0]
   return `<div class="card"><h2>Versions &amp; split test</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a visitor is assigned one by their session and sees it every time. Weight 0 keeps it out.</p>
-    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th></th></tr></thead><tbody>
+    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th>Rev / session</th><th></th></tr></thead><tbody>
       ${stats.map((row) => `<tr><td><a href="/admin/pages/${escapeHtml(row.pageId)}/edit">${escapeHtml(row.title.replace(`${product.title} — `, ''))}</a><div class="muted" style="font-size:11px">${escapeHtml(row.format)} · ${row.status}</div></td>
         <td><form method="post" action="/admin/versions/${escapeHtml(row.pageId)}/weight" class="row" style="gap:.3rem"><input name="weight" value="${row.weight}" style="width:52px"><button class="btn" type="submit">Set</button></form></td>
-        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td>${(row.conversion * 100).toFixed(1)}%</td>
-        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
+        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td class="muted">${(row.conversion * 100).toFixed(1)}%</td>
+        <td><strong>${format(row.revenuePerSessionCents, currency)}</strong>${best && row.pageId === best.pageId && best.revenuePerSessionCents > 0 ? ' <span class="tag ok">leading</span>' : ''}</td>
+        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>
+      <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Decided on revenue per session — average order value × conversion — not conversion alone: a page that converts less at a higher order value is the better page. Compare it against your cost per click on the Profit page.</p>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
     ${advertorials.length ? `<p class="muted" style="font-size:12px;margin-top:.6rem">Advertorials: ${advertorials.map((page) => `<a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.format)}</a>`).join(' · ')}</p>` : ''}
     <form method="post" action="/admin/products/${escapeHtml(product.id)}/versions" style="margin-top:1rem;border-top:1px solid var(--line);padding-top:.8rem">
       <div class="eyebrow" style="margin-bottom:.5rem">Generate versions</div>

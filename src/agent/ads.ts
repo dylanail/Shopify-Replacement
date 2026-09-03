@@ -11,7 +11,8 @@ import { readBrief } from './copy.ts'
 import { latestResearch, rulesResearch, type Research } from './research.ts'
 import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
-import type { Direction } from './directions.ts'
+import { marketBrief, type Direction } from './directions.ts'
+import { latestDoc, type MarketAnalysis } from './market.ts'
 import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
 import { knowledge } from './knowledge.ts'
 
@@ -98,6 +99,13 @@ export type AdInput = {
   reviews: Array<{ rating: number; body: string; author: string }>
   bundle: { tiers: Array<{ quantity: number; discountPercent: number; label: string }> } | null
   inspiration: Inspiration[]
+  /**
+   * The Market tab's analysis. The system prompt already loads the
+   * sophistication knowledge and asks for one angle; the store's actual
+   * awareness level, sophistication stage, mechanism and underserved avatar
+   * were written on their own tab and handed to nothing.
+   */
+  market?: MarketAnalysis | null
 }
 
 const CTA: Record<Direction['tone'], string> = {
@@ -272,6 +280,7 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       `Product: ${input.product.title}. ${input.product.subtitle}\n${input.product.description.slice(0, 900)}\nPrice from ${money(Math.min(...input.product.variants.map((variant) => variant.priceCents)), input.store.currency)}. Guarantee on the page: ${input.product.content.guarantee || '(none written)'}`,
       input.bundle?.tiers.some((tier) => tier.discountPercent > 0) ? `Bundle tiers on the product: ${input.bundle.tiers.map((tier) => `${tier.label} (${tier.discountPercent}% off)`).join(', ')}` : 'No bundle on this product.',
       `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections, proofPoints: input.research.proofPoints, competitors: input.research.competitors, keywords: input.research.keywords })}`,
+      marketBrief(input.market),
       input.reviews.length ? `Approved reviews on file (the only source for any quote; use first names only):\n${JSON.stringify(input.reviews.slice(0, 6))}` : 'No approved reviews on file: do not quote anyone.',
       input.inspiration.length ? `Swipe file, patterns to learn from and not copy: ${JSON.stringify(input.inspiration.slice(0, 6).map((entry) => ({ hook: entry.hook, angle: entry.angle })))}` : '',
       `The rules draft below shows which fields this format fills and the shape of each. Write your own copy in those fields; leave the others as they are.\n${JSON.stringify({ hooks: draft.hooks, primaryText: draft.primaryText, headline: draft.headline, description: draft.description, cta: draft.cta, headlines: draft.headlines, descriptions: draft.descriptions, script: draft.script })}`,
@@ -337,7 +346,8 @@ function adInput(db: Db, store: Store, product: Product, request: { direction?: 
   const direction = directionFor(request.direction ?? '', avatar)
   const reviews = listReviews(db, store.id, { productId: product.id, status: 'approved', minRating: 4, limit: 10 })
   const bundle = bundleFor(db, store.id, product.id)
-  return { product, store, research, direction, format: request.format, platform: request.platform, avatar, reviews, bundle, inspiration: listInspiration(db, store.id).slice(0, 8) }
+  const market = latestDoc<MarketAnalysis>(db, store.id, 'analysis')?.body ?? null
+  return { product, store, research, direction, format: request.format, platform: request.platform, avatar, reviews, bundle, inspiration: listInspiration(db, store.id).slice(0, 8), market }
 }
 
 export async function draftAds(db: Db, store: Store, request: DraftRequest): Promise<Ad[]> {

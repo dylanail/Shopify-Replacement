@@ -173,11 +173,11 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
   const knowledge = KNOWLEDGE[brief.category] ?? GENERIC
   const keywords = knowledge.keywords.length
     ? knowledge.keywords
-    : [`handmade ${brief.category}`, `best ${brief.category}`, `${brief.category} ${brief.place.toLowerCase()}`, `${brief.material} ${brief.category}`, `buy ${brief.category} online`]
+    : [`handmade ${brief.category}`, `best ${brief.category}`, ...(brief.place ? [`${brief.category} ${brief.place.toLowerCase()}`] : []), `${brief.material} ${brief.category}`, `buy ${brief.category} online`]
   const [low, mid, high] = knowledge.anchor
   return {
     category: brief.category,
-    positioning: `${capitalize(brief.category)} for ${brief.audience}, made from ${brief.material} in ${brief.place} — priced above the mass market and below the bespoke makers, and easier to buy from than either.`,
+    positioning: `${capitalize(brief.category)} for ${brief.audience}, made from ${brief.material}${brief.place ? ` in ${brief.place}` : ''} — priced above the mass market and below the bespoke makers, and easier to buy from than either.`,
     audience: knowledge.personas.map((persona) => ({ ...persona })),
     triggers: knowledge.triggers,
     objections: knowledge.objections,
@@ -191,10 +191,12 @@ export function rulesResearch(brief: Brief, sourceNotes: string[] = []): Researc
     keywords,
     proofPoints: [
       `${capitalize(brief.material)}, named on the page`,
-      `Made in ${brief.place} in small runs`,
-      'Repaired in-house for the life of the product',
+      // A place of manufacture and a lifetime repair promise are the
+      // merchant's to make, not the scaffolding's. They are here only when the
+      // owner's own sentence said so.
+      ...(brief.place ? [`Made in ${brief.place} in small runs`] : []),
       'Free returns for thirty days',
-      'Built to order; ship date shown before checkout',
+      'Ship date shown before checkout',
     ],
     comparison: {
       us: knowledge.rows.map((row) => row.us),

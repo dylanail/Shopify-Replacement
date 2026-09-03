@@ -782,4 +782,5 @@ test('a split test is decided on this product, after the session saw the version
   assert.equal(after?.carts, 1)
   assert.equal(after?.purchases, 1)
   assert.equal(after?.revenueCents, 4_000, 'and only the order that came after it')
+  assert.equal(after?.revenuePerSessionCents, 4_000, 'and the version carries the number the course decides a test on')
 })
