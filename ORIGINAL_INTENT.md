@@ -481,7 +481,7 @@ The first message of the session, exactly as given.
 
 One shot this platform
 
-## Amboras — Full Product Teardown & Rebuild Blueprint
+### Amboras — Full Product Teardown & Rebuild Blueprint
 
 *Compiled Sept 2, 2026 from amboras.com/what-is-amboras, all 27 linked marketing pages, the 4 page images (transcribed below), the public plugin catalog API (406 entries with manifests), the public plans API, and the site's JS bundle (nav config, route names, API base URL).*
 
