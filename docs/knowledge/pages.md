@@ -54,10 +54,57 @@ comparison, specs, FAQ, shipping and guarantee, the detail, reviews,
 questions → sticky bar. Home: announcement, hero, featured, story,
 collection grid, reviews, newsletter, footer.
 
+Blocks: `rating-strip`, `buy-box` or `bundle-offer`, `trust-badges`,
+`delivery-estimate`, `guarantee`, `multicolumn`, `image-with-text`,
+`how-it-works`, `specs`, `comparison`, `expert-quote`, `review-wall` with
+the star breakdown, `ugc-gallery`, `faq`, `product-qa`, `sticky-cta`.
+
+## The long-form sales page and the science page
+
+The Checkout Champ sales page ("sp") is a product page that keeps going: the
+gallery and one customer's words above the headline, the headline as the
+question the reader is already asking, four check bullets, the ship-by
+date, the first button, the guarantee, the product accordions; then the
+problem in the reader's words, the numbers customers reported with where
+they came from, "instead of" each alternative and what it costs, the
+promise row, the timeline of what to expect, the comparison, the steps, the
+value stack with the total and today's price, the professional who
+reviewed it, the payment marks, the reviews with the star breakdown, the
+offer, the questions, the sticky button.
+
+The science page sells the mechanism: the claim with the rating under it,
+the numbers, what is different, how it works in plain words, the studies
+with journal, year, the finding and the link, what to expect and when, the
+comparison, customers on camera, a note from the designer, the value stack,
+the offer. Nothing on either page is invented: a number has a source, a
+study has a link, a quote has a person.
+
+Blocks: `gallery`, `pull-quote`, `stats`, `cost-comparison`, `timeline`,
+`how-it-works`, `value-stack`, `expert-quote`, `studies`, `video-wall`,
+`letter`, plus the offer-page set.
+
 ## The checkout
 
 Order summary with the bump, express pay first, one form, shipping options,
 trust, guarantee; then the one-click upsell, the downsell, the thank-you.
+
+The funnel checkouts (Checkout Champ, Funnelish, the hosted ones on their own
+subdomain) wrap the same form in more: the logo with a "secure checkout"
+line and a support contact, the steps, a "your cart is reserved for 10:00"
+timer, the product's rating right above the form, the expected arrival
+date, the bundle tiers inside the checkout, the bump pre-checked before
+payment (shipping protection or expedited shipping), the pay button with
+the guarantee under it, then the reasons to finish — the guarantee, three
+reviews, "why choose us", the questions people ask before paying, the
+payment marks. The summary sits beside the form on desktop and collapses to
+one line on a phone.
+
+Blocks: `header`, `checkout-steps`, `countdown`, `rating-strip`,
+`delivery-estimate`, `checkout-form` (with `order-summary` and `order-bump`
+when the summary or the bump is placed on its own), `guarantee`,
+`trust-badges`, `review-wall`, `multicolumn`, `faq`, `payment-icons`,
+`footer`. A published page with the checkout role is the store's
+`/checkout`.
 
 ## Popups
 

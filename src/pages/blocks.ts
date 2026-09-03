@@ -45,12 +45,33 @@ export type BlockContext = {
     questions: Array<{ productId: string; question: string; answer: string; asker: string }>
     sizeCharts: Record<string, string>
   }
+  /**
+   * Present only while the checkout renders. The storefront builds the form,
+   * the summary, the express row and the bump once from the real cart and the
+   * checkout blocks place them; a block page that is not the checkout sees
+   * none of this and the checkout blocks say so instead of rendering nothing.
+   */
+  checkout?: {
+    /** The contact, delivery, shipping and payment form with the pay button. Carries a `<!--bump-->` marker where the order bump goes. */
+    formHtml: string
+    /** Line items, discount code and totals. */
+    summaryHtml: string
+    /** The express wallet row; empty without a payment provider. */
+    expressHtml: string
+    /** The order-bump checkbox; empty when the funnel has none. */
+    bumpHtml: string
+    totalCents: number
+    itemCount: number
+    error?: string
+    /** No real cart: the editor preview, filled with a sample line. */
+    sample: boolean
+  }
 }
 
 export type BlockDefinition = {
   type: string
   name: string
-  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Forms' | 'Advanced'
+  group: 'Layout' | 'Text & media' | 'Commerce' | 'Social proof' | 'Conversion' | 'Advertorial' | 'Checkout' | 'Forms' | 'Advanced'
   icon: string
   description: string
   schema: Schema
@@ -96,6 +117,24 @@ function list(raw: unknown): string[] {
 
 function productFor(context: BlockContext, id: unknown) {
   return context.products.find((product) => product.id === id || product.handle === id) ?? context.products[0] ?? null
+}
+
+/** YouTube and Vimeo become a click-to-load embed; anything else is treated as a video file. */
+function embedFor(url: string): string {
+  const yt = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/.exec(url)?.[1]
+  const vimeo = /vimeo\.com\/(\d+)/.exec(url)?.[1]
+  return yt ? `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1` : vimeo ? `https://player.vimeo.com/video/${vimeo}?autoplay=1` : ''
+}
+
+function videoTile(url: string, poster: string): string {
+  const embed = embedFor(url)
+  if (embed) return `<div class="video" data-embed="${e(embed)}">${poster ? `<img src="${e(poster)}" alt="" loading="lazy">` : ''}<button type="button" class="play" aria-label="Play">▶</button></div>`
+  return url ? `<video class="video" controls preload="none" ${poster ? `poster="${e(poster)}"` : ''} src="${e(url)}"></video>` : '<div class="ph">Add a video URL</div>'
+}
+
+/** An icon cell is an emoji or a glyph; a URL or an upload path becomes an image. */
+function icon(value: string): string {
+  return /^(https?:\/\/|\/)/.test(value.trim()) ? `<img src="${e(value.trim())}" alt="" loading="lazy">` : e(value)
 }
 
 function stars(rating: number): string {
@@ -252,15 +291,7 @@ export const BLOCKS: BlockDefinition[] = [
     description: 'YouTube, Vimeo or an MP4 URL. Loads on click, so it costs nothing until watched.',
     schema: { url: { type: 'string', label: 'Video URL', required: true, default: '' }, poster: { type: 'string', label: 'Poster image URL', default: '' }, caption: { type: 'string', label: 'Caption', default: '' }, ...COMMON },
     render: (settings, _context, block) => {
-      const url = String(settings.url ?? '')
-      const yt = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/.exec(url)?.[1]
-      const vimeo = /vimeo\.com\/(\d+)/.exec(url)?.[1]
-      const embed = yt ? `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1` : vimeo ? `https://player.vimeo.com/video/${vimeo}?autoplay=1` : ''
-      const inner = embed
-        ? `<div class="video" data-embed="${e(embed)}">${settings.poster ? `<img src="${e(settings.poster)}" alt="" loading="lazy">` : ''}<button type="button" class="play" aria-label="Play">▶</button></div>`
-        : url
-          ? `<video class="video" controls preload="none" ${settings.poster ? `poster="${e(settings.poster)}"` : ''} src="${e(url)}"></video>`
-          : '<div class="ph">Add a video URL</div>'
+      const inner = videoTile(String(settings.url ?? ''), String(settings.poster ?? ''))
       return wrap(settings, block, `${inner}${settings.caption ? `<p class="micro">${e(settings.caption)}</p>` : ''}`)
     },
   },
@@ -288,14 +319,14 @@ export const BLOCKS: BlockDefinition[] = [
     name: 'Multicolumn',
     group: 'Text & media',
     icon: '⫼',
-    description: 'Three or four columns of icon, heading and text. Features, benefits, steps.',
+    description: 'Three or four columns of icon, heading and text. Features, benefits, pain points. An image URL in the icon cell becomes a picture.',
     schema: {
       headline: { type: 'string', label: 'Headline', default: '' },
-      columns: { type: 'string', label: 'Columns (icon|title|text per line)', multiline: true, required: true, default: '✦|Made properly|Named materials, one maker, small runs.\n✦|Repaired for life|Post it back; we fix it.\n✦|Free returns|Thirty days, no questions.' },
+      columns: { type: 'string', label: 'Columns (icon or image URL|title|text per line)', multiline: true, required: true, default: '✦|Made properly|Named materials, one maker, small runs.\n✦|Repaired for life|Post it back; we fix it.\n✦|Free returns|Thirty days, no questions.' },
       perRow: { type: 'number', label: 'Per row', integer: true, min: 2, max: 4, default: 3 },
       ...COMMON,
     },
-    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="cols" style="--per:${Number(settings.perRow)}">${list(settings.columns).map((entry) => { const [icon = '', title = '', text = ''] = entry.split('|'); return `<div class="col"><div class="ico">${e(icon)}</div><h3>${e(title)}</h3><p>${e(text)}</p></div>` }).join('')}</div>`),
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="cols" style="--per:${Number(settings.perRow)}">${list(settings.columns).map((entry) => { const [glyph = '', title = '', text = ''] = entry.split('|'); return `<div class="col"><div class="ico">${icon(glyph)}</div><h3>${e(title)}</h3><p>${e(text)}</p></div>` }).join('')}</div>`),
   },
   {
     type: 'button',
@@ -363,8 +394,8 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Commerce',
     icon: '✓',
     description: 'The risk reversal, with a badge.',
-    schema: { days: { type: 'number', label: 'Days', integer: true, min: 1, max: 365, default: 30 }, headline: { type: 'string', default: 'Thirty-day guarantee' }, text: { type: 'string', multiline: true, default: 'If it is not what you hoped, send it back and we refund the lot. We cover the return label.' }, ...COMMON },
-    render: (settings, _context, block) => wrap(settings, block, `<div class="guarantee"><span class="badge">${Number(settings.days)}</span><div><strong>${e(settings.headline)}</strong><p class="micro" style="margin:.2rem 0 0">${e(settings.text)}</p></div></div>`),
+    schema: { days: { type: 'number', label: 'Days', integer: true, min: 1, max: 365, default: 30 }, headline: { type: 'string', default: 'Thirty-day guarantee' }, text: { type: 'string', multiline: true, default: 'If it is not what you hoped, send it back and we refund the lot. We cover the return label.' }, note: { type: 'string', label: 'Line under it (e.g. how few people use it — only if true)', default: '' }, ...COMMON },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="guarantee"><span class="badge">${Number(settings.days)}</span><div><strong>${e(settings.headline)}</strong><p class="micro" style="margin:.2rem 0 0">${e(settings.text)}</p></div></div>${settings.note ? `<p class="micro" style="margin:.6rem 0 0">${e(settings.note)}</p>` : ''}`),
   },
   {
     type: 'comparison',
@@ -392,11 +423,15 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '★',
     description: 'Approved reviews from the catalog, live.',
-    schema: { productId: { type: 'string', label: 'Product (empty for all)', default: '' }, count: { type: 'number', integer: true, min: 1, max: 24, default: 6 }, headline: { type: 'string', default: 'What people say' }, ...COMMON },
+    schema: { productId: { type: 'string', label: 'Product (empty for all)', default: '' }, count: { type: 'number', integer: true, min: 1, max: 24, default: 6 }, headline: { type: 'string', default: 'What people say' }, histogram: { type: 'boolean', label: 'Show the star breakdown', default: false }, ...COMMON },
     render: (settings, context, block) => {
-      const reviews = context.reviews.filter((review) => !settings.productId || review.productId === settings.productId).slice(0, Number(settings.count))
-      const average = reviews.length ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
-      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${reviews.length ? `<div class="rating">${stars(average)} ${average.toFixed(1)} · ${reviews.length} reviews</div>` : ''}<div class="reviews">${reviews.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.5rem 0 .3rem">${e(review.title)}</h3>` : ''}<p style="margin:.4rem 0 0">${e(review.body)}</p><div class="who">${e(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('') || '<p class="micro">No approved reviews yet.</p>'}</div>`)
+      const all = context.reviews.filter((review) => !settings.productId || review.productId === settings.productId)
+      const reviews = all.slice(0, Number(settings.count))
+      const average = all.length ? all.reduce((sum, review) => sum + review.rating, 0) / all.length : 0
+      const histogram = settings.histogram && all.length
+        ? `<div class="histo">${[5, 4, 3, 2, 1].map((star) => { const n = all.filter((review) => Math.round(review.rating) === star).length; return `<div><span>${star}★</span><i><b style="width:${Math.round((n / all.length) * 100)}%"></b></i><span>${Math.round((n / all.length) * 100)}%</span></div>` }).join('')}</div>`
+        : ''
+      return wrap(settings, block, `<div id="reviews"></div>${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${all.length ? `<div class="rating">${stars(average)} ${average.toFixed(1)} · ${all.length} reviews</div>` : ''}${histogram}<div class="reviews">${reviews.map((review) => `<article class="review">${stars(review.rating)}${review.title ? `<h3 style="margin:.5rem 0 .3rem">${e(review.title)}</h3>` : ''}<p style="margin:.4rem 0 0">${e(review.body)}</p><div class="who">${e(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`).join('') || '<p class="micro">No approved reviews yet.</p>'}</div>`)
     },
   },
   {
@@ -528,6 +563,81 @@ export const BLOCKS: BlockDefinition[] = [
     description: 'Share links for the article.',
     schema: { text: { type: 'string', default: 'Share this' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never, padding: { ...(COMMON.padding as object), default: 'small' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="share"><span class="eyebrow">${e(settings.text)}</span><a href="#" data-share="facebook">Facebook</a><a href="#" data-share="x">X</a><a href="#" data-share="copy">Copy link</a></div>`),
+  },
+
+  /* Checkout — the pieces of the one-page checkout, so a checkout can be laid out like any other page */
+  {
+    type: 'checkout-form',
+    name: 'Checkout form',
+    group: 'Checkout',
+    icon: '💳',
+    description: 'The real checkout: express wallets, contact, delivery, shipping method, the order bump, payment and the pay button. With the summary beside it, or on its own so the summary can be placed as a block.',
+    schema: {
+      layout: { type: 'string', label: 'Layout', enum: ['two-column', 'stacked'], default: 'two-column', help: 'Two-column puts the order summary beside the form, the way Shopify does. Stacked leaves it out so an Order summary block can go anywhere.' },
+      summaryHeadline: { type: 'string', label: 'Summary heading', default: 'Your order' },
+      showExpress: { type: 'boolean', label: 'Show express wallets first', default: true },
+      showBump: { type: 'boolean', label: 'Show the order bump before payment', default: true },
+      buttonLabel: { type: 'string', label: 'Pay button', default: 'Complete order' },
+      note: { type: 'string', label: 'Line under the button', default: '🔒 Secure 256-bit encrypted checkout · 30-day money-back guarantee' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'wide' } as never,
+    },
+    render: (settings, context, block) => {
+      const checkout = context.checkout
+      if (!checkout) return wrap(settings, block, '<div class="ph">The checkout form renders here with the visitor\'s cart: contact, delivery, shipping, the bump, payment. Preview this page to see it filled with a sample order.</div>')
+      const total = format(checkout.totalCents, context.currency)
+      const two = settings.layout === 'two-column'
+      const form = checkout.formHtml.replace('<!--bump-->', settings.showBump ? checkout.bumpHtml : '').replace('<!--pay-label-->', e(settings.buttonLabel || 'Pay now'))
+      return wrap(settings, block, `<div class="checkout checkout--blk${two ? '' : ' checkout--stacked'}" data-checkout>
+        <div class="co-main">
+          ${checkout.sample ? '<p class="micro co-sample">Sample order — the editor preview. Visitors see their own cart here.</p>' : ''}
+          ${checkout.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${e(checkout.error)}</div>` : ''}
+          ${two ? `<details class="co-summary-mobile"><summary><span>Show order summary</span><b>${total}</b></summary>${checkout.summaryHtml}</details>` : ''}
+          ${settings.showExpress ? checkout.expressHtml : ''}
+          ${form}
+          ${settings.note ? `<p class="micro center">${e(settings.note)}</p>` : ''}
+        </div>
+        ${two ? `<aside class="co-side">${settings.summaryHeadline ? `<h2 class="co-h">${e(settings.summaryHeadline)}</h2>` : ''}${checkout.summaryHtml}</aside>` : ''}</div>`)
+    },
+  },
+  {
+    type: 'order-summary',
+    name: 'Order summary',
+    group: 'Checkout',
+    icon: '☰',
+    description: 'What is in the order, the discount code and the totals, as its own block. Pair it with a stacked checkout form.',
+    schema: { headline: { type: 'string', label: 'Heading', default: 'Your order' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never, padding: { ...(COMMON.padding as object), default: 'small' } as never },
+    render: (settings, context, block) => {
+      const checkout = context.checkout
+      if (!checkout) return wrap(settings, block, '<div class="ph">The order summary — lines, discount code, totals — renders here on the checkout.</div>')
+      return wrap(settings, block, `<div class="co-summary-blk">${settings.headline ? `<h2 class="co-h">${e(settings.headline)}</h2>` : ''}${checkout.summaryHtml}</div>`)
+    },
+  },
+  {
+    type: 'order-bump',
+    name: 'Order bump',
+    group: 'Checkout',
+    icon: '☑',
+    description: 'The one-checkbox add-on from the funnel (shipping protection by default), placed wherever it converts best. Turn off the bump inside the checkout form if you use this.',
+    schema: { eyebrow: { type: 'string', label: 'Eyebrow', default: 'One-time offer' }, headline: { type: 'string', label: 'Headline', default: 'Wait — add this to your order?' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never, padding: { ...(COMMON.padding as object), default: 'small' } as never },
+    render: (settings, context, block) => {
+      const checkout = context.checkout
+      if (!checkout) return wrap(settings, block, '<div class="ph">The order bump from the funnel renders here on the checkout.</div>')
+      if (!checkout.bumpHtml) return `<!-- data-block="${e(block.id)}" order-bump: the funnel has no bump -->`
+      return wrap(settings, block, `<div class="bump-blk">${settings.eyebrow ? `<div class="eyebrow">${e(settings.eyebrow)}</div>` : ''}${settings.headline ? `<h2 class="co-h">${e(settings.headline)}</h2>` : ''}${checkout.bumpHtml}</div>`)
+    },
+  },
+  {
+    type: 'checkout-steps',
+    name: 'Checkout steps',
+    group: 'Checkout',
+    icon: '①②③',
+    description: '"Cart → Information → Payment", with the current step lit. The progress row every funnel checkout has.',
+    schema: { steps: { type: 'string', label: 'Steps (one per line)', multiline: true, required: true, default: 'Cart\nInformation\nPayment' }, current: { type: 'number', label: 'Current step', integer: true, min: 1, max: 9, default: 2 }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
+    render: (settings, _context, block) => {
+      const current = Number(settings.current)
+      return wrap(settings, block, `<ol class="costeps">${list(settings.steps).map((step, index) => `<li class="${index + 1 < current ? 'done' : index + 1 === current ? 'now' : ''}" ${index + 1 === current ? 'aria-current="step"' : ''}><span>${index + 1 < current ? '✓' : index + 1}</span>${e(step)}</li>`).join('')}</ol>`)
+    },
   },
 
   /* Forms */
@@ -665,6 +775,206 @@ export const BLOCKS: BlockDefinition[] = [
     },
   },
 
+  /* From the reference pages: the parts a Checkout Champ sales page, a GemPages product page and a science page have that the Shopify set does not */
+  {
+    type: 'rating-strip',
+    name: 'Rating line',
+    group: 'Social proof',
+    icon: '★',
+    description: '"Rated 4.8/5 by 1,204 verified buyers" under the headline — from approved reviews only. Shows nothing below the minimum.',
+    schema: {
+      productId: { type: 'string', label: 'Product (empty for all)', default: '' },
+      text: { type: 'string', label: 'Text ({rating} and {count} are filled in)', default: 'Rated {rating}/5 by {count}+ verified buyers' },
+      minimum: { type: 'number', label: 'Hide below this many reviews', integer: true, min: 1, default: 3 },
+      href: { type: 'string', label: 'Link', default: '#reviews' },
+      ...COMMON,
+      padding: { ...(COMMON.padding as object), default: 'none' } as never,
+      align: { ...(COMMON.align as object), default: 'center' } as never,
+    },
+    render: (settings, context, block) => {
+      const reviews = context.reviews.filter((review) => !settings.productId || review.productId === settings.productId)
+      if (reviews.length < Number(settings.minimum)) return `<!-- data-block="${e(block.id)}" rating-strip: ${reviews.length} reviews -->`
+      const average = reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+      const text = String(settings.text).replace('{rating}', average.toFixed(1)).replace('{count}', String(reviews.length))
+      return wrap(settings, block, `<a class="ratingline" href="${e(settings.href || '#reviews')}">${stars(average)} <span>${e(text)}</span></a>`)
+    },
+  },
+  {
+    type: 'stats',
+    name: 'Big numbers',
+    group: 'Social proof',
+    icon: '%',
+    description: 'Survey results, counts, savings: three or four numbers with a caption each, and the line that says where they came from. Only numbers you can stand behind.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: '' },
+      items: { type: 'string', label: 'Numbers (number|caption per line)', multiline: true, required: true, default: '76%|Said their hands felt fresher after a session\n14 days|Until the leather has moulded to your hand\n3 years|Of sparring before a restitch' },
+      source: { type: 'string', label: 'Where the numbers come from', default: '' },
+      perRow: { type: 'number', label: 'Per row', integer: true, min: 2, max: 4, default: 3 },
+      ...COMMON,
+      align: { ...(COMMON.align as object), default: 'center' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="stats" style="--per:${Number(settings.perRow)}">${list(settings.items).map((entry) => { const [number = '', caption = ''] = entry.split('|'); return `<div class="stat"><b>${e(number.trim())}</b><span>${e(caption.trim())}</span></div>` }).join('')}</div>${settings.source ? `<p class="micro">${e(settings.source)}</p>` : ''}`),
+  },
+  {
+    type: 'timeline',
+    name: 'Results timeline',
+    group: 'Text & media',
+    icon: '⟶',
+    description: 'What to expect and when: week 1–2, week 3–4, month 3. Or hour by hour. The block every supplement and relief page has.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'What to expect' },
+      steps: { type: 'string', label: 'Steps (when|title|text per line)', multiline: true, required: true, default: 'Week 1|Break-in|Stiff at first; wrap tight and work the bag.\nWeek 2–3|Moulded|The padding takes the shape of your fist.\nMonth 3+|Settled|Nothing moves. Check the laces monthly.' },
+      note: { type: 'string', label: 'Line under it', default: '' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<ol class="tl">${list(settings.steps).map((entry) => { const [when = '', title = '', text = ''] = entry.split('|'); return `<li><span class="when">${e(when.trim())}</span><div><strong>${e(title.trim())}</strong><p>${e(text.trim())}</p></div></li>` }).join('')}</ol>${settings.note ? `<p class="micro">${e(settings.note)}</p>` : ''}`),
+  },
+  {
+    type: 'how-it-works',
+    name: 'Steps',
+    group: 'Text & media',
+    icon: '①',
+    description: 'Three numbered steps with a picture each: charge it, lay it down, relax. How to use it, how it is made, how to set it up.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'How it works' },
+      steps: { type: 'string', label: 'Steps (title|text|image URL per line)', multiline: true, required: true, default: 'Wrap|Wrap your hands the way you always do.|\nLace|Pull the laces from the wrist up.|\nGo|Twelve rounds, no adjusting.|' },
+      ...COMMON,
+      align: { ...(COMMON.align as object), default: 'center' } as never,
+    },
+    render: (settings, _context, block) => {
+      const steps = list(settings.steps)
+      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="hiw" style="--per:${Math.min(4, Math.max(2, steps.length))}">${steps.map((entry, index) => { const [title = '', text = '', image = ''] = entry.split('|'); return `<div class="hiw-step">${image.trim() ? `<img src="${e(image.trim())}" alt="" loading="lazy">` : ''}<span class="num">${index + 1}</span><h3>${e(title.trim())}</h3><p>${e(text.trim())}</p></div>` }).join('')}</div>`)
+    },
+  },
+  {
+    type: 'value-stack',
+    name: 'Value stack',
+    group: 'Conversion',
+    icon: 'Σ',
+    description: '"Act now and you get": each thing with its value, the total, the price today, the button. The Checkout Champ offer block.',
+    schema: {
+      eyebrow: { type: 'string', label: 'Eyebrow', default: 'Special offer' },
+      headline: { type: 'string', label: 'Headline', default: 'Act now and you get' },
+      items: { type: 'string', label: 'What they get (item|value per line)', multiline: true, required: true, default: 'The gloves, built to order|$340\nRepairs for life|Included\nPriority shipping|$24\nThe wrap-and-lace guide|$19' },
+      totalLabel: { type: 'string', label: 'Total label', default: 'Total value' },
+      total: { type: 'string', label: 'Total', default: '$383' },
+      priceLabel: { type: 'string', label: 'Price label', default: 'Today only' },
+      price: { type: 'string', label: 'Price', default: '$289' },
+      cta: { type: 'string', label: 'Button', default: 'Claim this offer' },
+      href: { type: 'string', label: 'Button link', default: '#offer' },
+      note: { type: 'string', label: 'Line under the button', default: '' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="vstack">${settings.eyebrow ? `<div class="eyebrow">${e(settings.eyebrow)}</div>` : ''}<h2>${e(settings.headline)}</h2><ul>${list(settings.items).map((entry) => { const [item = '', value = ''] = entry.split('|'); return `<li><span>✓ ${e(item.trim())}</span><b>${e(value.trim())}</b></li>` }).join('')}</ul>
+      ${settings.total ? `<div class="vtotal"><span>${e(settings.totalLabel)}</span><s>${e(settings.total)}</s></div>` : ''}${settings.price ? `<div class="vprice"><span>${e(settings.priceLabel)}</span><b>${e(settings.price)}</b></div>` : ''}<p>${button(settings.cta, settings.href, 'wide')}</p>${settings.note ? `<p class="micro">${e(settings.note)}</p>` : ''}</div>`),
+  },
+  {
+    type: 'expert-quote',
+    name: 'Expert quotes',
+    group: 'Social proof',
+    icon: '⚕',
+    description: 'A doctor, a vet, a physio, a coach: photo, quote, name and credentials. Real people who agreed to be quoted, or leave it out.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'Trusted by the people who see hands every day' },
+      quotes: { type: 'string', label: 'Quotes (quote|name|title|image URL per line)', multiline: true, required: true, default: 'The wrist support is the closest to a taped wrist I have seen in a glove.|Marisol Ábrego|Cutman, CDMX|\nI recommend them to every amateur who asks.|Coach Dev Patel|Head coach, Ringside Gym|' },
+      ...COMMON,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="experts">${list(settings.quotes).map((entry) => { const [quote = '', name = '', title = '', image = ''] = entry.split('|'); return `<article class="expert">${image.trim() ? `<img src="${e(image.trim())}" alt="${e(name.trim())}" loading="lazy">` : `<span class="av">${e(name.trim().slice(0, 1))}</span>`}<blockquote>${e(quote.trim())}</blockquote><div class="who"><strong>${e(name.trim())}</strong>${title.trim() ? `<span>${e(title.trim())}</span>` : ''}</div></article>` }).join('')}</div>`),
+  },
+  {
+    type: 'letter',
+    name: 'Founder letter',
+    group: 'Advertorial',
+    icon: '✉',
+    description: 'A letter from the founder or the specialist behind it: photo, headline, the paragraphs, a signature. The block that makes a page a person.',
+    schema: {
+      eyebrow: { type: 'string', label: 'Eyebrow', default: 'A note from the founder' },
+      headline: { type: 'string', label: 'Headline', default: 'Why I made this' },
+      text: { type: 'string', label: 'The letter (a blank line starts a paragraph)', multiline: true, required: true, default: 'I bought four pairs in two years. Each one went soft at the wrist first.\n\nSo we started with the wrist and worked outward.' },
+      image: { type: 'string', label: 'Photo URL', default: '' },
+      name: { type: 'string', label: 'Signed', default: 'The founder' },
+      title: { type: 'string', label: 'Title', default: '' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="letter">${settings.image ? `<img src="${e(settings.image)}" alt="${e(settings.name)}" loading="lazy">` : ''}<div>${settings.eyebrow ? `<div class="eyebrow">${e(settings.eyebrow)}</div>` : ''}<h2>${e(settings.headline)}</h2><div class="prose">${lines(settings.text)}</div><div class="sig"><strong>${e(settings.name)}</strong>${settings.title ? `<span>${e(settings.title)}</span>` : ''}</div></div></div>`),
+  },
+  {
+    type: 'cost-comparison',
+    name: 'Cost of the alternatives',
+    group: 'Commerce',
+    icon: '$',
+    description: '"20x cheaper than the proper fix": what each alternative costs, the running total, and what this costs instead.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'What the alternatives cost' },
+      rows: { type: 'string', label: 'Alternatives (what|cost per line)', multiline: true, required: true, default: 'Three cheap pairs that went soft|$210\nA restitch at the cobbler|$60\nTaping every session for a year|$90' },
+      totalLabel: { type: 'string', label: 'Total label', default: 'Total' },
+      total: { type: 'string', label: 'Total', default: '$360+' },
+      usLabel: { type: 'string', label: 'This instead', default: 'One pair, repaired for life' },
+      us: { type: 'string', label: 'Our price', default: '$289' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="costs">${list(settings.rows).map((entry) => { const [what = '', cost = ''] = entry.split('|'); return `<div><span>${e(what.trim())}</span><b>${e(cost.trim())}</b></div>` }).join('')}${settings.total ? `<div class="total"><span>${e(settings.totalLabel)}</span><b>${e(settings.total)}</b></div>` : ''}${settings.us ? `<div class="us"><span>${e(settings.usLabel)}</span><b>${e(settings.us)}</b></div>` : ''}</div>`),
+  },
+  {
+    type: 'video-wall',
+    name: 'Video reviews',
+    group: 'Social proof',
+    icon: '▶',
+    description: 'A grid of customer videos that load on click. Real customers, labelled as such; a creator brief is not a review.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'Watch unfiltered reviews' },
+      videos: { type: 'string', label: 'Videos (URL|poster URL|caption per line)', multiline: true, required: true, default: '' },
+      perRow: { type: 'number', label: 'Per row', integer: true, min: 2, max: 4, default: 3 },
+      ...COMMON,
+    },
+    render: (settings, _context, block) => {
+      const videos = list(settings.videos)
+      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="vwall" style="--per:${Number(settings.perRow)}">${videos.map((entry) => { const [url = '', poster = '', caption = ''] = entry.split('|'); return `<figure>${videoTile(url.trim(), poster.trim())}${caption.trim() ? `<figcaption class="micro">${e(caption.trim())}</figcaption>` : ''}</figure>` }).join('') || '<div class="ph">Add videos: URL|poster|caption, one per line</div>'}</div>`)
+    },
+  },
+  {
+    type: 'studies',
+    name: 'Research citations',
+    group: 'Advertorial',
+    icon: '§',
+    description: 'The peer-reviewed studies behind the mechanism: journal and year, the finding in plain words, the link. Only papers you have read; a page never invents one.',
+    schema: {
+      eyebrow: { type: 'string', label: 'Eyebrow', default: 'Peer-reviewed evidence' },
+      headline: { type: 'string', label: 'Headline', default: 'The research behind it' },
+      items: { type: 'string', label: 'Studies (journal, year|finding in plain words|URL per line)', multiline: true, required: true, default: 'Journal of Sports Sciences, 2019|Wrist stiffness cut impact load in the small bones by about a third.|https://example.com/study' },
+      disclaimer: { type: 'string', label: 'Disclaimer', multiline: true, default: 'The studies describe the mechanism in general; they did not test this product.' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+    },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.eyebrow ? `<div class="eyebrow">${e(settings.eyebrow)}</div>` : ''}${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<ol class="studies">${list(settings.items).map((entry) => { const [source = '', finding = '', url = ''] = entry.split('|'); return `<li><div class="src">${e(source.trim())}</div><p>${e(finding.trim())}</p>${url.trim() ? `<a href="${e(url.trim())}" rel="noopener" target="_blank">Read the study</a>` : ''}</li>` }).join('')}</ol>${settings.disclaimer ? `<p class="micro">${e(settings.disclaimer)}</p>` : ''}`),
+  },
+  {
+    type: 'gallery',
+    name: 'Product gallery',
+    group: 'Text & media',
+    icon: '▤',
+    description: 'One big image with thumbnails under it, the way a product page opens. Click a thumbnail to swap.',
+    schema: { images: { type: 'string', label: 'Image URLs (one per line)', multiline: true, required: true, default: '' }, alt: { type: 'string', label: 'Alt text', default: '' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never },
+    render: (settings, _context, block) => {
+      const images = list(settings.images)
+      if (!images.length) return wrap(settings, block, '<div class="ph">Add image URLs, one per line</div>')
+      return wrap(settings, block, `<div class="gal" data-gallery><img class="gal-main" src="${e(images[0])}" alt="${e(settings.alt)}" loading="eager">${images.length > 1 ? `<div class="gal-thumbs">${images.map((src, index) => `<button type="button" class="${index ? '' : 'on'}" data-src="${e(src)}" aria-label="Image ${index + 1}"><img src="${e(src)}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}</div>`)
+    },
+  },
+  {
+    type: 'specs',
+    name: 'Specifications',
+    group: 'Commerce',
+    icon: '≡',
+    description: 'Label and value, row by row: size, weight, materials, what is in the box.',
+    schema: { headline: { type: 'string', label: 'Headline', default: 'Specifications' }, rows: { type: 'string', label: 'Rows (label|value per line)', multiline: true, required: true, default: 'Weight|14oz / 16oz\nShell|Full-grain cowhide\nPadding|Layered latex foam\nClosure|Lace-up\nIn the box|Gloves, spare laces, care card' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<dl class="specs">${list(settings.rows).map((entry) => { const [label = '', value = ''] = entry.split('|'); return `<div><dt>${e(label.trim())}</dt><dd>${e(value.trim())}</dd></div>` }).join('')}</dl>`),
+  },
+
   /* Advanced */
   {
     type: 'quiz',
@@ -721,7 +1031,7 @@ export function blockDefinition(type: string): BlockDefinition | null {
 }
 
 export function blockGroups(): Array<{ group: BlockDefinition['group']; blocks: BlockDefinition[] }> {
-  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Forms', 'Advanced']
+  const order: BlockDefinition['group'][] = ['Layout', 'Text & media', 'Commerce', 'Social proof', 'Conversion', 'Advertorial', 'Checkout', 'Forms', 'Advanced']
   return order.map((group) => ({ group, blocks: BLOCKS.filter((block) => block.group === group) }))
 }
 
@@ -786,5 +1096,6 @@ document.querySelectorAll('[data-quiz]').forEach(function(quiz){var steps=quiz.q
   function go(n){steps.forEach(function(s,i){s.hidden=i!==n});if(bar){bar.setAttribute('aria-valuenow',String(n+1));bar.setAttribute('aria-label','Question '+(n+1)+' of '+total);bar.firstElementChild.style.width=Math.round((n+1)/total*100)+'%'}var l=steps[n]&&steps[n].querySelector('legend');l&&l.focus&&(l.tabIndex=-1,l.focus())}
   quiz.querySelectorAll('.qopt').forEach(function(opt){opt.addEventListener('click',function(){var step=opt.closest('.qstep'),n=Number(step.dataset.step);answers.push(opt.dataset.answer);window.__track&&window.__track('quiz.step',{step:n,answer:opt.dataset.answer});
     if(n<total){go(n)}else{steps.forEach(function(s){s.hidden=true});var r=quiz.querySelector('.qresult');r.hidden=false;if(bar)bar.hidden=true;var cta=r.querySelector('[data-quiz-cta]');if(cta&&cta.getAttribute('href')&&cta.getAttribute('href').charAt(0)!=='#'){try{var u=new URL(cta.getAttribute('href'),location.href);u.searchParams.set('quiz',answers.join(','));cta.setAttribute('href',u.pathname+u.search)}catch(e){}}var h=r.querySelector('h2');h&&(h.tabIndex=-1,h.focus());window.__track&&window.__track('quiz.complete',{answers:answers.join(',')})}})});});
+document.querySelectorAll('[data-gallery]').forEach(function(g){var main=g.querySelector('.gal-main'),thumbs=g.querySelectorAll('.gal-thumbs button');thumbs.forEach(function(b){b.addEventListener('click',function(){main.src=b.dataset.src;thumbs.forEach(function(o){o.classList.toggle('on',o===b)})})})});
 document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('[data-total]');function sync(){var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total}form.addEventListener('change',sync);sync()});
 })();`
