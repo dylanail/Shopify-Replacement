@@ -222,5 +222,5 @@ test('a refused tool call is in the audit log, which is what was attempted', asy
   await assert.rejects(() => execute('create_product', { subtitle: 'no title' }, { db, storeId: store.id, actor: { type: 'agent', id: user.id } }), /cannot accept/)
   const rows = listAudit(db, store.id, 50)
   assert.equal(rows.length, before + 2)
-  assert.ok(rows.every((row) => row.action.endsWith('(refused)')))
+  assert.ok(rows.every((row) => String(row.action).endsWith('(refused)')))
 })

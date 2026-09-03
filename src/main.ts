@@ -8,6 +8,7 @@ import { renderSvg } from './agent/images.ts'
 import { readUpload } from './lib/uploads.ts'
 import { recoverRuns, resumeQueuedRuns } from './agent/runtime.ts'
 import { sweepAbandonedCarts } from './email/abandoned.ts'
+import { sweepReviewRequests } from './email/reviews.ts'
 import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
@@ -46,7 +47,11 @@ function resolveStorefront(ctx: Ctx): { store: Store; preview: boolean; rest: st
     if (!store) return null
     return { store, preview, rest: `/${rest.join('/')}` }
   }
-  if (!ROOT_DOMAIN) return null
+  // A custom domain is looked up whether or not a storefront root is
+  // configured. Returning early here meant that on a deployment without
+  // AMBORAS_STOREFRONT_HOST — which is what Railway's own instructions
+  // describe — a verified custom domain got a certificate from /_edge/tls-ask
+  // and then served the admin login page.
   const store = storeForHost(getDb(), ctx.hostname, ROOT_DOMAIN)
   return store ? { store, preview: false, rest: path } : null
 }
@@ -168,6 +173,9 @@ resumeQueuedRuns(db)
 // window the review-app crowd settled on.
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
 setInterval(() => void sweepAbandonedCarts(db, { hours: 4, origin }).catch(() => undefined), 10 * 60_000).unref()
+// And the review request the admin promises a week after delivery, which had
+// no scheduler behind it at all. Hourly is fine for a seven-day delay.
+setInterval(() => void sweepReviewRequests(db).catch(() => undefined), 60 * 60_000).unref()
 server.listen(PORT, () => {
   log.info(`amboras on http://localhost:${PORT}`)
   log.info(ROOT_DOMAIN ? `storefronts on *.${ROOT_DOMAIN}` : 'storefronts on /preview/:slug (set AMBORAS_STOREFRONT_HOST for subdomains)')

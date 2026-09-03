@@ -285,15 +285,21 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       schema: AD_SCHEMA,
       name: 'ad_copy',
     })
-    const clean = (list: string[] | undefined, max: number) => (list ?? []).map((line) => line.trim()).filter(Boolean).slice(0, max)
+    // The rules draft clips to the platform's real limits; the model path only
+    // sliced by count, so a headline over Google's 30 characters or Meta's 40
+    // came back whole and the ad manager rejected the upload. Asking the model
+    // to respect a limit is not the same as respecting it.
+    const platformLimits = PLATFORMS.find((entry) => entry.id === input.platform)?.limits ?? { primary: 125, headline: 40, description: 30 }
+    const clean = (list: string[] | undefined, max: number, chars = 0) =>
+      (list ?? []).map((line) => (chars ? clip(line.trim(), chars) : line.trim())).filter(Boolean).slice(0, max)
     return {
       hooks: clean(parsed.hooks, 10).length ? clean(parsed.hooks, 10) : draft.hooks,
-      primaryText: input.format.id === 'search' ? '' : parsed.primaryText?.trim() || draft.primaryText,
-      headline: parsed.headline?.trim() || draft.headline,
-      description: parsed.description?.trim() ?? draft.description,
+      primaryText: input.format.id === 'search' ? '' : clip(parsed.primaryText?.trim() || draft.primaryText, platformLimits.primary),
+      headline: clip(parsed.headline?.trim() || draft.headline, platformLimits.headline),
+      description: clip(parsed.description?.trim() ?? draft.description, platformLimits.description),
       cta: parsed.cta?.trim() || draft.cta,
-      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15).length ? clean(parsed.headlines, 15) : draft.headlines) : [],
-      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4).length ? clean(parsed.descriptions, 4) : draft.descriptions) : [],
+      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15, 30).length ? clean(parsed.headlines, 15, 30) : draft.headlines) : [],
+      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4, 90).length ? clean(parsed.descriptions, 4, 90) : draft.descriptions) : [],
       script: input.format.video ? (parsed.script?.length ? parsed.script.slice(0, 8) : draft.script) : [],
       angle: parsed.angle?.trim() || draft.angle,
       avatar: draft.avatar,

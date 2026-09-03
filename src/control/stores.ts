@@ -269,7 +269,7 @@ export function storeForHost(db: Db, hostname: string, rootDomain: string): Stor
   const bare = hostname.replace(/^www\./, '')
   const custom = db.one<{ store_id: string }>("SELECT store_id FROM domains WHERE hostname IN (?, ?, ?) AND status = 'verified' AND mode = 'host'", hostname, bare, `www.${bare}`)
   if (custom) return getStore(db, custom.store_id)
-  if (hostname.endsWith(`.${rootDomain}`)) {
+  if (rootDomain && hostname.endsWith(`.${rootDomain}`)) {
     return getStoreBySlug(db, hostname.slice(0, -(rootDomain.length + 1)))
   }
   return null

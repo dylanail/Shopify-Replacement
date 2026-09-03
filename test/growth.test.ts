@@ -16,6 +16,13 @@ import { latestResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { readDirection } from '../src/agent/directions.ts'
 import { generateVersions } from '../src/pages/versions.ts'
+import { sweepReviewRequests } from '../src/email/reviews.ts'
+import { listSends } from '../src/email/send.ts'
+import { TEMPLATES } from '../src/email/templates.ts'
+import { completeCart, markDelivered } from '../src/domain/orders.ts'
+import { addToCart, createCart } from '../src/domain/cart.ts'
+import { createProduct } from '../src/domain/catalog.ts'
+import { seedDefaultRegion } from '../src/domain/regions.ts'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -469,4 +476,33 @@ test('the ad tools run through the executor', async () => {
   const read = await execute('read_competitor_site', { html: COMPETITOR_HTML, url: 'https://fightco.example.com/p', productId: product.id }, ctx)
   assert.match(read.summary, /FightCo runs the urgency angle/)
   await assert.rejects(execute('draft_ads', { productId: product.id, formats: ['nonsense'] }, ctx), /cannot accept/)
+})
+
+test('the review request the admin promises actually goes out, once', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Asks', prompt: 'asks' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 5_000, inventory: 5 }] })
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, product.variants[0]!.id, 1)
+  const order = completeCart(db, store.id, cart.id, { email: 'buyer@example.com' })
+  markDelivered(db, store.id, order.id)
+
+  assert.equal(await sweepReviewRequests(db), 0, 'not before the week is up')
+
+  // Delivered eight days ago.
+  db.run('UPDATE orders SET delivered_at = ? WHERE id = ?', new Date(Date.now() - 8 * 86400000).toISOString(), order.id)
+  assert.equal(await sweepReviewRequests(db), 1)
+  const sends = listSends(db, store.id, 10)
+  assert.ok(sends.some((send) => send.template === 'review_request' && send.recipient === 'buyer@example.com'))
+  const body = db.one<{ html: string }>("SELECT html FROM email_sends WHERE store_id = ? AND template = 'review_request'", store.id)?.html ?? ''
+  assert.match(body, /\/products\/glove#review/, 'and the link is the product\'s real address, not https://<slug>/products/<id>')
+
+  assert.equal(await sweepReviewRequests(db), 0, 'and never twice')
+})
+
+test('a back-in-stock email is not the welcome email wearing a different heading', () => {
+  const template = TEMPLATES.find((entry) => entry.key === 'back_in_stock')
+  assert.ok(template, 'there is a template for it')
+  assert.match(template.subject, /back in stock/i)
+  assert.ok(!/Welcome/i.test(template.subject))
 })

@@ -560,6 +560,15 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE ad_spend ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    name: '013_review_requested',
+    sql: `
+    -- "The review request goes out a week from now" was a sentence in the
+    -- admin and nothing else: there was no scheduler for it. The sweep needs
+    -- somewhere to record that it has asked, once, per order.
+    ALTER TABLE orders ADD COLUMN review_requested_at TEXT;
+    `,
+  },
 ]
 
 function migrate(db: Db) {

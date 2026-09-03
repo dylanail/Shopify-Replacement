@@ -534,7 +534,7 @@ export function adminRouter(): Router {
     const order = recordSupplierOrder(db(), current.store.id, ctx.params.id as string, { supplier: String(body.supplier ?? ''), orderId: String(body.orderId ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), ...(body.tracking ? { tracking: String(body.tracking) } : {}), ...(body.carrier ? { carrier: String(body.carrier) } : {}) })
     if (body.tracking) {
       const shipment = order.fulfillments.at(-1)
-      void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
+      void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, publicUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
     }
     return back(ctx, body.tracking ? 'Saved and marked shipped; the customer has the tracking link.' : 'Supplier order saved.')
   })
@@ -542,7 +542,7 @@ export function adminRouter(): Router {
   router.post('/admin/orders/:id/delivered', (ctx) => {
     const current = session(ctx)
     const order = markDelivered(db(), current.store.id, ctx.params.id as string)
-    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)) }).catch(() => undefined)
+    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, publicUrl(ctx, current.store)) }).catch(() => undefined)
     return back(ctx, 'Marked delivered. The review request goes out a week from now.')
   })
 
@@ -618,7 +618,7 @@ export function adminRouter(): Router {
     for (const alert of alerts) {
       const variant = getVariant(db(), current.store.id, alert.variant_id)
       if (!variant || (variant.inventory <= 0 && !variant.allowBackorder)) continue
-      await sendEmail(db(), current.store.id, { template: 'welcome', to: alert.email, context: { storeUrl: ctx.url.origin + storeUrl(ctx, current.store), heading: 'It is back in stock' } })
+      await sendEmail(db(), current.store.id, { template: 'back_in_stock', to: alert.email, context: { storeUrl: publicUrl(ctx, current.store), product: { title: variant.title } } })
       sent.push(alert.id)
     }
     markStockAlertsNotified(db(), sent)

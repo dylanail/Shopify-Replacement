@@ -11,6 +11,7 @@ import type { LineItem } from '../domain/types.ts'
 import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
 import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
@@ -649,7 +650,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/llms.txt', (ctx) => {
     const current = open(ctx)
     const products = listProducts(current.db, current.store.id, { status: 'published', limit: 50 })
-    return new Raw(llmsTxt(current.store, products), 'text/plain; charset=utf-8')
+    return new Raw(llmsTxt(current.store, products, publicStoreUrl(current.db, current.store)), 'text/plain; charset=utf-8')
   })
 
   router.get('/store/integrations/active', (ctx) => {
