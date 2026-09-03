@@ -60,6 +60,75 @@ git pull && docker compose up -d --build
 
 Migrations run on boot. Interrupted agent runs are recovered on boot.
 
+## Running on Railway
+
+The same image runs on [Railway](https://railway.com) with no Caddy: Railway's
+edge terminates TLS, forwards the scheme in `X-Forwarded-Proto`, and issues
+certificates for whatever domains you attach to the service. `railway.json`
+in the repo tells it to build the `Dockerfile`, poll `/healthz` before
+switching traffic, and restart on failure.
+
+1. **Create the service** from this repo (dashboard: New Project → Deploy from
+   GitHub repo; or `railway init` then `railway up` from a checkout). The
+   first build runs before the variables exist, so it may fail its health
+   check once; that is fine.
+2. **Attach a volume** (right-click the service → Add Volume) mounted at
+   `/app/data`. The sqlite file and every upload live there; without it the
+   database is thrown away on every deploy.
+3. **Set the variables** on the service:
+
+   | Variable | Value |
+   |---|---|
+   | `AMBORAS_SECRET` | a long random string, generated once (`openssl rand -hex 32`) |
+   | `AMBORAS_DB` | `/app/data/amboras.db` |
+   | `PORT` | `4100`, the same port the Dockerfile exposes, so there is no guessing which one the edge targets |
+   | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | the writers; optional, the rules writers stand in without one |
+
+   Leave `AMBORAS_ADMIN_HOST`, `AMBORAS_STOREFRONT_HOST` and
+   `AMBORAS_PUBLIC_ORIGIN` unset to begin with. `AMBORAS_PUBLIC_ORIGIN`
+   defaults to `https://` + the `RAILWAY_PUBLIC_DOMAIN` Railway injects, so
+   emails and ad links carry the right address from the first boot.
+4. **Generate a domain** (Settings → Networking → Generate Domain) or attach
+   your own. Redeploy. Open the URL, register, type one sentence: the store
+   answers at `https://<your-domain>/s/<slug>`.
+
+Optional demo store, once the volume is attached:
+
+```sh
+railway ssh -- node --disable-warning=ExperimentalWarning src/seed.ts
+```
+
+### Subdomains and custom domains on Railway
+
+Without a storefront host, every store is a path under the admin's domain
+(`/s/<slug>`), which is enough to build, test and sell. For one hostname per
+store:
+
+- Attach `admin.yourbrand.com` and the wildcard `*.stores.yourbrand.com` to
+  the service as custom domains (Railway shows the CNAME records to add; a
+  wildcard needs the extra verification record it lists, and must not be
+  proxied through Cloudflare's orange cloud). Then set
+  `AMBORAS_ADMIN_HOST=admin.yourbrand.com`,
+  `AMBORAS_STOREFRONT_HOST=stores.yourbrand.com` and
+  `AMBORAS_PUBLIC_ORIGIN=https://admin.yourbrand.com`, and redeploy.
+- A merchant's own domain (the **host** mode on the Domains page) needs its
+  certificate from Railway, not from the app: add that hostname to the
+  service as another custom domain after the Domains page verifies it. The
+  on-demand issuance that Caddy does through `/_edge/tls-ask` has no
+  equivalent on Railway, so this step is manual, once per domain. **Forward**
+  mode needs nothing on Railway; the registrar serves the redirect.
+- Set `AMBORAS_EDGE_HOST` to the hostname you tell registrars to CNAME to
+  (a name that itself CNAMEs to the Railway service works); leave
+  `AMBORAS_EDGE_IP` empty, Railway does not give a fixed IP.
+
+### Updating on Railway
+
+Every push to the connected branch builds and deploys; the health check
+keeps the old container serving until the new one answers `/healthz`.
+Migrations run on boot against the file in the volume. Backing up is a
+volume snapshot in the dashboard, or copying `/app/data` out over
+`railway ssh`.
+
 ## Running without Docker
 
 `node --version` must be 22.18 or newer.

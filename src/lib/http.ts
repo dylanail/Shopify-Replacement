@@ -123,7 +123,12 @@ export function redirect(location: string, status = 302) { return new Redirect(l
 
 export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Ctx {
   const host = req.headers.host ?? 'localhost'
-  const url = new URL(req.url ?? '/', `http://${host}`)
+  // TLS ends at whatever fronts the process (Caddy, Railway's edge, any load
+  // balancer), so the scheme the visitor used arrives as a header. Without
+  // it every absolute link the admin builds would say http://.
+  const forwarded = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim().toLowerCase()
+  const protocol = forwarded === 'https' ? 'https' : 'http'
+  const url = new URL(req.url ?? '/', `${protocol}://${host}`)
   let cached: Buffer | null = null
   const raw = async () => {
     if (cached) return cached

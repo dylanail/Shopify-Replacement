@@ -30,7 +30,8 @@ npm run reset       # throw the database away and re-seed
 ```
 
 For a server with TLS, storefront subdomains and custom domains, see
-`docs/DEPLOY.md`: one `docker compose up` with Caddy in front.
+`docs/DEPLOY.md`: one `docker compose up` with Caddy in front, or the same
+image on Railway with a volume and the `railway.json` in this repo.
 
 ---
 
