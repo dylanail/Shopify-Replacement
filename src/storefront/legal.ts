@@ -83,6 +83,57 @@ function facts(db: Db, store: Store): Facts {
 const e = escapeHtml
 const paragraphs = (text: string) => text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).map((part) => `<p>${e(part)}</p>`).join('')
 
+/**
+ * Shipping and returns, from how the store is actually configured.
+ *
+ * This was the one built-in policy page still hardcoded: every store served
+ * the demo's fourteen-day build times, a currency-less "Free shipping over
+ * 200" and a joke about boxing gear, from the footer of every page.
+ */
+export function shippingHtml(db: Db, store: Store): string {
+  const legal = legalFor(db, store)
+  const f = facts(db, store)
+  const rates = db.all<{ name: string; amount_cents: number; free_above_cents: number | null; region: string; currency: string }>(
+    `SELECT s.name, s.amount_cents, s.free_above_cents, r.name region, r.currency
+     FROM shipping_options s JOIN regions r ON r.id = s.region_id
+     WHERE r.store_id = ? ORDER BY r.is_default DESC, r.name, s.position`,
+    store.id,
+  )
+  const windows = db
+    .all<{ min: number | null; max: number | null; processing: number | null }>(
+      `SELECT json_extract(supplier, '$.shippingDaysMin') min, json_extract(supplier, '$.shippingDaysMax') max,
+              json_extract(supplier, '$.processingDays') processing
+       FROM products WHERE store_id = ? AND status = 'published'`,
+      store.id,
+    )
+    .filter((row) => row.min !== null && row.max !== null)
+  const lead = windows.length
+    ? (() => {
+        const from = Math.min(...windows.map((row) => (row.processing ?? 0) + (row.min ?? 0)))
+        const to = Math.max(...windows.map((row) => (row.processing ?? 0) + (row.max ?? 0)))
+        return `<p>Orders are prepared and then shipped; most arrive ${from}–${to} days after you order. The estimate on each product page is the one for that product.</p>`
+      })()
+    : '<p>Delivery times are shown on each product page where they are known for that product.</p>'
+  return `
+<p><em>Last updated ${e(legal.updatedAt.slice(0, 10))}.</em></p>
+<h3>What it costs</h3>
+${rates.length
+    ? `<table class="lines">${rates
+        .map(
+          (rate) =>
+            `<tr><td>${e(rate.region)} — ${e(rate.name)}</td><td>${rate.amount_cents ? `${(rate.amount_cents / 100).toFixed(2)} ${e(rate.currency)}` : 'Free'}${rate.free_above_cents ? `, free over ${(rate.free_above_cents / 100).toFixed(0)} ${e(rate.currency)}` : ''}</td></tr>`,
+        )
+        .join('')}</table>`
+    : '<p>Shipping is calculated at checkout.</p>'}
+${f.freeShippingAbove ? `<p>Orders over ${e(f.freeShippingAbove)} ship free.</p>` : ''}
+<h3>How long it takes</h3>
+${lead}
+<h3>Returns</h3>
+<p>You may return an item within ${legal.returnsDays} days of delivery for a refund or exchange, as long as it is in the condition you received it. Where a product page states a ${legal.guaranteeDays}-day money-back guarantee, that guarantee applies as written there.</p>
+${legal.email ? `<p>Start a return by emailing <a href="mailto:${e(legal.email)}">${e(legal.email)}</a>.</p>` : '<p>Start a return through the contact page.</p>'}
+<p class="micro">This page is generated from the store's own shipping rates, delivery windows and returns window, and updates when they change.</p>`
+}
+
 export function privacyHtml(db: Db, store: Store): string {
   const legal = legalFor(db, store)
   const f = facts(db, store)

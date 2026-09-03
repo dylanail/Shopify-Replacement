@@ -440,7 +440,7 @@ test('the storefront product page carries the conversion sections and the sticky
   assert.match(pdp.text, /Why this one/)
   assert.match(pdp.text, /table class="compare"/)
   assert.match(pdp.text, /details class="faq"/)
-  assert.match(pdp.text, /Thirty-day guarantee/)
+  assert.match(pdp.text, /30-day guarantee/, 'the guarantee is the number in the legal card, not a hardcoded thirty')
   assert.match(pdp.text, /id="stickybar"/)
   const hero = /id="pdp-main" src="([^"]+)"/.exec(pdp.text)?.[1]?.replace(/&amp;/g, '&') ?? ''
   assert.match(hero, /ref=%2F_uploads/)

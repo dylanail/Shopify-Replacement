@@ -27,6 +27,20 @@ addEventListener('pagehide',flush);document.addEventListener('visibilitychange',
 
 export const DEFAULT_POPUP: Popup = { enabled: false, trigger: 'exit', after: 20, kind: 'email', headline: 'Before you go', text: 'Leave your email and the offer is yours.', code: '', buttonLabel: 'Send it', href: '#offer', validDays: 7, image: '', dismissDays: 7 }
 
+/**
+ * Where the popup's button goes.
+ *
+ * The email form was prefixed with the store's base path and this link was
+ * not, so on the documented `/s/:slug` setup — and on any deployment where a
+ * store does not own the whole origin — the two kinds of popup that exist
+ * only to send the visitor somewhere both landed on a 404.
+ */
+function popupHref(base: string, href: string | undefined, kind: string): string {
+  const target = href || (kind === 'quiz' ? '/pages/quiz' : '#offer')
+  if (target.startsWith('#') || /^[a-z]+:/i.test(target) || target.startsWith('//')) return target
+  return target.startsWith('/') ? `${base}${target}` : target
+}
+
 /** The popup markup and its runtime. Nothing renders when it is off. */
 export function popupHtml(base: string, popup: Popup | undefined): string {
   if (!popup?.enabled) return ''
@@ -36,7 +50,7 @@ export function popupHtml(base: string, popup: Popup | undefined): string {
     kind === 'email'
       ? `<form method="post" action="${e(base)}/subscribe" class="signup" data-popup-form><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="source" value="popup"><button class="btn" type="submit">${e(popup.buttonLabel || 'Send it')}</button></form>
 <p class="micro" data-popup-done hidden>${popup.code ? `You are in. Your code: <strong>${e(popup.code)}</strong>` : 'You are in.'}</p>${valid}`
-      : `${popup.code ? `<p class="popup-code">Use code <strong>${e(popup.code)}</strong></p>` : ''}<p><a class="btn" href="${e(popup.href || (kind === 'quiz' ? '/pages/quiz' : '#offer'))}" data-popup-go>${e(popup.buttonLabel || (kind === 'quiz' ? 'Take the quiz' : 'Claim it'))}</a></p>${valid}`
+      : `${popup.code ? `<p class="popup-code">Use code <strong>${e(popup.code)}</strong></p>` : ''}<p><a class="btn" href="${e(popupHref(base, popup.href, kind))}" data-popup-go>${e(popup.buttonLabel || (kind === 'quiz' ? 'Take the quiz' : 'Claim it'))}</a></p>${valid}`
   return `<div class="popup" id="popup" hidden role="dialog" aria-modal="true" aria-labelledby="popup-h" data-trigger="${e(popup.trigger)}" data-after="${Number(popup.after) || 0}" data-days="${Number(popup.dismissDays) || 7}" data-kind="${e(kind)}">
 <div class="popup-card">${popup.image ? `<img class="popup-img" src="${e(popup.image)}" alt="" loading="lazy">` : ''}<button type="button" class="popup-x" aria-label="Close">×</button>
 <h2 id="popup-h">${e(popup.headline)}</h2>${popup.text ? `<p>${e(popup.text)}</p>` : ''}

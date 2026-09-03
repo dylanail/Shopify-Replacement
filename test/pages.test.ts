@@ -6,8 +6,10 @@ import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, get
 import { clonePage, extractBlocks } from '../src/pages/clone.ts'
 import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } from '../src/domain/bundles.ts'
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
-import { createStore } from '../src/control/stores.ts'
-import { createProduct, getVariant } from '../src/domain/catalog.ts'
+import { createStore, environment } from '../src/control/stores.ts'
+import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
+import { productPage } from '../src/storefront/render.ts'
+import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
 import { completeCart, recordUpsell } from '../src/domain/orders.ts'
@@ -368,4 +370,32 @@ test('the assistant can build a page and a bundle', async () => {
   assert.match(bundle.summary, /3 tiers/)
   assert.ok(bundleFor(db, store.id, glove.id))
   assert.ok(blockDefinition('bundle-offer'))
+})
+
+test('the buybox promises only what the store has actually configured', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bare', prompt: 'bare' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Serum', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+
+  const render = (item: typeof product) => productPage(view as never, { product: item, stats: statsFor(db, store.id, item.id), reviews: [], companions: [] })
+  const pdp = render(product)
+  assert.ok(!/delivery by/.test(pdp), 'no supplier means no invented shipping date')
+  assert.ok(!/PayPal/.test(pdp), 'the platform does not implement PayPal, so no page claims it')
+  assert.ok(!/VISA/.test(pdp), 'and with no provider connected the store cannot take a card')
+  assert.ok(!/Repaired in-house/.test(pdp), 'the demo store\'s promises are not this store\'s')
+  assert.match(pdp, /Free shipping over \$200\.00/, 'the threshold is the one on the region')
+
+  updateProduct(db, store.id, product.id, { supplier: { processingDays: 1, shippingDaysMin: 3, shippingDaysMax: 5 } })
+  const withSupplier = render(getProduct(db, store.id, product.id)!)
+  assert.match(withSupplier, /delivery by/, 'once the merchant says how long it takes, the estimate is theirs to show')
+})
+
+test('a review left on the storefront waits for the merchant', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Mod', prompt: 'mod' })
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  createReview(db, store.id, { productId: product.id, rating: 1, body: 'unverifiable', author: 'Passer-by', status: 'pending' })
+  assert.equal(statsFor(db, store.id, product.id).count, 0, 'a pending review is in no rating and on no page')
 })

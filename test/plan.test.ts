@@ -526,7 +526,7 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   assert.ok(!offerPopup.includes('<form'), 'the offer kind asks for nothing')
   assert.match(offerPopup, /Valid for 7 days\./)
   const quizPopup = popupHtml('/s/x', { enabled: true, trigger: 'delay', after: 5, kind: 'quiz', headline: 'Find yours', text: '', code: '', buttonLabel: '', dismissDays: 7 })
-  assert.match(quizPopup, /href="\/pages\/quiz"/)
+  assert.match(quizPopup, /href="\/s\/x\/pages\/quiz"/)
   assert.match(quizPopup, /Take the quiz/)
   const emailPopup = popupHtml('/s/x', { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Go', validDays: 3, dismissDays: 7 })
   assert.match(emailPopup, /<form/)

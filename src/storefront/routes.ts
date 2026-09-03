@@ -10,7 +10,7 @@ import { logger } from '../lib/log.ts'
 import type { LineItem } from '../domain/types.ts'
 import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
-import { privacyHtml, termsHtml } from './legal.ts'
+import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
@@ -128,11 +128,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product) throw notFound('No such product')
     const body = await ctx.body()
+    // The button on this form says "Submit for moderation" and createReview
+    // defaults to 'approved' unless a thin heuristic objects — so anyone on
+    // the internet could put a one-star review on a product page and into its
+    // Google aggregateRating, instantly. Anything arriving from the storefront
+    // waits for the merchant, which is what the Reviews tab is for.
     createReview(current.db, current.store.id, {
       productId: product.id,
       rating: Number(body.rating ?? 5),
       body: String(body.body ?? ''),
       author: String(body.author ?? 'Anonymous'),
+      status: 'pending',
     })
     record(ctx, current, 'review.submit', { productId: product.id })
     return redirect(`${current.base}/products/${product.handle}#review`)
@@ -165,8 +171,14 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const related = listProducts(current.db, current.store.id, { status: 'published', limit: 3 })
     if (!number) return html(view.trackPage(current, { related }))
     const order = getOrder(current.db, current.store.id, number)
-    if (!order || (email && order.email !== email) || (!email && !current.preview)) {
-      return html(view.trackPage(current, { error: 'No order matches that number and email.', related }))
+    // A display number is four digits and guessable, so it is only good with
+    // the email on the order. The internal id is not guessable, and it is what
+    // the confirmation page links with — which is why "Track this order" used
+    // to land on "No order matches that number and email" every time.
+    const byOwnId = !!order && order.id === number
+    const wrong = !order || (email ? order.email !== email : !byOwnId && !current.preview)
+    if (wrong) {
+      return html(view.trackPage(current, { error: 'No order matches that number and email.', related, number }))
     }
     return html(view.trackPage(current, { tracking: trackingFor(current.db, current.store.id, order), related }))
   })
@@ -352,9 +364,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       about: `<p>${escapeHtml(current.store.brand.description ?? '')}</p><p>${escapeHtml(current.store.brand.voice ?? '')}</p>`,
       privacy: privacyHtml(current.db, current.store),
       terms: termsHtml(current.db, current.store),
-      shipping:
-        '<p>Everything is built to order. Stock builds ship in fourteen days; custom work takes about three weeks.</p>' +
-        '<p>Free shipping over 200. Returns are free for thirty days as long as the item has not been used in a fight.</p>',
+      shipping: shippingHtml(current.db, current.store),
     }
     if (!copy[slug]) throw notFound('No such page')
     const titles: Record<string, string> = { about: 'About', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }

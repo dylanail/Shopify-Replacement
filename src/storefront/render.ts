@@ -8,13 +8,14 @@ import type { Totals } from '../domain/types.ts'
 import type { Order } from '../domain/types.ts'
 import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/reviews.ts'
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
-import type { Region } from '../domain/regions.ts'
+import { defaultRegion, type Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
 import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
+import { stripeFor } from '../payments/stripe.ts'
 import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
@@ -50,7 +51,7 @@ export function layout(
   const nav = env.theme.nav.length ? env.theme.nav : [{ label: 'Shop', href: '/collections/all' }]
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-${metaTags({ title: page.title, description: page.description, url: page.canonical ?? view.base, ...(page.image ? { image: page.image } : {}) })}
+${metaTags({ title: page.title, description: page.description, url: absolute(view, page.canonical ?? view.base), ...(page.image ? { image: absolute(view, page.image) } : {}) })}
 ${fontLink(brand)}
 <style>${themeCss(brand, env.theme)}${BUNDLE_CSS}${PAGE_CSS}</style>
 ${env.theme.customCss ? `<style data-store-css>${env.theme.customCss.replace(/<\/style/gi, '')}</style>` : ''}
@@ -222,16 +223,17 @@ export function productPage(
     })
     .join('')
 
-  // The build-option cards are the platform's variant/upsell hybrid: the same
-  // product, two ways to buy it, with the difference priced honestly.
+  // There used to be a pair of "build option" radios here — Stock build and
+  // "Custom stitched · Your initials, 21 days" at +13% — rendered outside the
+  // add-to-cart form with no `form=` attribute and read by nothing. A customer
+  // could choose the custom build, press the button and receive the stock
+  // variant at the stock price, with no record that they had asked. It was
+  // also the demo store's copy, offered on every product of every store: a
+  // service and a price the merchant had never agreed to. Real per-product
+  // choices are the variant options rendered above.
   const bundle = bundleFor(view.db, view.store.id, product.id)
   const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.store.currency, { variantPriceCents: cheapest.priceCents }) : ''
-  const buildOptions = bundle ? '' : `<div class="buildopts">
-    <label class="buildopt" data-selected="true"><input type="radio" name="build" value="stock" checked>
-      <span><strong>Stock build</strong><small>Ships in 14 days &middot; ${money(cheapest.priceCents, view)}</small></span></label>
-    <label class="buildopt"><input type="radio" name="build" value="custom">
-      <span><strong>Custom stitched</strong><small>Your initials, 21 days &middot; ${money(Math.round(cheapest.priceCents * 1.13), view)}</small></span></label>
-  </div>`
+  const promises = storePromises(view)
 
   const body = `<div class="wrap pdp">
   <div class="gallery">
@@ -248,18 +250,20 @@ export function productPage(
     <div class="price-row"><div class="price-lg" id="pdp-price">${money(cheapest.priceCents, view)}</div>${cheapest.compareAtCents && cheapest.compareAtCents > cheapest.priceCents ? `<s class="compare-at">${money(cheapest.compareAtCents, view)}</s><span class="off">−${Math.round((1 - cheapest.priceCents / cheapest.compareAtCents) * 100)}%</span>` : ''}</div>
     ${pdpSignals(view, product)}
     ${optionBlocks}
-    ${buildOptions}
     <form method="post" action="${view.base}/cart/add" class="buyform" id="pdp-form">
       <input type="hidden" name="variantId" id="pdp-variant" value="${escapeHtml(cheapest.id)}">
       ${bundleWidget || '<input type="hidden" name="quantity" value="1">'}
       <button class="btn btn--wide" type="submit" id="pdp-cta">Add to cart — <span data-total>${money(cheapest.priceCents, view)}</span></button>
       <button class="btn btn--wide btn--ghost" type="submit" formaction="${view.base}/checkout/buy">Buy it now</button>
     </form>
-    <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? 'In stock and built to order. Free returns for 30 days.' : 'Made to order. Ships in 14 days.')}</p>
+    <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? `In stock. Returns within ${promises.returnsDays} days.` : 'Made to order.')}</p>
     ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
-    <div class="trust">${(content.trust?.length ? content.trust : [product.tags[0] ?? 'Made in small runs', 'Repaired in-house', 'Free shipping over 200']).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>
-    ${content.guarantee ? `<div class="guarantee"><span class="badge">30</span><div><strong>Thirty-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
-    <div class="payicons small"><i>VISA</i><i>MC</i><i>AMEX</i><i>Apple Pay</i><i>Google Pay</i><i>PayPal</i></div>
+    ${(() => {
+      const lines = content.trust?.length ? content.trust : [product.tags[0] ?? '', promises.freeOver, `${promises.returnsDays}-day returns`].filter(Boolean)
+      return lines.length ? `<div class="trust">${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>` : ''
+    })()}
+    ${content.guarantee ? `<div class="guarantee"><span class="badge">${promises.guaranteeDays}</span><div><strong>${promises.guaranteeDays}-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
+    ${promises.payments.length ? `<div class="payicons small">${promises.payments.map((method) => `<i>${escapeHtml(method)}</i>`).join('')}</div>` : ''}
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
     ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
     ${companions.length ? upsellWidget(view, companions) : ''}
@@ -380,10 +384,66 @@ function conversionSections(view: StoreView, product: Product, content: Product[
 }
 
 /** The live signals under the price: delivery window, viewers, stock. All from real data; each hides when it has nothing honest to say. */
+/**
+ * The promises the buybox is allowed to make.
+ *
+ * The trust strip, the in-stock line, the guarantee badge and the payment
+ * icons were all the demo store's copy, printed on every product of every
+ * store: repairs handled in-house, free shipping over 200 with no currency,
+ * free returns for 30 days, and six payment methods including PayPal, which
+ * this platform does not implement at all. Each is now read from the store's
+ * own configuration or left out.
+ */
+/**
+ * A path made absolute, for the tags that require it.
+ *
+ * `og:url` and `og:image` are dropped by every crawler when they are
+ * relative, and this platform exists to sell through paid social: every link
+ * a merchant pastes into Meta Ads or a group chat rendered with no image and
+ * no title. The origin comes from the same precedence the admin uses for a
+ * store's address — a verified custom domain, the storefront subdomain, then
+ * the deployment's public origin — and when none of those is configured the
+ * path is left as it was rather than guessed at.
+ */
+export function absolute(view: StoreView, path: string): string {
+  if (!path || /^[a-z]+:/i.test(path) || path.startsWith('//')) return path
+  const hosted = view.db
+    .all<{ hostname: string }>("SELECT hostname FROM domains WHERE store_id = ? AND status = 'verified' AND mode = 'host' ORDER BY created_at LIMIT 1", view.store.id)
+    .at(0)
+  const root = process.env.AMBORAS_STOREFRONT_HOST
+  const origin = hosted ? `https://${hosted.hostname}` : root ? `https://${view.store.slug}.${root}` : (process.env.AMBORAS_PUBLIC_ORIGIN ?? '')
+  if (!origin) return path
+  return `${origin}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
+function storePromises(view: StoreView): { freeOver: string; returnsDays: number; guaranteeDays: number; payments: string[] } {
+  const legal = legalFor(view.db, view.store)
+  const region = defaultRegion(view.db, view.store.id)
+  const threshold = region?.shipping.find((option) => option.freeAboveCents !== null)?.freeAboveCents ?? null
+  const stripe = Boolean(stripeFor(view.db, view.store.id))
+  return {
+    freeOver: threshold === null ? '' : `Free shipping over ${money(threshold, view)}`,
+    returnsDays: legal.returnsDays,
+    guaranteeDays: legal.guaranteeDays,
+    // Cards go through the connected provider; Apple Pay and Google Pay are
+    // Stripe's Express row on the checkout. With nothing connected the store
+    // cannot take a card at all, so it does not claim to.
+    payments: stripe ? ['VISA', 'MC', 'AMEX', 'Apple Pay', 'Google Pay'] : [],
+  }
+}
+
 function pdpSignals(view: StoreView, product: Product): string {
   const parts: string[] = []
-  const estimate = deliveryEstimate(product.supplier)
-  parts.push(`<div class="edd" data-cutoff="15"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${escapeHtml(estimate.from)} – ${escapeHtml(estimate.to)}</b></div></div>`)
+  // Only when the merchant has actually said how long this product takes.
+  // deliveryEstimate substitutes 2/7/14 days for an empty supplier record, so
+  // every product built by onboarding — which sets no supplier — was printing
+  // a delivery date nobody had promised. The rule for every other widget here
+  // is that it renders nothing when it has nothing honest to say.
+  const supplier = product.supplier
+  if (supplier.shippingDaysMin !== undefined && supplier.shippingDaysMax !== undefined) {
+    const estimate = deliveryEstimate(supplier)
+    parts.push(`<div class="edd" data-cutoff="15"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${escapeHtml(estimate.from)} – ${escapeHtml(estimate.to)}</b></div></div>`)
+  }
   const stock = product.variants.reduce((sum, variant) => sum + Math.max(0, variant.inventory), 0)
   if (stock > 0 && stock <= 15) parts.push(`<div class="scarcity"><div class="meta">Only <b>${stock}</b> left in this batch</div><div class="track"><div class="fill" style="width:${Math.max(6, Math.round((stock / 15) * 100))}%"></div></div></div>`)
   const viewers = view.preview ? 0 : viewersNow(view.db, view.store.id, product.id)
@@ -400,12 +460,12 @@ function qaSection(view: StoreView, product: Product): string {
 
 /* --------------------------------------------------------------- tracking */
 
-export function trackPage(view: StoreView, input: { tracking?: TrackingView | null; error?: string; related?: Product[] }): string {
+export function trackPage(view: StoreView, input: { tracking?: TrackingView | null; error?: string; related?: Product[]; number?: string }): string {
   const { tracking } = input
   const body = `<section class="wrap" style="max-width:min(720px,92vw)">
     <div class="eyebrow">Track your order</div><h2 style="margin:.6rem 0 1rem">Where is it?</h2>
     ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1rem">${escapeHtml(input.error)}</div>` : ''}
-    <form method="get" action="${view.base}/track" class="two" style="margin-bottom:2rem"><div class="field"><label>Order number</label><input name="order" placeholder="1001" required value="${escapeHtml(tracking?.order.displayId ?? '')}"></div><div class="field"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><button class="btn" type="submit" style="grid-column:1/-1">Find my order</button></form>
+    <form method="get" action="${view.base}/track" class="two" style="margin-bottom:2rem"><div class="field"><label>Order number</label><input name="order" placeholder="1001" required value="${escapeHtml(tracking?.order.displayId ?? input.number ?? '')}"></div><div class="field"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><button class="btn" type="submit" style="grid-column:1/-1">Find my order</button></form>
     ${tracking ? `<div class="timeline">${tracking.steps.map((step) => `<div class="step ${step.done ? 'done' : ''}"><i></i><div><strong>${escapeHtml(step.label)}</strong><div class="micro">${step.at ? escapeHtml(step.at.slice(0, 10)) : ''}${step.detail ? ` · ${escapeHtml(step.detail)}` : ''}</div></div></div>`).join('')}</div>
       ${tracking.tracking ? `<p><a class="btn btn--ghost" href="${escapeHtml(tracking.tracking.url)}" target="_blank" rel="noopener">Track with ${escapeHtml(tracking.tracking.carrier)} ↗</a></p>` : tracking.estimate ? `<p class="micro">Estimated delivery ${escapeHtml(tracking.estimate.from)} – ${escapeHtml(tracking.estimate.to)}. You will get the tracking number the moment it ships.</p>` : ''}
       <table class="lines" style="margin-top:1.4rem">${tracking.order.items.map((item) => `<tr><td style="width:64px"><img src="${escapeHtml(item.image)}" alt=""></td><td>${escapeHtml(item.title)}<div class="micro">${escapeHtml(item.variantTitle)} × ${item.quantity}</div></td></tr>`).join('')}</table>` : ''}
@@ -509,8 +569,15 @@ export function cartPage(view: StoreView, totals: Totals): string {
       )
       .join('')}</table>
     <div>
-      ${gap !== null && gap > 0 ? `<div class="notice" style="margin-bottom:1rem"><div class="gap"><span>${money(gap, view)} to free shipping</span></div>
-        <div class="gap" style="margin-top:.5rem"><span class="track"><span class="fill" style="width:${Math.min(100, (1 - gap / 20000) * 100)}%"></span></span></div></div>` : ''}
+      ${gap !== null && gap > 0 ? (() => {
+        // The threshold is subtotal + gap. Dividing by a literal 20000 was the
+        // seed's own $200: on a $75 threshold the bar read nearly full at
+        // two-thirds, and on a $300 one it emitted a negative width.
+        const threshold = (totals?.subtotalCents ?? 0) + gap
+        const filled = threshold > 0 ? Math.max(0, Math.min(100, ((threshold - gap) / threshold) * 100)) : 0
+        return `<div class="notice" style="margin-bottom:1rem"><div class="gap"><span>${money(gap, view)} to free shipping</span></div>
+        <div class="gap" style="margin-top:.5rem"><span class="track"><span class="fill" style="width:${filled.toFixed(1)}%"></span></span></div></div>`
+      })() : ''}
       <form method="post" action="${view.base}/cart/code" style="display:flex;gap:.5rem;margin-bottom:1.2rem">
         <input name="code" placeholder="Discount code" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code">
         <button class="btn btn--ghost" type="submit">Apply</button></form>
@@ -764,7 +831,7 @@ export function orderPage(view: StoreView, order: Order, related: Product[] = []
       ${order.discountCents ? `<div><span>Discount${order.discountCode ? ` (${escapeHtml(order.discountCode)})` : ''}</span><span>-${format(order.discountCents, order.currency)}</span></div>` : ''}
       <div><span>Shipping</span><span>${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</span></div>
       <div class="grand"><span>Total</span><span>${format(order.totalCents, order.currency)}</span></div></div>
-    <p style="margin-top:2rem" class="row"><a class="btn btn--ghost" href="${view.base}/track?order=${order.displayId}">Track this order</a> <a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
+    <p style="margin-top:2rem" class="row"><a class="btn btn--ghost" href="${view.base}/track?order=${escapeHtml(order.id)}">Track this order</a> <a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
     ${related.length ? `<div class="section-head" style="margin-top:3rem"><h2>Goes with your order</h2></div><div class="grid">${related.map((product) => productCard(view, product)).join('')}</div>` : ''}
     ${renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents, currency: order.currency }, { preview: view.preview })}
   </section>`
