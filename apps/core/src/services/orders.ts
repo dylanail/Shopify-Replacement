@@ -171,6 +171,12 @@ export async function completeReturn(deps: AppDeps, storeId: string, returnId: s
   return done!;
 }
 
+export async function updateOrder(deps: AppDeps, storeId: string, orderId: string, patch: { tags?: string[]; notes?: string; metadata?: Record<string, unknown> }) {
+  const o = await getOrder(deps, storeId, orderId);
+  await deps.db.update(orders).set({ ...(patch.tags ? { tags: patch.tags } : {}), ...(patch.notes !== undefined ? { notes: patch.notes } : {}), ...(patch.metadata ? { metadata: { ...o.metadata, ...patch.metadata } } : {}) }).where(eq(orders.id, o.id));
+  return getOrder(deps, storeId, o.id);
+}
+
 export async function orderStats(deps: AppDeps, storeId: string) {
   const [row] = await deps.db.select({ total: count(), revenue: sum(orders.totalCents), unfulfilled: count(sql`case when ${orders.fulfillmentStatus} = 'unfulfilled' and ${orders.status} <> 'cancelled' then 1 end`) }).from(orders).where(eq(orders.storeId, storeId));
   return { total: Number(row?.total ?? 0), revenueCents: Number(row?.revenue ?? 0), unfulfilled: Number(row?.unfulfilled ?? 0) };

@@ -38,7 +38,7 @@ Store-scoped routes live under `/stores/:storeId/…` and require org ownership 
 `/stores/:id/products` (GET list · POST), `/products/stats`, `/products/:pid` (GET · PATCH · DELETE), `/products/:pid/inventory`, `/products/:pid/images` (4 lanes, presets), `/collections` (+ `/:cid`), `/import` (CSV, `dryRun`), `/import/jobs`.
 
 ## Commerce
-`/orders` (list, `/stats`, `/:oid`, `/:oid/fulfill|cancel|refund|returns`), `/returns/:rid/complete`, `/fulfillments/:fid/delivered`, `/customers` (list, `/segments`, `/:cid`, `/:cid/subscriptions`), `/promotions`, `/gift-cards`, `/regions`, `/shipping-options`, `/subscriptions` (+ `/:sid/pause|resume|cancel|change_cadence`, `/process-due`), `/merch` (+ `/rebuild-affinity`).
+`/orders` (list, `/stats`, `/:oid` GET · PATCH tags/notes, `/:oid/fulfill|cancel|refund|returns`), `/returns/:rid/complete`, `/fulfillments/:fid/delivered`, `/customers` (list, `/segments`, `/:cid`, `/:cid/subscriptions`), `/promotions`, `/gift-cards`, `/regions`, `/shipping-options`, `/subscriptions` (+ `/:sid/pause|resume|cancel|change_cadence`, `/process-due`), `/merch` (+ `/rebuild-affinity`).
 
 ## Growth
 `/analytics/summary|timeseries|funnel|realtime|top-products|cohorts`, `/reviews` (+ `/:rid/approve|reject|restore|delete|reply`, `/summary/:pid`, `/stats/:pid`), `/questions` (+ `/:qid/answer`), `/emails/templates` (+ `/:key`, `/:key/preview`, `/:key/test`), `/emails/log`, `/emails/flows/:key`, `/emails/campaigns` (+ `/draft`, `/:cid`, `/:cid/send`), `/blogs`, `/articles`, `/seo` (+ `/scan`, `/keywords`, `/redirects`, `/redirects/bulk`, `/validate/:pid`), `/geo` (+ `/knowledge-card`, `/prompts`, `/check`, `/preview`), `/experiments` (+ `/suggest`, `/:eid/running|killed|promoted|draft`), `/workflows`.

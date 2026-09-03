@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppDeps } from "../context.js";
 import { parseBody, parseQuery, Pagination } from "../lib/http.js";
 import { requireUser, requireStore, type AuthVars } from "../lib/auth.js";
-import { listOrders, getOrder, fulfillOrder, markDelivered, cancelOrder, refundOrder, createReturn, completeReturn, orderStats } from "../services/orders.js";
+import { listOrders, getOrder, updateOrder, fulfillOrder, markDelivered, cancelOrder, refundOrder, createReturn, completeReturn, orderStats } from "../services/orders.js";
 import { listCustomers, getCustomer, upsertCustomer, deleteCustomer, customerSegments, CustomerInput } from "../services/customers.js";
 import { createPromotion, updatePromotion, listPromotions, deletePromotion, PromotionInput } from "../services/promotions.js";
 import { listRegions, createRegion, updateRegion, deleteRegion, listShippingOptions, createShippingOption, updateShippingOption, deleteShippingOption, RegionInput, ShippingOptionInput, COUNTRY_CATALOG } from "../services/shipping.js";
@@ -20,6 +20,7 @@ export function commerceRoutes(deps: AppDeps) {
   r.get("/orders", async (c) => c.json(await listOrders(deps, sid(c), parseQuery(c, Pagination.extend({ customerId: z.string().optional(), financial: z.string().optional(), fulfillment: z.string().optional() })))));
   r.get("/orders/stats", async (c) => c.json(await orderStats(deps, sid(c))));
   r.get("/orders/:id", async (c) => c.json(await getOrder(deps, sid(c), c.req.param("id"))));
+  r.patch("/orders/:id", async (c) => c.json(await updateOrder(deps, sid(c), c.req.param("id"), await parseBody(c, z.object({ tags: z.array(z.string()).optional(), notes: z.string().optional(), metadata: z.record(z.string(), z.unknown()).optional() })))));
   r.post("/orders/:id/fulfill", async (c) => c.json(await fulfillOrder(deps, sid(c), c.req.param("id"), await parseBody(c, z.object({ items: z.array(z.object({ variantId: z.string(), quantity: z.number().int().positive() })).optional(), provider: z.string().optional(), trackingNumber: z.string().optional(), trackingUrl: z.string().optional(), labelUrl: z.string().optional() })))));
   r.post("/orders/:id/cancel", async (c) => c.json(await cancelOrder(deps, sid(c), c.req.param("id"), (await parseBody(c, z.object({ reason: z.string().default("") }))).reason, c.get("userId"))));
   r.post("/orders/:id/refund", async (c) => { const b = await parseBody(c, z.object({ amountCents: z.number().int().positive().optional(), reason: z.string().default("") })); return c.json(await refundOrder(deps, sid(c), c.req.param("id"), b.amountCents, b.reason, c.get("userId"))); });

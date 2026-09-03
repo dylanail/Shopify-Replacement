@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, agentRuns, chatSessions, chatMessages, stores } from "@kiln/db";
+import { and, eq, desc, agentRuns, chatSessions, chatMessages, stores } from "@kiln/db";
 import { runAgent, anthropicProvider, offlineProvider, routeModel, type ProviderMessage, type RunState, type Provider } from "@kiln/agent";
 import type { AgentEvent } from "@kiln/shared";
 import type { AppDeps } from "../context.js";
@@ -113,9 +113,11 @@ export async function cancelRun(deps: AppDeps, storeId: string, runId: string) {
 export async function listSessions(deps: AppDeps, storeId: string) {
   return deps.db.select().from(chatSessions).where(eq(chatSessions.storeId, storeId)).orderBy(desc(chatSessions.updatedAt)).limit(50);
 }
+/** Newest `limit` messages before the cursor (a message id), returned oldest → newest for rendering. */
 export async function listMessages(deps: AppDeps, storeId: string, sessionId: string, before?: string, limit = 50) {
-  const rows = await deps.db.select().from(chatMessages).where(and(eq(chatMessages.sessionId, sessionId), eq(chatMessages.storeId, storeId), before ? desc(chatMessages.id) && eq(chatMessages.id, before) : undefined)).orderBy(asc(chatMessages.createdAt)).limit(limit);
-  return rows;
+  const { lt } = await import("@kiln/db");
+  const rows = await deps.db.select().from(chatMessages).where(and(eq(chatMessages.sessionId, sessionId), eq(chatMessages.storeId, storeId), before ? lt(chatMessages.id, before) : undefined)).orderBy(desc(chatMessages.id)).limit(limit);
+  return rows.reverse();
 }
 export async function listRuns(deps: AppDeps, storeId: string, limit = 20) {
   return deps.db.select().from(agentRuns).where(eq(agentRuns.storeId, storeId)).orderBy(desc(agentRuns.createdAt)).limit(limit);

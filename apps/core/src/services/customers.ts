@@ -49,10 +49,16 @@ export function segmentOf(c: { ordersCount: number; totalSpentCents: number; las
 
 export async function listCustomers(deps: AppDeps, storeId: string, q: PaginationQ & { segment?: string; marketing?: string }) {
   const where = and(eq(customers.storeId, storeId), q.q ? or(ilike(customers.email, `%${q.q}%`), ilike(customers.firstName, `%${q.q}%`), ilike(customers.lastName, `%${q.q}%`)) : undefined, q.marketing === "true" ? eq(customers.acceptsMarketing, true) : undefined);
+  const order = q.sort === "spent" ? desc(customers.totalSpentCents) : desc(customers.createdAt);
+  if (q.segment) {
+    // Segments are derived, so filter in memory over the (bounded) matching set before paginating.
+    const all = await deps.db.select().from(customers).where(where).orderBy(order).limit(5000);
+    const matched = all.map((c) => ({ ...c, passwordHash: undefined, segment: segmentOf(c) })).filter((c) => c.segment === q.segment);
+    return { items: matched.slice(offsetOf(q), offsetOf(q) + q.pageSize), total: matched.length, page: q.page, pageSize: q.pageSize };
+  }
   const [{ total }] = await deps.db.select({ total: count() }).from(customers).where(where);
-  const rows = await deps.db.select().from(customers).where(where).orderBy(q.sort === "spent" ? desc(customers.totalSpentCents) : desc(customers.createdAt)).limit(q.pageSize).offset(offsetOf(q));
-  const items = rows.map((c) => ({ ...c, passwordHash: undefined, segment: segmentOf(c) })).filter((c) => !q.segment || c.segment === q.segment);
-  return { items, total: Number(total), page: q.page, pageSize: q.pageSize };
+  const rows = await deps.db.select().from(customers).where(where).orderBy(order).limit(q.pageSize).offset(offsetOf(q));
+  return { items: rows.map((c) => ({ ...c, passwordHash: undefined, segment: segmentOf(c) })), total: Number(total), page: q.page, pageSize: q.pageSize };
 }
 
 export async function customerSegments(deps: AppDeps, storeId: string) {
