@@ -4,7 +4,7 @@ import type { Db } from '../lib/db.ts'
 import type { Store } from '../control/stores.ts'
 import { environment } from '../control/stores.ts'
 import { listProducts } from '../domain/catalog.ts'
-import { buildProgress, MODES, QUESTIONS, type BuildState } from '../control/build.ts'
+import { buildProgress, DOORS, MODES, pagePlan, QUESTIONS, SHAPES, type BuildState } from '../control/build.ts'
 import { avatarTree, listAvatars } from '../agent/avatars.ts'
 import { latestResearch } from '../agent/research.ts'
 import { latestDoc, listDocs, type AdPlan, type Loop, type MarketAnalysis, type ProductOverview } from '../agent/market.ts'
@@ -48,10 +48,41 @@ export function buildPage(ctx: Ctx): string {
         <td style="width:14rem"><span class="tag ${step.status === 'done' ? 'ok' : step.status === 'next' ? 'warn' : ''}">${step.status}</span> <span class="muted" style="font-size:11.5px">${e(step.why)}</span></td>
         <td style="width:6rem;text-align:right"><form method="post" action="/admin/build/skip"><input type="hidden" name="key" value="${e(step.key)}"><input type="hidden" name="skipped" value="${step.status === 'skipped' ? 'false' : 'true'}"><button class="btn" type="submit" style="font-size:11px">${step.status === 'skipped' ? 'Unskip' : 'Skip'}</button></form></td></tr>`).join('')}</tbody></table></div>`
     : ''
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Build</h1><p class="muted" style="margin:.25rem 0 0">Three ways to build a store, each with its own order of work. Pick one; every step links to where it happens and reads its status from the store itself.</p></div></div>
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Build</h1><p class="muted" style="margin:.25rem 0 0">Three ways to build, each with its own order of work; two shapes the result can take. Pick both; every step links to where it happens and reads its status from the store itself.</p></div></div>
   ${picker}
   <div style="margin-top:1rem">${steps}</div>
+  <div class="grid2" style="margin-top:1rem"><div>${shapeCard(ctx, state)}</div><div>${pagePlanCard(ctx)}</div></div>
   ${answersCard(state)}`
+}
+
+/** Store or funnel, what stands in front of it, and whether there is a popup. */
+export function shapeCard(ctx: Ctx, state: BuildState): string {
+  return `<div class="card" id="shape"><h2>The shape</h2>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">The reference stores come in two shapes. A Shopify-style store sells from product pages with navigation around them; a funnel sells one product from one long page into a checkout with a bump and an upsell. Either can have an advertorial or a quiz in front of it, where the ad lands.</p>
+    <form method="post" action="/admin/build/shape">
+      ${SHAPES.map((shape) => `<label class="row" style="align-items:flex-start;gap:.6rem;padding:.5rem 0;border-top:1px solid var(--line)"><input type="radio" name="shape" value="${shape.id}" ${state.shape === shape.id ? 'checked' : ''} style="margin-top:.25rem"><span><strong>${e(shape.name)}</strong><br><span class="muted" style="font-size:12px">${e(shape.description)}</span><br><span class="muted" style="font-size:11.5px">${e(shape.pages)}</span></span></label>`).join('')}
+      <div class="eyebrow" style="margin:.8rem 0 .3rem">In front of it</div>
+      ${DOORS.map((door) => `<label class="row" style="align-items:flex-start;gap:.6rem;padding:.3rem 0"><input type="checkbox" name="doors" value="${door.id}" ${state.doors.includes(door.id) ? 'checked' : ''} style="margin-top:.25rem"><span><strong>${e(door.name)}</strong> <span class="muted" style="font-size:12px">${e(door.description)}</span></span></label>`).join('')}
+      <div class="eyebrow" style="margin:.8rem 0 .3rem">Popup</div>
+      <div class="row" style="gap:1rem;font-size:12.5px"><label class="row" style="gap:.3rem"><input type="radio" name="popup" value="yes" ${state.popup === 'yes' ? 'checked' : ''}> Yes, one popup</label><label class="row" style="gap:.3rem"><input type="radio" name="popup" value="no" ${state.popup === 'no' ? 'checked' : ''}> No popup</label><label class="row" style="gap:.3rem"><input type="radio" name="popup" value="" ${state.popup === '' ? 'checked' : ''}> Decide later</label></div>
+      <button class="btn primary" type="submit" style="margin-top:.8rem">Save the shape</button></form></div>`
+}
+
+/** Every page the shape needs, with its status read from the store and a way to make each missing one. */
+export function pagePlanCard(ctx: Ctx): string {
+  const plan = pagePlan(ctx.db, ctx.store.id)
+  if (!plan.shape) return `<div class="card" id="pages"><h2>Page plan</h2><p class="muted" style="font-size:12.5px">Choose the shape and the pages it needs are listed here, each with a status and a template.</p></div>`
+  const product = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 1 })[0]
+  const make = (entry: (typeof plan.pages)[number]) => {
+    if (entry.status === 'done') return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.builtIn && !entry.template ? 'Open' : 'Edit'}</a>`
+    if (entry.template && !entry.builtIn) return `<form method="post" action="/admin/pages/new"><input type="hidden" name="template" value="${entry.template}"><input type="hidden" name="productId" value="${e(product?.id ?? '')}"><button class="btn primary" type="submit" style="font-size:11px">Create from template</button></form>`
+    return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.status === 'missing' ? 'Set it up' : 'Open'}</a>`
+  }
+  return `<div class="card" id="pages" style="padding:0"><div style="padding:1rem 1.1rem"><h2 style="margin:0">Page plan</h2><p class="muted" style="font-size:12px;margin:.3rem 0 0">${plan.shape === 'store' ? 'A Shopify-style store' : 'A funnel'}${plan.doors.length ? ` with ${plan.doors.map((door) => DOORS.find((entry) => entry.id === door)?.name.toLowerCase() ?? door).join(' and ')} in front` : ''}. Statuses come from what exists.</p></div>
+    <table class="data"><tbody>${plan.pages.map((entry) => `<tr>
+      <td><strong>${e(entry.label)}</strong>${entry.optional ? ' <span class="muted" style="font-size:11px">optional</span>' : ''}<div class="muted" style="font-size:11.5px">${e(entry.detail)}</div></td>
+      <td style="width:12rem"><span class="tag ${entry.status === 'done' ? 'ok' : entry.status === 'missing' ? (entry.optional ? '' : 'warn') : ''}">${entry.status}</span> <span class="muted" style="font-size:11.5px">${e(entry.why)}</span></td>
+      <td style="width:9rem;text-align:right">${make(entry)}</td></tr>`).join('')}</tbody></table></div>`
 }
 
 export function answersCard(state: BuildState): string {

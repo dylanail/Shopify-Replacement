@@ -5,7 +5,7 @@ import { fresh } from './helpers.ts'
 import { createStore, environment, setTheme } from '../src/control/stores.ts'
 import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
-import { answersForPrompt, buildProgress, buildState, MODES, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, skipStep } from '../src/control/build.ts'
+import { answersForPrompt, buildProgress, buildState, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, setSiteShape, SHAPES, skipStep } from '../src/control/build.ts'
 import { knowledge, calendarMonth, TOPIC_NAMES } from '../src/agent/knowledge.ts'
 import { authorResearch, runResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
@@ -22,7 +22,7 @@ import { auditHtml, auditStore, contrast } from '../src/storefront/health.ts'
 import { privacyHtml, saveLegal, termsHtml } from '../src/storefront/legal.ts'
 import { popupHtml, trackingScript } from '../src/storefront/behaviour.ts'
 import { renderBlock, blockDefinition, type BlockContext } from '../src/pages/blocks.ts'
-import { offerTemplate, quizTemplate } from '../src/pages/store.ts'
+import { advertorialTemplate, createPage, offerTemplate, quizTemplate } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
@@ -103,21 +103,23 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   setBuildMode(db, store.id, 'own-product')
   let progress = buildProgress(db, store.id)
   assert.equal(progress.mode?.id, 'own-product')
-  assert.equal(progress.steps[0]?.key, 'images')
-  assert.equal(progress.steps[0]?.status, 'next', 'no product has an image yet')
+  assert.equal(progress.steps[0]?.key, 'shape')
+  assert.equal(progress.steps[0]?.status, 'done', 'a product of one\'s own defaults to a store until the owner says otherwise')
+  assert.equal(progress.steps[1]?.key, 'images')
+  assert.equal(progress.steps[1]?.status, 'next', 'no product has an image yet')
   assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
 
-  // An image on the product completes the first step without anyone ticking anything.
+  // An image on the product completes the step without anyone ticking anything.
   const { updateProduct } = require_catalog()
   updateProduct(db, store.id, product.id, { heroImage: '/_uploads/x.png' })
   progress = buildProgress(db, store.id)
-  assert.equal(progress.steps[0]?.status, 'done')
-  assert.equal(progress.steps[1]?.status, 'next')
+  assert.equal(progress.steps[1]?.status, 'done')
+  assert.equal(progress.steps[2]?.status, 'next')
 
   skipStep(db, store.id, 'reference')
   progress = buildProgress(db, store.id)
-  assert.equal(progress.steps[1]?.status, 'skipped')
-  assert.equal(progress.steps[2]?.status, 'next', 'skipping moves next along')
+  assert.equal(progress.steps[2]?.status, 'skipped')
+  assert.equal(progress.steps[3]?.status, 'next', 'skipping moves next along')
 
   const state = saveAnswers(db, store.id, { who: { value: 'People who work nights and sleep at noon' }, instinct: { unknown: true }, tried: { value: '' } })
   assert.equal(state.answers.who?.unknown, false)
@@ -132,6 +134,63 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   assert.equal(MODES.length, 3)
   assert.equal(QUESTIONS.length, 8)
   for (const mode of MODES) assert.ok(mode.steps.every((step) => step.href.startsWith('/')), `${mode.id} steps link somewhere`)
+  for (const mode of MODES) assert.ok(mode.steps.some((step) => step.key === 'shape') && mode.steps.some((step) => step.key === 'pages'), `${mode.id} decides the shape and builds its pages`)
+})
+
+test('the shape decides the page plan, and every page on it reads its status from the store', () => {
+  const { db, store, product } = shop()
+  assert.equal(SHAPES.length, 2)
+  assert.equal(DOORS.length, 2)
+  assert.equal(pagePlan(db, store.id).pages.length, 0, 'no shape, no plan')
+
+  // Copying a funnel implies a funnel; a store is a click away.
+  setBuildMode(db, store.id, 'copy-funnel')
+  assert.equal(buildState(db, store.id).shape, 'funnel')
+  let plan = pagePlan(db, store.id)
+  const keys = plan.pages.map((entry) => entry.key)
+  assert.deepEqual(keys, ['sales', 'bundle', 'checkout', 'upsell', 'thankyou', 'popup', 'legal'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'missing')
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.template, 'sales')
+  assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'missing', 'no funnel record yet')
+  assert.equal(plan.pages.find((entry) => entry.key === 'thankyou')?.status, 'built-in')
+
+  // The sales page is found by what it is, not by a checkbox: a landing page with a buy box counts.
+  const sales = createPage(db, store.id, { title: 'Save today', kind: 'landing', blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }) })
+  const funnel = upsertFunnel(db, store.id, { name: 'Main', productId: product.id, offerPageId: sales.id, upsell: { variantId: product.variants[0]?.id, discountPercent: 20 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.href, `/pages/${sales.id}/edit`, 'an existing page links to its editor')
+  assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'upsell')?.status, 'done')
+  assert.ok(funnel.id)
+
+  // Front doors go in front, in the order chosen; the popup decision adds or removes its row.
+  setSiteShape(db, store.id, { doors: ['quiz', 'advertorial', 'nonsense'], popup: 'yes' })
+  plan = pagePlan(db, store.id)
+  assert.deepEqual(plan.doors, ['quiz', 'advertorial'], 'unknown doors are dropped')
+  assert.deepEqual(plan.pages.slice(0, 2).map((entry) => entry.key), ['quiz', 'advertorial'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'missing')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'missing', 'chosen but not on')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.optional, false)
+  createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
+  createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
+  setTheme(db, store.id, { popup: { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Send', dismissDays: 7 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'done', 'a page with a quiz block is the quiz')
+  assert.equal(plan.pages.find((entry) => entry.key === 'advertorial')?.status, 'done')
+  assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'done')
+  setSiteShape(db, store.id, { popup: 'no' })
+  assert.ok(!pagePlan(db, store.id).pages.some((entry) => entry.key === 'popup'), 'no popup means no popup row')
+
+  // A store has other pages, and the pages step reads the plan.
+  setSiteShape(db, store.id, { shape: 'store', doors: [] })
+  plan = pagePlan(db, store.id)
+  assert.deepEqual(plan.pages.map((entry) => entry.key), ['home', 'collection', 'pdp', 'bundle', 'checkout', 'legal'])
+  assert.equal(plan.pages.find((entry) => entry.key === 'pdp')?.status, 'missing', 'the product has no image yet')
+  const progress = buildProgress(db, store.id)
+  assert.equal(progress.steps.find((step) => step.key === 'shape')?.status, 'done')
+  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Missing: Product page, Bundle tiers/)
+  assert.throws(() => setSiteShape(db, store.id, { shape: 'catalogue' }), /No such shape/)
 })
 
 function require_catalog() {

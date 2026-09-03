@@ -1,5 +1,5 @@
 import { getStore } from '../../control/stores.ts'
-import { buildProgress, MODES, QUESTIONS, saveAnswers, setBuildMode, type BuildMode } from '../../control/build.ts'
+import { buildProgress, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, SHAPES, type BuildMode } from '../../control/build.ts'
 import { getProduct } from '../../domain/catalog.ts'
 import { latestResearch } from '../research.ts'
 import { getAvatar, listAvatars } from '../avatars.ts'
@@ -24,10 +24,16 @@ export const planTools: Tool[] = defineTools([
       const progress = buildProgress(ctx.db, ctx.storeId)
       if (!progress.mode) return { summary: `No build mode is set. The modes are: ${MODES.map((mode) => `${mode.name} (${mode.id})`).join('; ')}.`, artifacts: [{ type: 'link', href: '/admin/build', label: 'Pick a build mode' }] }
       const next = progress.steps.find((step) => step.status === 'next')
+      const plan = pagePlan(ctx.db, ctx.storeId, progress.state)
+      const missing = plan.pages.filter((entry) => entry.status === 'missing')
       return {
-        summary: `${progress.mode.name}: ${progress.steps.filter((step) => step.status === 'done').length} of ${progress.steps.length} steps done.${next ? ` Next: ${next.label} — ${next.detail}` : ' Every step is done or skipped.'}`,
-        data: progress,
-        artifacts: [{ type: 'table', columns: ['Step', 'Status', 'Why'], rows: progress.steps.map((step) => [step.label, step.status, step.why]) }, ...(next ? [{ type: 'link' as const, href: `/admin${next.href}`, label: `Go to: ${next.label}` }] : [])],
+        summary: `${progress.mode.name}: ${progress.steps.filter((step) => step.status === 'done').length} of ${progress.steps.length} steps done.${next ? ` Next: ${next.label} — ${next.detail}` : ' Every step is done or skipped.'}${plan.shape ? ` Shape: ${plan.shape}${plan.doors.length ? ` with ${plan.doors.join(' and ')} in front` : ''}; ${missing.length ? `pages still missing: ${missing.map((entry) => entry.label).join(', ')}.` : 'every page the shape needs exists.'}` : ' No shape chosen yet (store or funnel).'}`,
+        data: { ...progress, plan },
+        artifacts: [
+          { type: 'table', columns: ['Step', 'Status', 'Why'], rows: progress.steps.map((step) => [step.label, step.status, step.why]) },
+          ...(plan.pages.length ? [{ type: 'table' as const, columns: ['Page', 'Status', 'Why'], rows: plan.pages.map((entry) => [entry.label, entry.status, entry.why]) }] : []),
+          ...(next ? [{ type: 'link' as const, href: `/admin${next.href}`, label: `Go to: ${next.label}` }] : []),
+        ],
       }
     },
   },
@@ -40,6 +46,25 @@ export const planTools: Tool[] = defineTools([
       const state = setBuildMode(ctx.db, ctx.storeId, args.mode as BuildMode)
       const mode = MODES.find((entry) => entry.id === state.mode)
       return { summary: `Building as "${mode?.name}". ${mode?.steps.length} steps, starting with: ${mode?.steps[0]?.label}.`, artifacts: [{ type: 'link', href: '/admin/build', label: 'Open the build plan' }] }
+    },
+  },
+  {
+    name: 'set_site_shape',
+    area: 'store',
+    description: 'Choose the shape of the site (a Shopify-style store or a funnel), what stands in front of it (an advertorial, a quiz, both or neither) and whether it gets a popup. The page plan follows from this.',
+    schema: {
+      shape: { type: 'string', enum: SHAPES.map((shape) => shape.id), help: 'store: home, collections, product pages, cart, checkout. funnel: one sales page into a checkout with a bump, an upsell and a downsell.' },
+      doors: { type: 'array', of: { type: 'string', enum: DOORS.map((door) => door.id) }, help: 'Where the ad lands before the product: advertorial, quiz, or leave empty for the ad to land on the product page or sales page itself.' },
+      popup: { type: 'string', enum: ['yes', 'no', ''], help: 'yes for one popup (exit, delay or scroll), no for none, empty to decide later.' },
+    },
+    handler(args, ctx) {
+      const state = setSiteShape(ctx.db, ctx.storeId, { ...(args.shape !== undefined ? { shape: args.shape as string } : {}), ...(args.doors !== undefined ? { doors: args.doors as string[] } : {}), ...(args.popup !== undefined ? { popup: args.popup as string } : {}) })
+      const plan = pagePlan(ctx.db, ctx.storeId, state)
+      return {
+        summary: `Shape: ${state.shape || 'undecided'}${state.doors.length ? ` with ${state.doors.join(' and ')} in front` : ''}${state.popup ? `, popup ${state.popup}` : ''}. Pages: ${plan.pages.map((entry) => `${entry.label} (${entry.status})`).join(', ')}.`,
+        data: plan,
+        artifacts: [{ type: 'link', href: '/admin/build#pages', label: 'Open the page plan' }],
+      }
     },
   },
   {

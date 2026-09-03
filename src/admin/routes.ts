@@ -38,7 +38,7 @@ import * as pages from './pages.ts'
 import { shell } from './shell.ts'
 import { authPage, onboardingPage } from './auth-pages.ts'
 import * as plan from './plan-pages.ts'
-import { modeById, QUESTIONS, saveAnswers, setBuildMode, skipStep, type BuildMode } from '../control/build.ts'
+import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
 import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
 import { deleteQueueItem, getQueueItem, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
@@ -920,6 +920,18 @@ export function adminRouter(): Router {
     if (!mode) return back(ctx, '!No such build mode.')
     setBuildMode(db(), current.store.id, mode.id)
     return back(ctx, `Building as "${mode.name}". First step: ${mode.steps[0]?.label}.`)
+  })
+
+  router.post('/admin/build/shape', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const doors = Array.isArray(body.doors) ? body.doors.map(String) : body.doors ? [String(body.doors)] : []
+    try {
+      const state = setSiteShape(db(), current.store.id, { ...(body.shape ? { shape: String(body.shape) } : {}), doors, popup: String(body.popup ?? '') })
+      return back(ctx, `Shape saved: ${state.shape || 'undecided'}${state.doors.length ? ` with ${state.doors.join(' and ')} in front` : ''}. The page plan is below.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : String(error)}`)
+    }
   })
 
   router.post('/admin/build/answers', async (ctx) => {
