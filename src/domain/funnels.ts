@@ -1,5 +1,6 @@
 import { json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { createHash } from 'node:crypto'
 import { createProduct, getProduct, listProducts } from './catalog.ts'
 import type { Product } from './types.ts'
 
@@ -28,6 +29,9 @@ export type Funnel = {
   downsell: Offer
   thankyou: { headline?: string; showRelated?: boolean; showTracking?: boolean }
   status: 'active' | 'paused'
+  /** Funnels in the same group split the traffic that arrives at /go/:group by weight. */
+  testGroup: string
+  weight: number
   createdAt: string
   updatedAt: string
 }
@@ -45,6 +49,8 @@ function rowToFunnel(row: Row): Funnel {
     downsell: json(row.downsell, {}),
     thankyou: json(row.thankyou, {}),
     status: row.status as Funnel['status'],
+    testGroup: (row.test_group as string) ?? '',
+    weight: (row.weight as number) ?? 0,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -82,6 +88,8 @@ export function upsertFunnel(db: Db, storeId: string, input: Partial<Omit<Funnel
     downsell: { ...(existing?.downsell ?? {}), ...(input.downsell ?? {}) },
     thankyou: { showRelated: true, showTracking: true, ...(existing?.thankyou ?? {}), ...(input.thankyou ?? {}) },
     status: input.status ?? existing?.status ?? 'active',
+    test_group: input.testGroup ?? existing?.testGroup ?? '',
+    weight: Math.max(0, Math.round(input.weight ?? existing?.weight ?? 0)),
     updated_at: timestamp,
   }
   if (existing) {
@@ -167,4 +175,58 @@ export function resolveOffer(db: Db, storeId: string, offer: Offer | undefined, 
     headline: offer?.headline ?? `Add ${product.title} to this order for ${discount}% off?`,
     text: offer?.text ?? product.subtitle ?? product.description.split('. ')[0] ?? '',
   }
+}
+
+/* --------------------------------------------------------------- split tests */
+
+/**
+ * A funnel split test. Every funnel in a group with a weight above zero is in
+ * it; a visitor arriving at /go/:group is assigned one by a hash of their
+ * session and the group, so they see the same funnel every time, and the
+ * entry is an event so each funnel's sessions can be followed to the cart
+ * and the order.
+ */
+export function pickFunnel(db: Db, storeId: string, group: string, sessionKey: string): Funnel | null {
+  const live = listFunnels(db, storeId).filter((funnel) => funnel.testGroup === group && funnel.status === 'active' && funnel.weight > 0)
+  if (!live.length) return null
+  const total = live.reduce((sum, funnel) => sum + funnel.weight, 0)
+  const hash = parseInt(createHash('sha256').update(`${sessionKey}|${group}`).digest('hex').slice(0, 8), 16)
+  let point = hash % total
+  for (const funnel of live) {
+    point -= funnel.weight
+    if (point < 0) return funnel
+  }
+  return live[0] ?? null
+}
+
+export function funnelGroups(db: Db, storeId: string): string[] {
+  return [...new Set(listFunnels(db, storeId).map((funnel) => funnel.testGroup).filter(Boolean))]
+}
+
+export type FunnelStats = { funnelId: string; name: string; weight: number; sessions: number; carts: number; purchases: number; revenueCents: number; revenuePerSessionCents: number }
+
+/** Per-funnel numbers from the sessions that entered it. Decided on revenue per session, not conversion alone. */
+export function funnelStats(db: Db, storeId: string, group: string): FunnelStats[] {
+  return listFunnels(db, storeId)
+    .filter((funnel) => funnel.testGroup === group)
+    .map((funnel) => {
+      const sessions = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND type = 'funnel.enter' AND json_extract(meta, '$.funnelId') = ?", storeId, funnel.id).map((row) => row.session_id)
+      if (!sessions.length) return { funnelId: funnel.id, name: funnel.name, weight: funnel.weight, sessions: 0, carts: 0, purchases: 0, revenueCents: 0, revenuePerSessionCents: 0 }
+      const marks = sessions.map(() => '?').join(', ')
+      const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${marks})`, storeId, ...sessions)?.c ?? 0
+      const bought = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${marks})`, storeId, ...sessions)
+      const revenue = bought?.total ?? 0
+      return { funnelId: funnel.id, name: funnel.name, weight: funnel.weight, sessions: sessions.length, carts, purchases: bought?.c ?? 0, revenueCents: revenue, revenuePerSessionCents: Math.round(revenue / sessions.length) }
+    })
+}
+
+/** Where a funnel starts: its advertorial if it has one, else its offer page, else the product. */
+export function funnelEntry(db: Db, storeId: string, funnel: Funnel): string {
+  const page = (pageId: string) => (pageId ? db.one<{ handle: string }>('SELECT handle FROM pages WHERE store_id = ? AND id = ?', storeId, pageId)?.handle : undefined)
+  const advertorial = page(funnel.advertorialPageId)
+  if (advertorial) return `/pages/${advertorial}`
+  const offer = page(funnel.offerPageId)
+  if (offer) return `/pages/${offer}`
+  const product = funnel.productId ? db.one<{ handle: string }>('SELECT handle FROM products WHERE store_id = ? AND id = ?', storeId, funnel.productId)?.handle : undefined
+  return product ? `/products/${product}` : '/'
 }

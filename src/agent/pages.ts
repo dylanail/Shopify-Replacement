@@ -3,6 +3,7 @@ import { logger } from '../lib/log.ts'
 import { readBrief, type Brief } from './copy.ts'
 import type { Research } from './research.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 
 const log = logger('pages')
 
@@ -135,7 +136,7 @@ export async function authorProductContent(
       .join('\n\n')
     const parsed = await completeJson<Required<ProductContent>>(choice, {
       task: 'pages',
-      system: 'You write high-converting product pages for a direct-to-consumer dropshipping store. Every section is grounded in the customer research and the product facts you are given. Never invent statistics, reviews, certifications, materials or a place of manufacture.',
+      system: `You write high-converting product pages for a direct-to-consumer dropshipping store. Every section is grounded in the customer research and the product facts you are given. Never invent statistics, reviews, certifications, materials or a place of manufacture. Benefits say what the product does for the buyer, at a sixth-grade reading level; the comparison shows the mechanism.\n\n${knowledge('pages', 'product', 'offers', 'honesty')}`,
       prompt,
       schema: CONTENT_SCHEMA,
       name: 'product_page',

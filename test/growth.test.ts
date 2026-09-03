@@ -379,7 +379,7 @@ test('every ad format writes for every platform, and the testimonial format refu
 })
 
 test('the avatar and the direction shape the copy', () => {
-  const avatar = { id: 'a', name: 'The coach', who: 'Runs a gym', wants: 'Gear that survives shared use', fears: 'A brand that vanishes', buysWhen: 'Kitting out members', share: 0.2, angle: 'gear that survives shared use', hooks: ['Your club gloves are done by March.'], tone: 'blunt' as const, objection: 'They cost three times what my gym sells.', answer: 'They outlast three of those pairs.', source: 'manual' as const, selected: true, createdAt: '', updatedAt: '' }
+  const avatar = { id: 'a', name: 'The coach', who: 'Runs a gym', wants: 'Gear that survives shared use', fears: 'A brand that vanishes', buysWhen: 'Kitting out members', share: 0.2, angle: 'gear that survives shared use', hooks: ['Your club gloves are done by March.'], tone: 'blunt' as const, objection: 'They cost three times what my gym sells.', answer: 'They outlast three of those pairs.', source: 'manual' as const, selected: true, parentId: '', desire: '', experience: '', emotion: '', behaviour: '', demographic: '', label: '', tier: '' as const, createdAt: '', updatedAt: '' }
   const copy = writeAd(adInput({ avatar, direction: directionFor('', avatar) }))
   assert.equal(copy.hooks[0], 'Your club gloves are done by March.', 'the avatar\'s hook leads')
   assert.equal(copy.cta, 'Buy it', 'blunt tone → blunt CTA')

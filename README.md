@@ -59,11 +59,15 @@ says on every page and every record when it is looking at rules output.
 | | |
 |---|---|
 | **Stores hub** | every store you own with 30-day numbers; "+ New store" runs onboarding again |
+| **Build** | three ways to build a store (bring your own product, copy a funnel, copy a funnel with a new angle), each with its own order of work; step statuses are read from what exists, not ticked; eight buyer questions where "I don't know" is an answer that research fills in and labels as assumed |
+| **Market** | the market analysis (awareness, sophistication, desires ranked, the searches to run, competitors, mechanisms, new information, underserved avatars, whether there is a way to stand out at all), the product overview, core avatars with sub-avatars, the ad plan (concept → angle → variations → format → method) and feedback loops, all saved under the store |
+| **Creative** | eight photo briefs checked against each product's media; creator-content concepts for a real person to film, vetted in a queue and never published as reviews; a dependency-free GIF maker over the product's PNG renders; a layout suggester that picks blocks from the catalog for an offer page, advertorial, quiz, product page or home |
 | **Research & avatars** | the research record; avatars suggested from it (who, wants, fears, angle, hooks, tone, first objection), editable and selectable; competitor pages read into editable angle records that fold into the research or become a direction |
 | **Products** | options, variants, swatches, media, SEO, supplier cost and margin, size chart, import from any Shopify `/products/x.json` or Open Graph page, structured page content, image re-shoots from a sentence with GPT Image 2 or Gemini 3 Pro Image |
-| **Pages & builder** | 52 blocks (Shopify sections, Funnelish elements, advertorial parts) in a drag-and-drop editor with live preview, HTML mode, and a cloner that pulls a reference URL in with its styles and images |
+| **Pages & builder** | 53 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls a reference URL in with its styles and images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
+| **Templates** | offer page in the order that turned 1.18x into 3.59x, advertorial listicle, quiz funnel, product landing page |
 | **Versions** | PDP versions and advertorials in named formats with free-form direction, split-tested by session with per-version views, carts, sales and conversion |
-| **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you |
+| **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you; funnels in the same test group split traffic at `/go/<group>` by weight and are compared on revenue per session |
 | **Bundles** | Kaching-style tiers enforced by a promotion the cart reads |
 | **Checkout** | one page, express row, buy-it-now, Stripe Payment Element with saved cards for the post-purchase offer, demo orders without keys |
 | **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, delivery estimates, ad-spend log, profit report with ROAS |
@@ -71,14 +75,32 @@ says on every page and every record when it is looking at rules output.
 | **Domains** | host here or forward from the registrar, with the records and menu path for Namecheap, GoDaddy, Cloudflare, Squarespace, Porkbun; real DNS and redirect checks; certificates issued on demand by the edge once a name verifies |
 | **Conversion widgets** | recent sales, live viewers, scarcity, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, Q&A, back-in-stock, announcements, compare-at badges, abandoned-cart email, GA4/Meta/TikTok events; each renders nothing when it has nothing honest to say |
 | **Commerce core** | products, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping |
-| **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog, pages, sitemap, robots, JSON-LD, `llms.txt` |
+| **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
+| **Site health** | renders the pages as a visitor gets them and checks landmarks, alt text, labels, headings, button names, contrast, weight on the wire, scripts, fonts and lazy loading |
 | **Plugins** | manifest schema, settings validation, sealed credentials, storefront slots, plugin-contributed tools; eleven first-party integrations installable, the rest a directory |
-| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity; ten transactional templates over Resend; meta, structured data, redirects, sitemap |
+| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); ten transactional templates over Resend; meta, structured data, redirects, sitemap |
 
-`test/http.test.ts` walks the whole product over HTTP with no mocks, and
-`test/models.test.ts` walks the model path against a fake network: research,
+`test/http.test.ts` walks the whole product over HTTP with no mocks,
+`test/models.test.ts` walks the model path against a fake network (research,
 the brand kit, onboarding, avatars, competitor reading and the planner, with
-the exact requests the SDKs send checked.
+the exact requests the SDKs send checked), and `test/plan.test.ts` covers
+the build flow, the market documents, the funnel rip, the creative queue,
+the GIF encoder, the health audit, the legal pages, the popup, the quiz and
+the behaviour report.
+
+## What it knows
+
+The writers do not start from nothing. `docs/knowledge/` is a distillation
+of the course material the owner supplied: desires and the desire calendar,
+awareness and sophistication with the three resets (new mechanism, new
+information, new identity), core and sub-avatars, product research, offers,
+the numbers and testing methods, creatives, and page anatomy.
+`src/agent/knowledge.ts` is the short form, and every prompt asks for the
+topics it needs: research reads desires, sophistication and avatars; pages
+read page anatomy and offers; ads read creatives; the market analysis reads
+all of it. Two rules ride along everywhere: nothing is invented (no review,
+statistic, study or customer the merchant did not supply), and synthetic
+"UGC" is a brief for a real person to film, never a customer on the page.
 
 ## The shape of it
 
@@ -144,10 +166,15 @@ On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
 - **Storefront export and the sandboxed build loop.** Stores render here;
   there is no per-store project to edit, build and screenshot. The block
   builder and the cloner are the page-building surface.
-- **Subscriptions, a Bayesian A/B engine, CRO detection, Search Console
-  keyword tracking, GEO prompt tracking, newsletter flows, workflow
-  automation, migration importers beyond product import.** Listed in
-  `ORIGINAL_INTENT.md` in order.
+- **Subscriptions, a Bayesian A/B engine, Search Console keyword tracking,
+  GEO prompt tracking, newsletter flows, workflow automation, migration
+  importers beyond product import.** Listed in `ORIGINAL_INTENT.md` in
+  order. Split tests exist (page versions and funnel groups, decided on
+  revenue per session); the posterior maths does not.
+- **The reference stores were not fetched.** The fifteen example pages the
+  owner pointed at were unreachable from the build environment, so the page
+  anatomy in `docs/knowledge/pages.md` comes from the course walk-through
+  and the known shape of those page builders, not from reading them.
 - **Supplier API push and ad placement.** Fulfilment records the supplier
   order; it does not place it with DSers, CJ or AutoDS. Ads are written and
   exported, not published to Meta or TikTok.

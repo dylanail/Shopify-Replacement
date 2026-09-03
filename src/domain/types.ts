@@ -206,4 +206,20 @@ export type Theme = {
   heroSub?: string
   nav: Array<{ label: string; href: string }>
   slots: Record<string, string[]>
+  /** The one popup a store gets. Off unless enabled; never shown over the buy box on a phone. */
+  popup?: Popup
+}
+
+export type Popup = {
+  enabled: boolean
+  trigger: 'exit' | 'delay' | 'scroll'
+  /** Seconds (delay) or percent scrolled (scroll). */
+  after: number
+  headline: string
+  text: string
+  /** A discount code shown after the email is given; empty for a plain sign-up. */
+  code: string
+  buttonLabel: string
+  /** Days before it may show again after being dismissed. */
+  dismissDays: number
 }

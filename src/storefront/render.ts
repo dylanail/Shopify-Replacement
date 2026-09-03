@@ -16,6 +16,7 @@ import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
 import { fontLink, themeCss } from './theme.ts'
+import { popupHtml, trackingScript } from './behaviour.ts'
 
 export type StoreView = {
   db: Db
@@ -53,6 +54,7 @@ ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
 </head><body data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
+<a class="skip" href="#main">Skip to content</a>
 ${view.preview ? '<div class="announce" style="background:#1a1a1a">DRAFT PREVIEW — not what customers see</div>' : ''}
 ${page.bare ? '' : `${brand.announcement ? `<div class="announce">${escapeHtml(brand.announcement)}</div>` : ''}
 ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview })}
@@ -61,10 +63,10 @@ ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview }
     ${brand.logoSvg ? `<img src="${escapeHtml(brand.logoSvg)}" alt="">` : ''}
     <span><span class="name">${escapeHtml(store.name)}</span>${brand.slogan ? `<br><span class="sub">${escapeHtml(brand.slogan)}</span>` : ''}</span>
   </a>
-  <nav class="main">${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</nav>
+  <nav class="main" aria-label="Main">${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</nav>
   <div class="tools"><a href="${view.base}/cart" style="text-decoration:none">Cart (${cartCount})</a></div>
 </div></header>`}
-<main>${page.body}</main>
+<main id="main" tabindex="-1">${page.body}</main>
 ${page.bare ? '' : `<footer class="site"><div class="wrap">
   <div>
     <div class="word">${escapeHtml(store.name)}</div>
@@ -74,8 +76,12 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
   <div><div class="eyebrow" style="color:inherit;opacity:.6">Help</div>
     <a href="${view.base}/pages/shipping">Shipping &amp; returns</a>
     <a href="${view.base}/pages/about">About</a>
+    <a href="${view.base}/pages/privacy">Privacy</a>
+    <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
 </div></footer>`}
+${popupHtml(view.base, env.theme.popup)}
+${view.preview ? '' : trackingScript(view.base)}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 </body></html>`
 }
@@ -226,7 +232,7 @@ export function productPage(
   <div class="gallery">
     <div class="main"><img id="pdp-main" src="${escapeHtml(unique[0] ?? '')}" alt="${escapeHtml(product.title)}"></div>
     ${unique.length > 1 ? `<div class="thumbs">${unique
-        .map((src, index) => `<button type="button" aria-current="${index === 0}" data-src="${escapeHtml(src)}"><img src="${escapeHtml(src)}" alt=""></button>`)
+        .map((src, index) => `<button type="button" aria-current="${index === 0}" aria-label="Show image ${index + 1}" data-src="${escapeHtml(src)}"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"></button>`)
         .join('')}</div>` : ''}
   </div>
   <div class="buybox">
@@ -267,7 +273,7 @@ ${reviewsSection(view, product, stats, reviews)}
 ${qaSection(view, product)}
 <div class="stickybar" id="stickybar">
   <div><div class="t">${escapeHtml(product.title)}</div><div class="p" id="sticky-price">${money(cheapest.priceCents, view)}</div></div>
-  <button class="btn" type="button" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">Add to cart</button>
+  <button class="btn" type="button" aria-label="Add to cart" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">Add to cart</button>
 </div>
 <script>
 (function(){

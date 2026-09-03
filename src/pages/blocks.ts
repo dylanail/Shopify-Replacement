@@ -161,7 +161,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Layout',
     icon: '▁',
     description: 'Store name, links, legal line.',
-    schema: { links: { type: 'string', label: 'Links (label|href per line)', multiline: true, default: 'Shipping & returns|/pages/shipping\nAbout|/pages/about' }, legal: { type: 'string', label: 'Legal line', default: '' } },
+    schema: { links: { type: 'string', label: 'Links (label|href per line)', multiline: true, default: 'Shipping & returns|/pages/shipping\nAbout|/pages/about\nPrivacy|/pages/privacy\nTerms|/pages/terms' }, legal: { type: 'string', label: 'Legal line', default: '' } },
     render: (settings, context, block) => `<footer class="site" data-block="${e(block.id)}"><div class="wrap"><div><div class="word">${e(context.storeName)}</div><p style="opacity:.7;margin-top:.6rem">${e(context.brand.slogan ?? '')}</p></div>
       <div>${list(settings.links).map((entry) => { const [label = '', href = '#'] = entry.split('|'); return `<a href="${e(href.startsWith('/') ? context.base + href : href)}">${e(label)}</a>` }).join('')}</div>
       <div style="opacity:.6;font-size:.8rem">${e(settings.legal || `© ${new Date().getFullYear()} ${context.storeName}`)}</div></div></footer>`,
@@ -667,6 +667,34 @@ export const BLOCKS: BlockDefinition[] = [
 
   /* Advanced */
   {
+    type: 'quiz',
+    name: 'Quiz',
+    group: 'Conversion',
+    icon: '?',
+    description: 'One question per screen. Each answer is a label the buyer uses for themselves; the result names them and shows the offer.',
+    schema: {
+      headline: { type: 'string', label: 'Headline', default: 'Find the right one for you' },
+      steps: { type: 'string', label: 'Steps — one per line: question|answer|answer|answer', multiline: true, default: 'What is it for?|Every day|Weekends|Travel\nWhat did you try before?|Nothing yet|Something cheap that broke|Something expensive that disappointed\nWhat matters most?|It lasts|It looks right|It is easy' },
+      resultHeadline: { type: 'string', label: 'Result headline', default: 'Here is the one for you' },
+      resultText: { type: 'string', label: 'Result text', multiline: true, default: 'Based on what you told us, this is the build to start with.' },
+      ctaLabel: { type: 'string', label: 'Button', default: 'See the offer' },
+      ctaHref: { type: 'string', label: 'Button link', default: '#offer' },
+      productId: { type: 'string', label: 'Product to show in the result', default: '' },
+      ...COMMON,
+      width: { ...(COMMON.width as object), default: 'narrow' } as never,
+      align: { ...(COMMON.align as object), default: 'center' } as never,
+    },
+    render: (settings, context, block) => {
+      const steps = list(settings.steps).map((line) => line.split('|').map((part) => part.trim()).filter(Boolean)).filter((parts) => parts.length >= 2)
+      const product = settings.productId ? productFor(context, settings.productId) : null
+      const screens = steps
+        .map((parts, index) => `<fieldset class="qstep" data-step="${index + 1}" ${index ? 'hidden' : ''}><legend class="head">${e(parts[0])}</legend><div class="qopts">${parts.slice(1).map((answer) => `<button type="button" class="qopt" data-answer="${e(answer)}">${e(answer)}</button>`).join('')}</div></fieldset>`)
+        .join('')
+      const result = `<div class="qresult" hidden><h2 class="head">${e(settings.resultHeadline)}</h2><p class="lead" data-result-text>${e(settings.resultText)}</p>${product ? `<div class="qproduct">${product.image ? `<img src="${e(product.image)}" alt="${e(product.title)}" loading="lazy" decoding="async">` : ''}<div><strong>${e(product.title)}</strong><div class="micro">${e(product.subtitle)}</div><div class="price">${format(product.priceCents, context.currency)}</div></div></div>` : ''}<p><a class="btn" href="${e(settings.ctaHref || (product ? `${context.base}/products/${product.handle}` : '#offer'))}" data-quiz-cta>${e(settings.ctaLabel)}</a></p></div>`
+      return wrap(settings, block, `<div class="quiz" data-quiz data-total="${steps.length}">${settings.headline ? `<div class="eyebrow">${e(settings.headline)}</div>` : ''}<div class="qprogress" role="progressbar" aria-valuemin="0" aria-valuemax="${steps.length}" aria-valuenow="1" aria-label="Question 1 of ${steps.length}"><span style="width:${steps.length ? Math.round(100 / steps.length) : 100}%"></span></div>${screens || '<p class="ph">Add steps: question|answer|answer</p>'}${result}</div>`)
+    },
+  },
+  {
     type: 'custom-html',
     name: 'Custom HTML',
     group: 'Advanced',
@@ -754,5 +782,9 @@ document.querySelectorAll('.salespop').forEach(function(pop){var items=[];try{it
   setTimeout(function(){show();setInterval(show,Number(pop.dataset.every||25)*1000)},Number(pop.dataset.delay||8)*1000)});
 document.querySelectorAll('.edd').forEach(function(el){var cutoff=Number(el.dataset.cutoff||15),now=new Date(),h=cutoff-now.getHours()-1,m=60-now.getMinutes();var t=el.querySelector('[data-cutoff-text]');if(h>=0)t.textContent='in the next '+(h?h+'h ':'')+m+'m';else t.textContent='today'});
 document.querySelectorAll('.shipbar').forEach(function(bar){var thr=Number(bar.dataset.threshold||0);var sub=Number((document.body.dataset.cartSubtotal)||0);if(!thr)return;var fill=bar.querySelector('.fill');var pct=Math.min(100,Math.round(sub/thr*100));fill.style.width=pct+'%';if(sub>=thr){bar.querySelector('[data-text]').textContent='You have free shipping'}else if(sub>0){var cur=bar.dataset.currency||'USD';try{bar.querySelector('[data-text]').textContent=new Intl.NumberFormat('en-US',{style:'currency',currency:cur}).format((thr-sub)/100)+' away from free shipping'}catch(e){}}});
+document.querySelectorAll('[data-quiz]').forEach(function(quiz){var steps=quiz.querySelectorAll('.qstep'),total=steps.length,answers=[],bar=quiz.querySelector('.qprogress');
+  function go(n){steps.forEach(function(s,i){s.hidden=i!==n});if(bar){bar.setAttribute('aria-valuenow',String(n+1));bar.setAttribute('aria-label','Question '+(n+1)+' of '+total);bar.firstElementChild.style.width=Math.round((n+1)/total*100)+'%'}var l=steps[n]&&steps[n].querySelector('legend');l&&l.focus&&(l.tabIndex=-1,l.focus())}
+  quiz.querySelectorAll('.qopt').forEach(function(opt){opt.addEventListener('click',function(){var step=opt.closest('.qstep'),n=Number(step.dataset.step);answers.push(opt.dataset.answer);window.__track&&window.__track('quiz.step',{step:n,answer:opt.dataset.answer});
+    if(n<total){go(n)}else{steps.forEach(function(s){s.hidden=true});var r=quiz.querySelector('.qresult');r.hidden=false;if(bar)bar.hidden=true;var cta=r.querySelector('[data-quiz-cta]');if(cta&&cta.getAttribute('href')&&cta.getAttribute('href').charAt(0)!=='#'){try{var u=new URL(cta.getAttribute('href'),location.href);u.searchParams.set('quiz',answers.join(','));cta.setAttribute('href',u.pathname+u.search)}catch(e){}}var h=r.querySelector('h2');h&&(h.tabIndex=-1,h.focus());window.__track&&window.__track('quiz.complete',{answers:answers.join(',')})}})});});
 document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('[data-total]');function sync(){var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total}form.addEventListener('change',sync);sync()});
 })();`

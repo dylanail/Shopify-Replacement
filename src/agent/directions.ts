@@ -5,6 +5,7 @@ import { newBlock } from '../pages/store.ts'
 import type { BlockInstance } from '../pages/blocks.ts'
 import { logger } from '../lib/log.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 
 const log = logger('directions')
 
@@ -103,7 +104,7 @@ const TONE_VERBS: Record<Tone, { cta: string; opener: string; closer: string }> 
   blunt: { cta: 'Buy it', opener: 'No story. Here is the product and here is the price.', closer: 'If it fails, we fix it. If you hate it, send it back.' },
 }
 
-type WriterInput = {
+export type WriterInput = {
   product: Product
   store: { name: string; prompt: string }
   research: Research
@@ -234,7 +235,7 @@ const BLOCKS_SCHEMA = S.obj({
  * Line formats ("label|value" per line) are the block's own contract and are
  * preserved. Anything it does not return keeps the rules text.
  */
-export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInstance[], input: WriterInput): Promise<{ blocks: BlockInstance[]; source: 'model' | 'rules' }> {
+export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInstance[], input: WriterInput, extra = ''): Promise<{ blocks: BlockInstance[]; source: 'model' | 'rules' }> {
   if (!choice) return { blocks, source: 'rules' }
   const textual = blocks
     .filter((block) => TEXT_BLOCKS.has(block.type))
@@ -249,11 +250,12 @@ export async function authorBlocks(choice: ModelChoice | null, blocks: BlockInst
       `Direction from the owner, verbatim: ${direction.raw || '(none)'}\nRead as: tone ${direction.tone}; audience ${direction.audience || '(unspecified)'}; angle ${direction.angle || '(unspecified)'}; must say: ${direction.mustSay.join(' / ') || '(nothing)'}${direction.avatar ? `; written to the avatar "${direction.avatar}"` : ''}`,
       `Research: ${JSON.stringify({ positioning: research.positioning, audience: research.audience, triggers: research.triggers, objections: research.objections, proofPoints: research.proofPoints, competitors: research.competitors, comparison: research.comparison.rows })}`,
       `Blocks, in page order, with their current placeholder text:\n${JSON.stringify(textual)}`,
+      extra,
       'Rewrite every text value in the format and direction. Write fresh copy; do not lightly edit the placeholders. Keep the keys. Where a value is a list of "a|b" or "a|b|c" lines, keep that line format and roughly the same number of lines: faq items are "question|answer", comparison rows "label|us|them", multicolumn columns "icon|title|text". The hero and headline blocks carry the page\'s promise; numbered reasons carry one argument each; the closing rich-text is the send-off. Never invent reviews, statistics or names.',
-    ].join('\n\n')
+    ].filter(Boolean).join('\n\n')
     const parsed = await completeJson<{ blocks: Array<{ id: string; values: Array<{ key: string; value: string }> }> }>(choice, {
       task: 'pages',
-      system: 'You write direct-response ecommerce pages and advertorials for a dropshipping brand. You write inside a layout that is already decided, replacing placeholder text with copy that is specific, honest and in the requested tone.',
+      system: `You write direct-response ecommerce pages and advertorials for a dropshipping brand. You write inside a layout that is already decided, replacing placeholder text with copy that is specific, honest and in the requested tone. Write at a sixth-grade reading level, show rather than tell, and give the reader a reason to buy in the avatar's own terms.\n\n${knowledge('pages', 'offers', 'sophistication', 'honesty')}`,
       prompt,
       schema: BLOCKS_SCHEMA,
       name: 'page_blocks',

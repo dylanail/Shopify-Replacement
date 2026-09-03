@@ -3,6 +3,7 @@ import { id } from '../lib/ids.ts'
 import { logger } from '../lib/log.ts'
 import { readBrief, type Brief } from './copy.ts'
 import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 
 const log = logger('research')
 
@@ -242,7 +243,7 @@ export const RESEARCH_SCHEMA = S.obj({
 
 type ModelResearch = Omit<Research, 'comparison'> & { comparison: { rows: Research['comparison']['rows'] } }
 
-const RESEARCH_SYSTEM = `You are a direct-response strategist doing customer research for a dropshipping brand that sells through paid social, advertorials and a Shopify-style store. Write the record from what you know about this category and its buyers. Be specific to the brief. Never invent statistics, review counts, study names or awards. When you do not know a competitor by name, describe the type. Prices are integers in minor units (cents) of the given currency. Do not invent a place of manufacture or a material the brief does not give; write around what you do not know.`
+const RESEARCH_SYSTEM = `You are a direct-response strategist doing customer research for a dropshipping brand that sells through paid social, advertorials and a Shopify-style store. Write the record from what you know about this category and its buyers. Be specific to the brief. Never invent statistics, review counts, study names or awards. When you do not know a competitor by name, describe the type. Prices are integers in minor units (cents) of the given currency. Do not invent a place of manufacture or a material the brief does not give; write around what you do not know. Personas are desire-based: name the instinct each one is really buying for, the experience they are coming from, and the language they would use. Triggers are moments. Objections are what the buyer actually says.\n\n${knowledge('desires', 'sophistication', 'avatars', 'honesty')}`
 
 /**
  * The model authors the record. The rules baseline is not shown to it: a

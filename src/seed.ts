@@ -19,6 +19,8 @@ import { recordAdSpend } from './domain/ops.ts'
 import { upsertFunnel } from './domain/funnels.ts'
 import { generateVersions, setVersionWeight } from './pages/versions.ts'
 import { suggestAvatars } from './agent/avatars.ts'
+import { saveAnswers, setBuildMode } from './control/build.ts'
+import { queuePhotoBriefs } from './creative/briefs.ts'
 import { extractAngle, saveCompetitor } from './agent/angles.ts'
 import { draftAds, saveInspiration } from './agent/ads.ts'
 import { attachDomain } from './control/domains.ts'
@@ -200,6 +202,9 @@ async function main() {
 
     // Avatars from the research, a competitor read for its angle, a swipe file, and ads written to the coach.
     const avatars = await suggestAvatars(db, store.id)
+    setBuildMode(db, store.id, 'own-product')
+    saveAnswers(db, store.id, { who: { value: 'Amateurs who spar twice a week and have been through two pairs of gym gloves' }, instinct: { value: 'control' }, tried: { unknown: true }, outcome: { unknown: true } })
+    for (const product of listProducts(db, store.id, { limit: 1 })) queuePhotoBriefs(db, store.id, product)
     const coach = avatars.find((avatar) => /coach/i.test(avatar.name))
     saveCompetitor(db, store.id, {
       productId: hero.id,

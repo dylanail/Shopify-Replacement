@@ -9,7 +9,9 @@ import { upsertCustomer } from '../domain/customers.ts'
 import { logger } from '../lib/log.ts'
 import type { LineItem } from '../domain/types.ts'
 import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
-import { funnelForProducts, resolveBump, resolveOffer } from '../domain/funnels.ts'
+import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
+import { privacyHtml, termsHtml } from './legal.ts'
+import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
 import { getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
@@ -320,12 +322,42 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     }
     const copy: Record<string, string> = {
       about: `<p>${escapeHtml(current.store.brand.description ?? '')}</p><p>${escapeHtml(current.store.brand.voice ?? '')}</p>`,
+      privacy: privacyHtml(current.db, current.store),
+      terms: termsHtml(current.db, current.store),
       shipping:
         '<p>Everything is built to order. Stock builds ship in fourteen days; custom work takes about three weeks.</p>' +
         '<p>Free shipping over 200. Returns are free for thirty days as long as the item has not been used in a fight.</p>',
     }
     if (!copy[slug]) throw notFound('No such page')
-    return html(view.simplePage(current, slug === 'about' ? 'About' : 'Shipping & returns', copy[slug]))
+    const titles: Record<string, string> = { about: 'About', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
+    return html(view.simplePage(current, titles[slug] ?? slug, copy[slug]))
+  })
+
+  /* The page reports what happened on it: scroll depth, sections seen, buttons pressed, popup and quiz events. Preview traffic is dropped. */
+  router.post('/_t', async (ctx) => {
+    const current = open(ctx)
+    if (current.preview) return undefined
+    const body = await ctx.body()
+    const events = Array.isArray(body.e) ? (body.e as Array<{ t?: string; m?: Record<string, unknown> }>).slice(0, 40) : []
+    const path = typeof body.p === 'string' ? body.p.slice(0, 200) : ctx.url.pathname
+    for (const event of events) {
+      const type = String(event.t ?? '') as (typeof BEHAVIOUR_EVENTS)[number]
+      if (!BEHAVIOUR_EVENTS.includes(type)) continue
+      const meta = event.m && typeof event.m === 'object' ? Object.fromEntries(Object.entries(event.m).slice(0, 8).map(([key, value]) => [key.slice(0, 32), typeof value === 'string' ? value.slice(0, 120) : typeof value === 'number' ? value : String(value).slice(0, 120)])) : {}
+      record(ctx, current, type, { path, meta })
+    }
+    return undefined
+  })
+
+  /* A funnel split test starts here: the visitor is assigned a funnel by weight and sent to its first page. */
+  router.get('/go/:group', (ctx) => {
+    const current = open(ctx)
+    const group = ctx.params.group as string
+    const sessionId = current.preview ? `preview-${Date.now()}` : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''), referrer: String(ctx.req.headers.referer ?? '') })
+    const funnel = pickFunnel(current.db, current.store.id, group, sessionId)
+    if (!funnel) throw notFound('No funnel is running under that name')
+    if (!current.preview) track(current.db, current.store.id, sessionId, 'funnel.enter', { path: ctx.url.pathname, meta: { funnelId: funnel.id, group } })
+    return redirect(`${current.base}${funnelEntry(current.db, current.store.id, funnel)}`)
   })
 
   router.post('/contact', async (ctx) => {

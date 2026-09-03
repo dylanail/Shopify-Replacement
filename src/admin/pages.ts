@@ -31,6 +31,7 @@ import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
+import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
 import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 
@@ -360,7 +361,8 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
     ${events.map((event) => `<tr><td><span class="tag">${escapeHtml(event.type)}</span></td><td class="muted">${escapeHtml(event.path || '—')}</td>
       <td>${event.amount_cents ? format(event.amount_cents, ctx.store.currency) : '—'}</td><td class="muted">${escapeHtml(event.city || '—')}</td>
       <td class="muted">${event.created_at.slice(11, 19)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1.2rem">No traffic recorded yet.</td></tr>'}
-    </tbody></table></div>`
+    </tbody></table></div>
+  ${behaviourCard(ctx, range)}`
 }
 
 /* -------------------------------------------------------------------- reviews */
@@ -397,7 +399,7 @@ export function reviewsPage(ctx: Ctx, status: string): string {
 
 /* ------------------------------------------------------------- store designer */
 
-export function storePage(ctx: Ctx, messages: ChatMessage[]): string {
+export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): string {
   const draft = environment(ctx.db, ctx.store.id, 'draft')
   const live = environment(ctx.db, ctx.store.id, 'live')
   const dirty = JSON.stringify(draft.theme) !== JSON.stringify(live.theme)
@@ -423,7 +425,9 @@ export function storePage(ctx: Ctx, messages: ChatMessage[]): string {
       <div class="card"><h2>Sections</h2><p class="muted" style="font-size:12px">${draft.theme.sections.map((section) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(section)}</span>`).join('')}</p>
         <p class="muted" style="font-size:11.5px;margin-top:.6rem">Ask the assistant to reorder or drop sections — it edits the draft, never the live theme.</p></div>
       <div class="card"><h2>Build log</h2>${draft.buildLog.slice(-6).reverse().map((entry) => `<p class="muted" style="font-size:11.5px;margin:.2rem 0">${entry.at.slice(11, 19)} — ${escapeHtml(entry.message)}</p>`).join('') || '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
-    </div></div>`
+    </div></div>
+  <div class="grid2" style="margin-top:1rem"><div>${healthCard(ctx, health)}</div><div>${popupCard(ctx)}${legalCard(ctx)}</div></div>
+  ${messages.length ? '' : ''}`
 }
 
 /* ------------------------------------------------------------------ marketing */
@@ -609,10 +613,12 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="eyebrow" style="margin:.4rem 0">5 · Downsell (only if the upsell is declined)</div>
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
     <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
+    <div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
+    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
-  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}</div></div>`
+  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
 }
 
 /* ------------------------------------------------------------ pages hub */
@@ -625,7 +631,7 @@ export function pagesPage(ctx: Ctx): string {
     <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
-      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="advertorial">Advertorial (listicle)</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
+      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="offer">Offer page (the funnel landing page)</option><option value="advertorial">Advertorial (listicle)</option><option value="quiz">Quiz funnel</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
       <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
       <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
       <button class="btn primary" type="submit">Create and open the editor</button></form>
@@ -639,6 +645,7 @@ export function pagesPage(ctx: Ctx): string {
       <div class="field"><label>HTML</label><textarea name="html" rows="5" placeholder="<!doctype html>…"></textarea></div>
       <button class="btn primary" type="submit">Create</button></form>
   </div>
+  <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
   ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>

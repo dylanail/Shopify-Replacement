@@ -42,6 +42,19 @@ in order.
 
 ---
 
+### Second iteration (September 2026)
+
+The course material and the owner's notes turned into: a knowledge base the
+writers read by topic (`docs/knowledge/`, `src/agent/knowledge.ts`); three
+build modes with an order of work whose statuses come from the store; a
+Market tab (analysis, product overview, sub-avatars, ad plan, feedback
+loops); a funnel rip that keeps structure and never copy or images; a
+Creative tab (photo briefs, vetted creator-content concepts, GIFs, layout
+suggestions); generated legal pages, a popup, a quiz block, behaviour
+tracking, funnel split tests and a site health report. Nothing already
+defined changed shape: the tables, pages, funnels, versions, ads and avatars
+gained columns and fields, none were renamed or removed.
+
 ## The original audit
 
 This codebase was built inside the `dylanail/darwin` repository, under

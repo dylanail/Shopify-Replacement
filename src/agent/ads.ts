@@ -13,6 +13,7 @@ import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
 import type { Direction } from './directions.ts'
 import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 
 const log = logger('ads')
 
@@ -279,7 +280,7 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       .join('\n\n')
     const parsed = await completeJson<Omit<AdCopy, 'avatar'>>(choice, {
       task: 'ads',
-      system: 'You write direct-response ads for a dropshipping brand that buys paid social and search traffic. Hooks stop the scroll; the body earns the click; the offer closes. Respect the platform character limits exactly. Never invent reviews, statistics, names or certifications; quote only the reviews you are given, first name only.',
+      system: `You write direct-response ads for a dropshipping brand that buys paid social and search traffic. Hooks stop the scroll; the body earns the click; the offer closes. Respect the platform character limits exactly. Never invent reviews, statistics, names or certifications; quote only the reviews you are given, first name only. Every ad has one angle, stated directly in the hook; name it in the angle field.\n\n${knowledge('creatives', 'avatars', 'sophistication', 'honesty')}`,
       prompt,
       schema: AD_SCHEMA,
       name: 'ad_copy',

@@ -37,6 +37,15 @@ import { onboard } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
 import { shell } from './shell.ts'
 import { authPage, onboardingPage } from './auth-pages.ts'
+import * as plan from './plan-pages.ts'
+import { modeById, QUESTIONS, saveAnswers, setBuildMode, skipStep, type BuildMode } from '../control/build.ts'
+import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
+import { deleteQueueItem, getQueueItem, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
+import { approveGif, makeProductGif } from '../creative/product-gif.ts'
+import { ripToPage } from '../pages/rip.ts'
+import { newBlock, offerTemplate, quizTemplate } from '../pages/store.ts'
+import { listAvatars, getAvatar } from '../agent/avatars.ts'
+import { saveLegal } from '../storefront/legal.ts'
 
 const STORE_COOKIE = 'amboras_store'
 
@@ -182,7 +191,9 @@ export function adminRouter(): Router {
       ...(siteUrl ? { referenceUrl: siteUrl } : {}),
     })
     setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
-    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. Publish when it looks right.`))
+    const mode = modeById(String(body.mode ?? 'own-product')) ?? modeById('own-product')
+    if (mode) setBuildMode(db(), result.store.id, mode.id)
+    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
   })
 
   /* ------------------------------------------------------------------ pages */
@@ -264,9 +275,9 @@ export function adminRouter(): Router {
       research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
     }
     const template = String(body.template ?? 'blank')
-    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : blankTemplate()
+    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
     const created = createPage(db(), current.store.id, {
-      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : 'New page'),
+      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : template === 'offer' ? `${product?.title ?? current.store.name} — save today` : template === 'quiz' ? `Find your ${product?.title ?? 'fit'}` : 'New page'),
       kind: template === 'advertorial' ? 'advertorial' : 'landing',
       blocks,
     })
@@ -497,6 +508,8 @@ export function adminRouter(): Router {
       bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: true },
       upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') },
       downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') },
+      testGroup: String(body.testGroup ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+      weight: Number(body.weight ?? 0) || 0,
     })
     return back(ctx, 'Funnel saved.')
   })
@@ -665,7 +678,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/store', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'store', 'Store designer', pages.storePage(ctxFor(current, ctx), history(db(), current.store.id, 10)))
+    return page(ctx, current, 'store', 'Store designer', pages.storePage(ctxFor(current, ctx), history(db(), current.store.id, 10), ctx.query.get('health') === '1'))
   })
 
   router.post('/admin/theme', async (ctx) => {
@@ -893,6 +906,208 @@ export function adminRouter(): Router {
     return back(ctx, 'Removed from the swipe file.')
   })
 
+  /* -------------------------------------------------------------- build */
+
+  router.get('/admin/build', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'build', 'Build', plan.buildPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/build/mode', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const mode = modeById(String(body.mode ?? ''))
+    if (!mode) return back(ctx, '!No such build mode.')
+    setBuildMode(db(), current.store.id, mode.id)
+    return back(ctx, `Building as "${mode.name}". First step: ${mode.steps[0]?.label}.`)
+  })
+
+  router.post('/admin/build/answers', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const state = saveAnswers(db(), current.store.id, Object.fromEntries(QUESTIONS.map((question) => [question.key, { value: String(body[question.key] ?? ''), unknown: body[`${question.key}_unknown`] === 'true' }])))
+    const unknown = Object.values(state.answers).filter((answer) => answer.unknown).length
+    return back(ctx, `Answers saved.${unknown ? ` ${unknown} marked "I don't know" — the market analysis will fill them in and label them as assumed.` : ''}`)
+  })
+
+  router.post('/admin/build/skip', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    skipStep(db(), current.store.id, String(body.key ?? ''), body.skipped !== 'false')
+    return back(ctx, body.skipped !== 'false' ? 'Step skipped. It stays on the list so you can come back to it.' : 'Step is back in the plan.')
+  })
+
+  /* ------------------------------------------------------------- market */
+
+  router.get('/admin/market', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'market', 'Market', plan.marketPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/market/analysis', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const doc = await runAnalysis(db(), current.store.id, { ...(body.notes ? { notes: String(body.notes) } : {}) })
+      return back(ctx, `Market analysis ${doc.source === 'rules' ? 'written from the research by rules; set a model key for the real read' : `written by ${doc.model}`}. ${doc.body.standOut.found ? `Stand out via ${doc.body.standOut.via}.` : 'No way to stand out has been found yet — read the recommendation.'}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not write the analysis'}`)
+    }
+  })
+
+  router.post('/admin/market/overview', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const doc = await runOverview(db(), current.store.id, String(body.productId ?? ''), current.store.currency)
+      return back(ctx, `Product overview written for ${doc.body.name} (${doc.source}). Everything in it is assumed until you confirm it.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not write the overview'}`)
+    }
+  })
+
+  router.post('/admin/market/plan', async (ctx) => {
+    const current = session(ctx)
+    try {
+      const doc = await runAdPlan(db(), current.store.id)
+      return back(ctx, `Ad plan: ${doc.body.rows.length} rows (${doc.source}).`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not write the plan'}`)
+    }
+  })
+
+  router.post('/admin/market/plan/:index', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const status = ['idea', 'working', 'learning', 'done'].includes(String(body.status)) ? (String(body.status) as AdPlanRow['status']) : 'idea'
+    try {
+      updatePlanRow(db(), current.store.id, Number(ctx.params.index), { angle: String(body.angle ?? ''), variations: String(body.variations ?? '').split('\n').map((line) => line.trim()).filter(Boolean), status: status === 'done' && !String(body.learnings ?? '').trim() ? 'learning' : status, result: String(body.result ?? ''), learnings: String(body.learnings ?? '') })
+      return back(ctx, status === 'done' && !String(body.learnings ?? '').trim() ? 'Saved as learning: a row is not done until its learnings are written.' : 'Row saved.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
+    }
+  })
+
+  router.post('/admin/market/loop', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const linesOf = (value: unknown) => String(value ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+    saveLoop(db(), current.store.id, { ...(body.id ? { id: String(body.id) } : {}), failing: String(body.failing ?? ''), working: String(body.working ?? ''), hypotheses: linesOf(body.hypotheses), actions: linesOf(body.actions), outcome: String(body.outcome ?? '') })
+    return back(ctx, 'Feedback loop saved.')
+  })
+
+  router.post('/admin/market/docs/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteDoc(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Deleted.')
+  })
+
+  router.post('/admin/avatars/:id/subs', async (ctx) => {
+    const current = session(ctx)
+    try {
+      const subs = await suggestSubAvatars(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, `${subs.length} sub-avatars on file under that core avatar. Turn on the ones to write to.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not suggest'}`)
+    }
+  })
+
+  /* ----------------------------------------------------------- creative */
+
+  router.get('/admin/creative', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'creative', 'Creative', plan.creativePage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/creative/briefs', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, String(body.productId ?? ''))
+    if (!product) return back(ctx, '!No such product.')
+    const briefs = queuePhotoBriefs(db(), current.store.id, product)
+    return back(ctx, `${briefs.length} photo briefs on the queue for ${product.title}.`)
+  })
+
+  router.post('/admin/creative/ugc', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, String(body.productId ?? ''))
+    if (!product) return back(ctx, '!No such product.')
+    const avatar = body.avatarId ? getAvatar(db(), current.store.id, String(body.avatarId)) : listAvatars(db(), current.store.id).find((entry) => entry.selected) ?? null
+    try {
+      const items = await queueUgcConcepts(db(), current.store.id, product, avatar, latestResearch(db(), current.store.id), modelFor(db(), current.store.id, 'ads'))
+      return back(ctx, `${items.length} concepts queued for vetting. They are briefs for a real person to film, never reviews.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not write concepts'}`)
+    }
+  })
+
+  router.post('/admin/creative/gif', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const item = makeProductGif(db(), current.store.id, { productId: String(body.productId ?? ''), delay: Number(body.delay ?? 70) || 70, maxSide: Number(body.maxSide ?? 480) || 480 })
+      return back(ctx, `${item.title} is on the queue; approve it to add it to the product.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not make the GIF'}`)
+    }
+  })
+
+  router.post('/admin/creative/:id/status', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const itemId = ctx.params.id as string
+    const item = getQueueItem(db(), current.store.id, itemId)
+    if (!item) return back(ctx, '!No such item.')
+    const status = String(body.status ?? '')
+    if (status === 'delete') { deleteQueueItem(db(), current.store.id, itemId); return back(ctx, 'Deleted.') }
+    if (status === 'approved' && item.kind === 'gif') { approveGif(db(), current.store.id, itemId); return back(ctx, 'Approved and added to the product\'s media.') }
+    if (status === 'approved' || status === 'rejected') { setQueueStatus(db(), current.store.id, itemId, status, String(body.note ?? '')); return back(ctx, status === 'approved' ? 'Approved.' : 'Rejected.') }
+    return back(ctx, '!Unknown action.')
+  })
+
+  /* -------------------------------------------------------- pages: rip, suggest */
+
+  router.post('/admin/pages/rip', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const result = await ripToPage(db(), current.store, { url: String(body.url ?? '').trim(), html: String(body.html ?? ''), productId: String(body.productId ?? ''), keepAngle: body.keepAngle !== 'false', direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? '') })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'rip_funnel', target: result.page.id, diff: { sourceUrl: result.rip.sourceUrl, sections: result.rip.sections.length } })
+      return redirect(`/admin/pages/${result.page.id}/edit?flash=${encodeURIComponent(`Built from ${result.rip.sections.length} sections; ${result.rip.imageBriefs.length} image briefs are in the alt text of the image blocks. ${result.source === 'model' ? 'The copy is written.' : 'No model is configured, so the copy is placeholders that say what each section did.'}`)}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not read that page'}`)
+    }
+  })
+
+  router.post('/admin/pages/suggest', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const goal = (['offer', 'advertorial', 'quiz', 'pdp', 'home'].includes(String(body.goal)) ? String(body.goal) : 'offer') as PageGoal
+    const product = body.productId ? getProduct(db(), current.store.id, String(body.productId)) : null
+    const avatar = body.avatarId ? getAvatar(db(), current.store.id, String(body.avatarId)) : listAvatars(db(), current.store.id).find((entry) => entry.selected) ?? null
+    const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? '') })
+    const created = createPage(db(), current.store.id, { title: `${product ? `${product.title} — ` : ''}${goal} page (suggested)`, kind: goal === 'advertorial' ? 'advertorial' : 'landing', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product ? { productId: product.id } : {}) })
+    return redirect(`/admin/pages/${created.id}/edit?flash=${encodeURIComponent(`${suggestion.blocks.length} blocks laid out (${suggestion.source}). ${suggestion.note}`)}`)
+  })
+
+  /* -------------------------------------------------------- popup, legal */
+
+  router.post('/admin/popup', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const trigger = ['exit', 'delay', 'scroll'].includes(String(body.trigger)) ? (String(body.trigger) as 'exit') : 'exit'
+    setTheme(db(), current.store.id, { popup: { enabled: body.enabled === 'true', trigger, after: Number(body.after ?? 20) || 20, headline: String(body.headline ?? ''), text: String(body.text ?? ''), code: String(body.code ?? '').trim(), buttonLabel: String(body.buttonLabel ?? 'Send it'), dismissDays: Number(body.dismissDays ?? 7) || 7 } }, { build: 'Popup edited' })
+    return back(ctx, body.enabled === 'true' ? 'Popup saved to the draft. Publish to make it live.' : 'Popup is off in the draft.')
+  })
+
+  router.post('/admin/legal', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    saveLegal(db(), current.store.id, { company: String(body.company ?? ''), email: String(body.email ?? ''), address: String(body.address ?? ''), country: String(body.country ?? ''), returnsDays: Number(body.returnsDays ?? 30) || 30, guaranteeDays: Number(body.guaranteeDays ?? 30) || 30, privacyExtra: String(body.privacyExtra ?? ''), termsExtra: String(body.termsExtra ?? '') })
+    return back(ctx, 'Legal details saved. The privacy and terms pages read them now.')
+  })
+
   /* ------------------------------------------------------------ avatars */
 
   router.post('/admin/avatars/suggest', async (ctx) => {
@@ -904,6 +1119,10 @@ export function adminRouter(): Router {
   router.post('/admin/avatars/save', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
+    if (body.toggle === 'true' && body.id) {
+      const avatar = saveAvatar(db(), current.store.id, { id: String(body.id), name: String(body.name ?? ''), selected: body.selected === 'true' })
+      return back(ctx, `${avatar.name} is ${avatar.selected ? 'on' : 'off'}.`)
+    }
     try {
       const avatar = saveAvatar(db(), current.store.id, {
         ...(body.id ? { id: String(body.id) } : {}),
@@ -919,6 +1138,7 @@ export function adminRouter(): Router {
         objection: String(body.objection ?? ''),
         answer: String(body.answer ?? ''),
         selected: body.selected === 'true',
+        ...(body.desire !== undefined ? { desire: String(body.desire ?? ''), experience: String(body.experience ?? ''), emotion: String(body.emotion ?? ''), behaviour: String(body.behaviour ?? ''), demographic: String(body.demographic ?? ''), label: String(body.label ?? ''), tier: (['niche', 'mid', 'mass'].includes(String(body.tier)) ? String(body.tier) : '') as 'niche', parentId: String(body.parentId ?? '') } : {}),
         ...(body.id ? {} : { source: 'manual' as const }),
       })
       return back(ctx, `Saved ${avatar.name}.`)

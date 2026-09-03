@@ -4,6 +4,7 @@ import { logger } from '../lib/log.ts'
 import { latestResearch, type Research } from './research.ts'
 import { saveAvatar, listAvatars, angleFromWants } from './avatars.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 
 const log = logger('angles')
 
@@ -219,7 +220,7 @@ export async function refineAngle(choice: ModelChoice, text: string, rules: Comp
   ].join('\n\n')
   const parsed = await completeJson<Omit<CompetitorAngle, 'url' | 'images' | 'notes' | 'take'>>(choice, {
     task: 'extraction',
-    system: 'You read competitor product pages for a dropshipper and record exactly what they say: the promise, the hooks, the offer, the proof, the audience, the angle. You never add claims the page does not make.',
+    system: `You read competitor product pages for a dropshipper and record exactly what they say: the promise, the hooks, the offer, the proof, the audience, the angle. You never add claims the page does not make. Note which awareness level the page speaks to and which sophistication stage its claims sit at.\n\n${knowledge('sophistication')}`,
     prompt,
     schema: ANGLE_SCHEMA,
     name: 'competitor_angle',

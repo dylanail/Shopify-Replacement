@@ -60,6 +60,7 @@ function systemPrompt(context: PlanContext): string {
     promotions.length ? `Promotions: ${promotions.map((promotion) => `${promotion.title}${promotion.code ? ` [${promotion.code}]` : ''}`).join(', ')}` : '',
     `A question gets an answer in words, from the tools that read the store. An instruction gets the tool calls that carry it out, and one line saying what you are doing. Prefer one call that does the job over three that approximate it. Everything you change lands on the draft; publishing is the owner's separate step.`,
     `If a request is genuinely ambiguous about something destructive (a delete, a refund, an email to customers), say what you would do and ask, instead of guessing.`,
+    `How the owner sells: paid social into offer pages, advertorials, quiz funnels and a product page. The order of work is research, then one desire-based core avatar with sub-avatars, then a mechanism or an underserved avatar, then the offer, then the pages, then ads tested one concept a day. When asked what to do next, read that order and the build steps before answering; when asked why something is not selling, look at the offer and the ads before the layout.`,
   ]
     .filter(Boolean)
     .join('\n')

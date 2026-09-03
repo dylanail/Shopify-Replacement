@@ -88,6 +88,7 @@ test('every admin page renders', async () => {
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
     '/admin/promotions', '/admin/analytics', '/admin/reviews', '/admin/store', '/admin/marketing',
     '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
+    '/admin/build', '/admin/market', '/admin/creative', '/admin/store?health=1',
   ]) {
     const response = await call(path)
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
@@ -357,4 +358,25 @@ test('the storefront product page carries the conversion sections and the sticky
   assert.match(hero, /ref=%2F_uploads/)
   const svg = await (await fetch(`${base}${hero}`)).text()
   assert.match(svg, /<image href="data:image\/png;base64,/, 'the hero is the merchant photo, staged')
+})
+
+test('the storefront serves generated legal pages, takes behaviour beacons, and names a missing funnel test', async () => {
+  const privacy = await call(`/s/${slug}/pages/privacy`)
+  assert.equal(privacy.status, 200)
+  assert.match(privacy.text, /cookie-free/)
+  assert.match(privacy.text, /Skip to content/, 'the skip link is on every page')
+  assert.match(privacy.text, /<main id="main"/, 'and the main landmark')
+  const terms = await call(`/s/${slug}/pages/terms`)
+  assert.equal(terms.status, 200)
+  assert.match(terms.text, /Returns and the guarantee/)
+  const beacon = await fetch(`${base}/s/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/pages/privacy', e: [{ t: 'scroll', m: { depth: 50 } }, { t: 'cta.click', m: { label: 'Buy' } }, { t: 'checkout.complete', m: {} }] }) })
+  assert.equal(beacon.status, 204)
+  const analytics = await call('/admin/analytics')
+  assert.match(analytics.text, /What visitors did/)
+  assert.match(analytics.text, /scroll|cta\.click/, 'the beacon events reached the ticker')
+  assert.ok(!/checkout\.complete/.test(analytics.text), 'a beacon cannot claim a purchase')
+  const missing = await call(`/s/${slug}/go/nothing`)
+  assert.equal(missing.status, 404)
+  const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })
+  assert.equal(preview.status, 204, 'preview beacons are accepted and dropped')
 })

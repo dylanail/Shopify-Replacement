@@ -2,6 +2,7 @@ import { logger } from '../lib/log.ts'
 import { format as money } from '../lib/money.ts'
 import type { Research } from './research.ts'
 import { completeJson, describe, S, type ModelChoice } from './models.ts'
+import { knowledge } from './knowledge.ts'
 import { announcement, brandDescription, brandName, brandVoice, collectionPlan, draftProducts, MOODS, slogan, type Brief, type DraftProduct } from './copy.ts'
 
 const log = logger('brand')
@@ -66,7 +67,7 @@ const KIT_SCHEMA = S.obj({
 
 type ModelKit = Omit<BrandKit, 'products' | 'source' | 'model'> & { products: Array<Omit<DraftProduct, 'options' | 'variantPlan'> & { options: Array<{ title: string; values: string[] }> }> }
 
-const KIT_SYSTEM = `You build direct-to-consumer brands for a dropshipper who sells through paid social and advertorials. Write a brand kit that a good operator would ship: a name people can say, a voice that is specific rather than generic, and three products with copy that names concrete details and admits who the product is not for. Never invent awards, review counts or statistics. Do not claim a place of manufacture or a material the brief does not give.`
+const KIT_SYSTEM = `You build direct-to-consumer brands for a dropshipper who sells through paid social and advertorials. Write a brand kit that a good operator would ship: a name people can say, a voice that is specific rather than generic, and three products with copy that names concrete details and admits who the product is not for. Never invent awards, review counts or statistics. Do not claim a place of manufacture or a material the brief does not give. Products are described by what they do for the buyer before what they are.\n\n${knowledge('product', 'desires', 'honesty')}`
 
 export async function authorBrandKit(choice: ModelChoice | null, brief: Brief, research: Research, opts: { currency?: string } = {}): Promise<BrandKit> {
   const rules = rulesBrandKit(brief)
@@ -134,7 +135,7 @@ export async function authorProductCopy(
     .join('\n\n')
   const parsed = await completeJson<{ subtitle: string; description: string }>(choice, {
     task: 'brand',
-    system: 'You write product pages for direct-to-consumer brands. Specific, honest, in the store voice. Never invent statistics, reviews or certifications.',
+    system: `You write product pages for direct-to-consumer brands. Specific, honest, in the store voice. Never invent statistics, reviews or certifications.\n\n${knowledge('product', 'honesty')}`,
     prompt,
     schema: COPY_SCHEMA,
     name: 'product_copy',

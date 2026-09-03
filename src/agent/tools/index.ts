@@ -7,6 +7,7 @@ import { pageTools } from './pages.ts'
 import { dropshipTools } from './dropship.ts'
 import { storefrontTools } from './storefront.ts'
 import { adTools } from './ads.ts'
+import { planTools } from './plan.ts'
 
 /** Importing this module is what populates the registry. */
-export const ALL_TOOLS = [...productTools, ...researchTools, ...pageTools, ...dropshipTools, ...adTools, ...commerceTools, ...storefrontTools, ...growthTools, ...pluginTools]
+export const ALL_TOOLS = [...productTools, ...researchTools, ...pageTools, ...dropshipTools, ...adTools, ...commerceTools, ...storefrontTools, ...growthTools, ...planTools, ...pluginTools]
