@@ -399,3 +399,20 @@ test('a review left on the storefront waits for the merchant', () => {
   createReview(db, store.id, { productId: product.id, rating: 1, body: 'unverifiable', author: 'Passer-by', status: 'pending' })
   assert.equal(statsFor(db, store.id, product.id).count, 0, 'a pending review is in no rating and on no page')
 })
+
+test('a block setting the owner cleared stays cleared', () => {
+  // Any catalog block that ships copy in a string setting will do.
+  const found = BLOCKS.map((entry) => blockDefinition(entry.type))
+    .filter((definition): definition is NonNullable<typeof definition> => Boolean(definition))
+    .flatMap((definition) =>
+      Object.entries(definition.schema)
+        .filter(([, field]) => field.type === 'string' && typeof field.default === 'string' && (field.default as string).length > 6)
+        .map(([key, field]) => ({ definition, key, fallback: field.default as string })),
+    )[0]
+  assert.ok(found, 'the catalog ships blocks with stock copy in their string settings')
+  const cleared = renderBlock({ id: 'b1', type: found.definition.type, settings: { [found.key]: '' } }, context)
+  assert.ok(
+    !cleared.includes(found.fallback),
+    `deleting ${found.definition.type}.${found.key} must not bring "${found.fallback}" back at render`,
+  )
+})

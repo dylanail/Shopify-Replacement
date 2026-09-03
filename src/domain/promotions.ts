@@ -175,6 +175,13 @@ export function applyPromotions(
       }
     }
 
+    // Each promotion can only take what is still there. Every one used to be
+    // computed against the full subtotal and only the sum was clamped, so two
+    // automatic 60%-off promotions on a $100 cart produced a $120 discount
+    // clamped to $100 with two $60 lines beside it: a totals block whose
+    // numbers did not add up, and a cart that could go to zero.
+    const takeable = Math.max(0, opts.subtotalCents - outcome.discountCents)
+    amount = Math.min(amount, takeable)
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
       outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount })
@@ -192,7 +199,6 @@ export function applyPromotions(
     outcome.applied = outcome.applied.filter((entry) => !dropped.includes(entry))
     outcome.discountCents -= dropped.reduce((sum, entry) => sum + entry.amountCents, 0)
   }
-  outcome.discountCents = Math.min(outcome.discountCents, opts.subtotalCents)
   return outcome
 }
 

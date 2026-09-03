@@ -1245,7 +1245,11 @@ function resolve(type: string, context?: BlockContext): BlockDefinition | null {
 export function renderBlock(block: BlockInstance, context: BlockContext): string {
   const definition = resolve(block.type, context)
   if (!definition) return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">Unknown block: ${e(block.type)}</p></div></section>`
-  const validated = check(definition.schema, block.settings)
+  // blankIsValue: text the owner deleted stays deleted. coerceField treats ''
+  // as absent everywhere else — which is right for a settings form — and here
+  // it silently reinstated the shipped copy at render, so no stock headline
+  // in the catalog could ever be removed.
+  const validated = check(definition.schema, block.settings, { blankIsValue: true })
   // A setting that fails its own field takes the default; the rest survive.
   // A page with one bad number in one block must not lose the block.
   const settings = validated.ok ? validated.value : { ...defaultsFor(definition), ...pickValid(definition, block.settings) }
@@ -1260,7 +1264,7 @@ function pickValid(definition: BlockDefinition, raw: Record<string, unknown>): R
   const out: Record<string, unknown> = {}
   for (const [key, field] of Object.entries(definition.schema)) {
     if (raw[key] === undefined) continue
-    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] })
+    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] }, { blankIsValue: true })
     if (single.ok && single.value[key] !== undefined) out[key] = single.value[key]
   }
   return out

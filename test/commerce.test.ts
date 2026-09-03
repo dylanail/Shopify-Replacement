@@ -227,3 +227,22 @@ test('accepting the same return twice does not put the stock back twice', () => 
   returnOrder(db, store.id, order.id, 'chased it again')
   assert.equal(getVariant(db, store.id, variantId)?.inventory, 10, 'a second return is a no-op, not three more in stock')
 })
+
+test('two automatic promotions cannot discount more than the cart is worth, and the lines add up', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Stack', prompt: 'stack' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Thing', status: 'published', variants: [{ title: 'One', priceCents: 10_000, inventory: 10 }] })
+  createPromotion(db, store.id, { title: 'Sixty', kind: 'percentage', value: 60, automatic: true })
+  createPromotion(db, store.id, { title: 'Another sixty', kind: 'percentage', value: 60, automatic: true })
+
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, product.variants[0]!.id, 1)
+  const amounts = totals(db, store.id, cart)
+  assert.equal(amounts.discountCents, 10_000, 'a cart can go to zero but no further')
+  assert.equal(
+    amounts.appliedPromotions.reduce((sum, entry) => sum + entry.amountCents, 0),
+    amounts.discountCents,
+    'and every line the totals block prints is the amount actually taken',
+  )
+  assert.equal(amounts.subtotalCents - amounts.discountCents, 0)
+})

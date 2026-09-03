@@ -476,8 +476,17 @@ test('the storefront serves generated legal pages, takes behaviour beacons, and 
   assert.equal(count(analytics.text, /checkout\.complete/g), purchasesBefore, 'a beacon cannot claim a purchase')
   const missing = await call(`/s/${slug}/go/nothing`)
   assert.equal(missing.status, 404)
-  const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })
+  // The draft is the merchant's own view, so it carries their session; a
+  // stranger who guesses the slug gets nothing.
+  const preview = await fetch(`${base}/preview/${slug}/_t`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') },
+    body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }),
+  })
   assert.equal(preview.status, 204, 'preview beacons are accepted and dropped')
+  const stranger = await fetch(`${base}/preview/${slug}`, { headers: { accept: 'text/html' }, redirect: 'manual' })
+  assert.equal(stranger.status, 302, 'an unpublished store is not readable by whoever guesses the slug')
+  assert.equal(stranger.headers.get('location'), '/login')
 })
 
 test('the scheme a proxy forwards is the scheme the request is seen under', async () => {

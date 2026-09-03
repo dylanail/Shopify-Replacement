@@ -13,6 +13,7 @@ import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
 import { storeForHost, type Store } from './control/stores.ts'
+import { roleOn, userFor } from './control/auth.ts'
 import { tlsAllowed } from './control/domains.ts'
 
 const log = logger('server')
@@ -111,6 +112,16 @@ const server = createServer(async (req, res) => {
     }
 
     const store = resolveStorefront(ctx)
+    // The draft is the merchant's own view of unpublished work, and it was
+    // readable by anyone who knew the slug — which is the live URL's own last
+    // path segment. Every unpublished page, price and piece of copy on the
+    // platform was one guess away. It needs a session with a role on the store.
+    if (store?.preview) {
+      const viewer = userFor(getDb(), ctx)
+      if (!viewer || !roleOn(getDb(), viewer.id, store.store.id)) {
+        throw new HttpError(401, 'The draft of a store is for the people who run it')
+      }
+    }
     // A storefront is open when it has been published, and not before. The
     // resolver used to serve any store by slug and quietly fall back to the
     // draft environment, so a store that had never been published was already
