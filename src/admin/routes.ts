@@ -1,6 +1,6 @@
 import { getDb } from '../lib/db.ts'
 import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
-import { endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
+import { acceptInvite, endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
 import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
 import { deleteAd, draftAds, getAd, reviseAd, saveAd, saveInspiration, deleteInspiration, readInspiration, type AdPlatform } from '../agent/ads.ts'
@@ -51,6 +51,8 @@ import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
 const STORE_COOKIE = 'amboras_store'
+/** An invite token held between clicking the link and having an account. */
+const INVITE_COOKIE = 'amboras_invite'
 
 type Session = { user: { id: string; name: string; email: string }; store: Store; stores: Store[] }
 
@@ -66,6 +68,14 @@ function session(ctx: Ctx): Session {
 }
 
 class NoStores extends Error {}
+
+/** Someone who followed an invite link before they had an account joins on their first sign-in. */
+function redeemPendingInvite(ctx: Ctx, userId: string) {
+  const pending = ctx.cookies[INVITE_COOKIE]
+  if (!pending) return
+  acceptInvite(getDb(), userId, pending)
+  setCookie(ctx.res, INVITE_COOKIE, '', { maxAge: 0 })
+}
 
 function page(ctx: Ctx, current: Session, active: string, title: string, body: string) {
   const db = getDb()
@@ -137,6 +147,7 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     try {
       const user = login(db(), String(body.email ?? ''), String(body.password ?? ''))
+      redeemPendingInvite(ctx, user.id)
       setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
       return redirect('/admin')
     } catch (error) {
@@ -148,11 +159,33 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     try {
       const user = register(db(), { email: String(body.email ?? ''), password: String(body.password ?? ''), name: String(body.name ?? '') })
+      redeemPendingInvite(ctx, user.id)
       setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
       return redirect('/onboarding')
     } catch (error) {
       return redirect(`/register?error=${encodeURIComponent(error instanceof Error ? error.message : 'Could not register')}`)
     }
+  })
+
+  /**
+   * Redeem an invite.
+   *
+   * `inviteTeammate` minted a token and `acceptInvite` was the only thing that
+   * could turn the row it wrote into access — and nothing called it. No route
+   * took a token, the token was never shown to the person who created it, and
+   * a teammate without an account could never join. The invite is a link now:
+   * signing in or registering with it in hand joins the store.
+   */
+  router.get('/join/:token', (ctx) => {
+    const inviteToken = ctx.params.token as string
+    const user = userFor(db(), ctx)
+    if (!user) {
+      setCookie(ctx.res, INVITE_COOKIE, inviteToken, { maxAge: 60 * 60 * 24 * 7 })
+      return redirect(`/register?error=${encodeURIComponent('Create an account with the address you were invited at, and you will join the store.')}`)
+    }
+    const joined = acceptInvite(db(), user.id, inviteToken)
+    setCookie(ctx.res, INVITE_COOKIE, '', { maxAge: 0 })
+    return redirect(joined ? '/admin/stores?flash=' + encodeURIComponent('You are on the team.') : '/admin/stores?flash=' + encodeURIComponent('!That invite has been used already, or it is not valid.'))
   })
 
   router.post('/logout', (ctx) => {
@@ -1360,7 +1393,8 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     try {
       const result = inviteTeammate(db(), current.store.id, String(body.email ?? ''), String(body.role ?? 'member') as 'member')
-      return back(ctx, result.joined ? 'They already had an account and now have access.' : 'Invite created.')
+      const link = `${process.env.AMBORAS_PUBLIC_ORIGIN || ctx.url.origin}/join/${result.invite}`
+      return back(ctx, result.joined ? 'They already had an account and now have access.' : `Invite created. Send them this link: ${link}`)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not invite'}`)
     }

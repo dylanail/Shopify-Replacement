@@ -24,7 +24,7 @@ npm start                          # http://localhost:4100
 ```
 
 ```
-npm test            # 123 tests, ~4s; the model path runs against a fake network
+npm test            # 167 tests, ~7s; the model path runs against a fake network
 npm run typecheck
 npm run reset       # throw the database away and re-seed
 ```
@@ -59,7 +59,7 @@ says on every page and every record when it is looking at rules output.
 
 | | |
 |---|---|
-| **Stores hub** | every store you own with 30-day numbers; "+ New store" runs onboarding again |
+| **Stores hub** | the account's own page, above any one store: every store with its status, the address it answers at, whether it has ever been published, its products and its thirty-day orders and sales; open one, go straight to its Build page, pause a shop or reopen it, or start another. Signing in lands here when there is no store to open, so an account with nothing in it is never marched into onboarding |
 | **Build** | three ways to build (bring your own product, copy a funnel, copy a funnel with a new angle), each with its own order of work; two shapes the result takes (a Shopify-style store or a funnel) with an advertorial or a quiz in front of either and a popup decision; a page plan that lists every page the shape needs with its status read from what exists and a template for each one missing; step statuses read from the world, not ticked; eight buyer questions where "I don't know" is an answer that research fills in and labels as assumed |
 | **Market** | the market analysis (awareness, sophistication, desires ranked, the searches to run, competitors, mechanisms, new information, underserved avatars, whether there is a way to stand out at all), the product overview, core avatars with sub-avatars, the ad plan (concept → angle → variations → format → method) and feedback loops, all saved under the store |
 | **Creative** | sixteen photo briefs (the course's eight plus the shots every reference page uses: the pack per tier, the "before" moments, the mechanism diagram, goes-everywhere, the infographic slides, and the expert, origin and texture when there are any) checked against each product's media; creator-content concepts for a real person to film, vetted in a queue and never published as reviews; a dependency-free GIF maker over the product's PNG renders; a layout suggester that picks blocks from the catalog for an offer page, advertorial, quiz, product page or home |
@@ -71,7 +71,7 @@ says on every page and every record when it is looking at rules output.
 | **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you; funnels in the same test group split traffic at `/go/<group>` by weight and are compared on revenue per session |
 | **Bundles** | Kaching-style tiers enforced by a promotion the cart reads |
 | **Checkout** | one page that re-sells the way the reference checkouts do (arrival date above the form, free shipping shown as a saving, the bump, the store's own guarantee and returns numbers under the button, reviews below the form), express row, buy-it-now, Stripe Payment Element with saved cards for the post-purchase offer, demo orders without keys; or laid out in the builder from the checkout blocks (form, summary, bump, steps) with a timer, the rating, the guarantee and proof around the same form |
-| **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, delivery estimates, ad-spend log, profit report with ROAS |
+| **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, delivery estimates, an ad-spend log that records clicks, and a profit report that carries the course's two lines — breakeven ROAS (1 ÷ gross margin) and target (breakeven + 1) — and says which side of them the spend is on. Cost per click rides along, because revenue per session is judged against it |
 | **Ads** | drafts per product, platform and format; every field editable; revisable; exported for the ad manager; a swipe file fed by the Meta Ad Library, competitor links, pasted ads and hook patterns |
 | **Domains** | host here or forward from the registrar, with the records and menu path for Namecheap, GoDaddy, Cloudflare, Squarespace, Porkbun; real DNS and redirect checks; certificates issued on demand by the edge once a name verifies |
 | **Conversion widgets** | recent sales, live viewers, scarcity, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, Q&A, back-in-stock, announcements, compare-at badges, abandoned-cart email, GA4/Meta/TikTok events; each renders nothing when it has nothing honest to say |
@@ -79,7 +79,7 @@ says on every page and every record when it is looking at rules output.
 | **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll; an email for a code, the deal itself, or the quiz; says how long the code is valid; never on the checkout); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
 | **Site health** | renders the pages as a visitor gets them and checks landmarks, alt text, labels, headings, button names, contrast, weight on the wire, scripts, fonts, lazy loading, and the template residue the reference pages shipped ("[confirm]" markers, dead links, placeholder images, counters at zero) |
 | **Plugins** | manifest schema, settings validation, sealed credentials, storefront slots, plugin-contributed tools; eleven first-party integrations installable, the rest a directory |
-| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); ten transactional templates over Resend; meta, structured data, redirects, sitemap |
+| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); eleven transactional templates over Resend; meta, structured data, redirects, sitemap |
 
 `test/http.test.ts` walks the whole product over HTTP with no mocks,
 `test/models.test.ts` walks the model path against a fake network (research,
@@ -160,7 +160,10 @@ See `.env.example` for everything. The ones that decide what runs:
 | `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | email actually sends |
 
 On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
-`/preview/:slug` is the draft (untracked, pixels suppressed).
+`/preview/:slug` is the draft (untracked, pixels suppressed, and signed-in:
+the draft is only for the people who run the store). A storefront answers at
+its public address only once it has been published; before that, and while
+it is paused, the address shows a closed sign that no crawler is offered.
 
 ## Not built yet
 

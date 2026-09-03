@@ -546,6 +546,40 @@ test('a signed-in account with no store lands on its own hub, not on a form it c
   assert.match(form.text, /href="\/admin\/stores"/, 'onboarding is escapable with no stores on the account')
 })
 
+test('an invited teammate can actually join the store', async () => {
+  // The owner invites someone who has no account yet.
+  const invited = await call('/admin/team', { form: { email: 'colleague@example.com', role: 'member' } })
+  const link = /\/join\/[A-Za-z0-9_-]+/.exec(flashOf(invited.location))?.[0] ?? ''
+  assert.ok(link, `the invite is a link the owner can send (got ${flashOf(invited.location)})`)
+
+  const own = new Map<string, string>()
+  const theirs = async (path: string, form?: Record<string, string>) => {
+    const response = await fetch(`${base}${path}`, {
+      method: form ? 'POST' : 'GET',
+      headers: {
+        accept: 'text/html',
+        cookie: [...own].map(([name, value]) => `${name}=${value}`).join('; '),
+        ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+      },
+      ...(form ? { body: new URLSearchParams(form).toString() } : {}),
+      redirect: 'manual',
+    })
+    for (const cookie of response.headers.getSetCookie()) {
+      const [pair] = cookie.split(';')
+      const [name, value = ''] = (pair ?? '').split('=')
+      if (name) own.set(name.trim(), decodeURIComponent(value))
+    }
+    return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+  }
+
+  const followed = await theirs(link)
+  assert.match(followed.location, /^\/register/, 'without an account, the link sends them to register')
+  await theirs('/register', { email: 'colleague@example.com', password: 'a-long-enough-password', name: 'Colleague' })
+
+  const hub = await theirs('/admin/stores')
+  assert.match(hub.text, /Ironjaw/, 'and the store they were invited to is theirs to open')
+})
+
 test('opening a store from the hub can land on a page other than the dashboard, and only inside the admin', async () => {
   const build = await call('/admin/switch?storeId=&to=%2Fadmin%2Fbuild')
   assert.equal(build.location, '/admin/build')
