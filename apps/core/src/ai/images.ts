@@ -52,11 +52,11 @@ ${opts.wordmark ? `<text x="64" y="90" font-family="Georgia, serif" font-size="3
 export function renderHero(opts: { name: string; slogan: string; primary: string; secondary: string; bg: string; text: string; font?: string }) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="${esc(opts.name)}">
 <rect width="1600" height="900" fill="${opts.bg}"/>
-<circle cx="1250" cy="420" r="300" fill="${opts.secondary}" opacity="0.18"/>
-<circle cx="1330" cy="520" r="180" fill="${opts.primary}" opacity="0.12"/>
-<text x="120" y="420" font-family="${esc(opts.font ?? "Georgia")}, Georgia, serif" font-size="120" letter-spacing="8" fill="${opts.text}">${esc(opts.name.toUpperCase())}</text>
-<text x="124" y="500" font-family="Georgia, serif" font-style="italic" font-size="42" fill="${opts.primary}">${esc(opts.slogan)}</text>
-<rect x="120" y="560" width="220" height="4" fill="${opts.secondary}"/>
+<circle cx="800" cy="450" r="360" fill="${opts.secondary}" opacity="0.16"/>
+<circle cx="920" cy="540" r="200" fill="${opts.primary}" opacity="0.10"/>
+<text x="800" y="430" text-anchor="middle" font-family="${esc(opts.font ?? "Georgia")}, Georgia, serif" font-size="${opts.name.length > 14 ? 72 : 104}" letter-spacing="8" fill="${opts.text}">${esc(opts.name.toUpperCase())}</text>
+<text x="800" y="505" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="40" fill="${opts.primary}">${esc(opts.slogan)}</text>
+<rect x="690" y="560" width="220" height="4" fill="${opts.secondary}"/>
 </svg>`;
 }
 

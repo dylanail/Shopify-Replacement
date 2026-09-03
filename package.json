@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "Kiln — the AI-native shop system. Say what you sell; Kiln fires the store.",
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "pnpm -r --parallel --filter ./apps/* dev",
     "dev:core": "pnpm --filter @kiln/core dev",
@@ -18,9 +20,10 @@
     "seed": "pnpm --filter @kiln/core seed"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.0",
+    "@types/node": "^22.18.0",
+    "playwright-core": "1.55.0",
     "tsx": "^4.20.0",
-    "@types/node": "^22.18.0"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
   }
 }

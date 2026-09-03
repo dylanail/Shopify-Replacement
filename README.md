@@ -16,6 +16,18 @@ Type one sentence → Kiln names the brand, builds the kit, writes and publishes
  naming → brand kit → 3 products (copy · variants · images) → collections → promotions → build → LIVE
 ```
 
+## A look
+
+| Admin dashboard | Store Designer |
+|---|---|
+| ![Dashboard](docs/screenshots/admin-dashboard.png) | ![Designer](docs/screenshots/admin-designer.png) |
+
+| Generated storefront | Product page + cart |
+|---|---|
+| ![Storefront](docs/screenshots/storefront-home.png) | ![PDP](docs/screenshots/storefront-cart.png) |
+
+*Every pixel above came from one sentence and the demo seed — no API keys.*
+
 ## What's inside
 
 | Surface | Package | What it is |
@@ -53,6 +65,7 @@ Open http://localhost:3000, log in, and talk to the store. Or register and type 
 | `pnpm typecheck` / `pnpm build` | strict TS + Next builds |
 | `pnpm db:generate` | regenerate SQL migrations from `packages/db/src/schema.ts` |
 | `pnpm seed` | demo data (idempotent) |
+| `node scripts/smoke.mjs` | browser smoke test against running apps (login → every admin page → assistant run → storefront → cart); needs Chromium via `CHROME_PATH` |
 
 ## Try the assistant (works offline)
 
