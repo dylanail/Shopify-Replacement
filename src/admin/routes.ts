@@ -18,7 +18,7 @@ import { getSend } from '../email/send.ts'
 import { ask, history } from '../agent/chat.ts'
 import { execute } from '../agent/registry.ts'
 import { saveUpload, UploadError } from '../lib/uploads.ts'
-import { advertorialTemplate, blankTemplate, createPage, deletePage, duplicatePage, getPage, landingTemplate, updatePage } from '../pages/store.ts'
+import { createPage, deletePage, duplicatePage, getPage, pageTemplate, updatePage } from '../pages/store.ts'
 import { clonePage, extractBlocks } from '../pages/clone.ts'
 import { blockDefinition } from '../pages/blocks.ts'
 import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
@@ -40,10 +40,10 @@ import { authPage, onboardingPage } from './auth-pages.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, skipStep, type BuildMode } from '../control/build.ts'
 import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
-import { deleteQueueItem, getQueueItem, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
+import { deleteQueueItem, getQueueItem, PAGE_GOALS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
-import { newBlock, offerTemplate, quizTemplate } from '../pages/store.ts'
+import { newBlock } from '../pages/store.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
@@ -274,12 +274,13 @@ export function adminRouter(): Router {
       ...(product ? { product: { id: product.id, title: product.title, image: product.heroImage, subtitle: product.subtitle } } : {}),
       research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
     }
-    const template = String(body.template ?? 'blank')
-    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : template === 'offer' ? offerTemplate(input) : template === 'quiz' ? quizTemplate(input) : blankTemplate()
+    const template = pageTemplate(String(body.template ?? 'blank'))
     const created = createPage(db(), current.store.id, {
-      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : template === 'offer' ? `${product?.title ?? current.store.name} — save today` : template === 'quiz' ? `Find your ${product?.title ?? 'fit'}` : 'New page'),
-      kind: template === 'advertorial' ? 'advertorial' : 'landing',
-      blocks,
+      title: String(body.title ?? '').trim() || template.title(input),
+      kind: template.kind,
+      role: template.role,
+      blocks: template.build(input),
+      ...(product && template.role !== 'checkout' ? { productId: product.id } : {}),
     })
     return redirect(`/admin/pages/${created.id}/edit`)
   })
@@ -1083,11 +1084,11 @@ export function adminRouter(): Router {
   router.post('/admin/pages/suggest', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    const goal = (['offer', 'advertorial', 'quiz', 'pdp', 'home'].includes(String(body.goal)) ? String(body.goal) : 'offer') as PageGoal
+    const goal = (PAGE_GOALS.includes(String(body.goal) as PageGoal) ? String(body.goal) : 'offer') as PageGoal
     const product = body.productId ? getProduct(db(), current.store.id, String(body.productId)) : null
     const avatar = body.avatarId ? getAvatar(db(), current.store.id, String(body.avatarId)) : listAvatars(db(), current.store.id).find((entry) => entry.selected) ?? null
     const suggestion = await suggestBlocks(modelFor(db(), current.store.id, 'pages'), { goal, product, research: latestResearch(db(), current.store.id), avatar, direction: String(body.direction ?? '') })
-    const created = createPage(db(), current.store.id, { title: `${product ? `${product.title} — ` : ''}${goal} page (suggested)`, kind: goal === 'advertorial' ? 'advertorial' : 'landing', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product ? { productId: product.id } : {}) })
+    const created = createPage(db(), current.store.id, { title: `${product ? `${product.title} — ` : ''}${goal} page (suggested)`, kind: goal === 'advertorial' ? 'advertorial' : goal === 'checkout' ? 'checkout' : goal === 'pdp' ? 'product' : 'landing', role: goal === 'checkout' ? 'checkout' : 'page', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product && goal !== 'checkout' ? { productId: product.id } : {}) })
     return redirect(`/admin/pages/${created.id}/edit?flash=${encodeURIComponent(`${suggestion.blocks.length} blocks laid out (${suggestion.source}). ${suggestion.note}`)}`)
   })
 

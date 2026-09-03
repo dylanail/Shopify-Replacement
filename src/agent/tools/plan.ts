@@ -7,7 +7,7 @@ import { latestDoc, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, type
 import { modelFor } from '../models.ts'
 import { ripToPage } from '../../pages/rip.ts'
 import { createPage, newBlock } from '../../pages/store.ts'
-import { queuePhotoBriefs, queueUgcConcepts, suggestBlocks, listQueue, type PageGoal } from '../../creative/briefs.ts'
+import { PAGE_GOALS, queuePhotoBriefs, queueUgcConcepts, suggestBlocks, listQueue, type PageGoal } from '../../creative/briefs.ts'
 import { makeProductGif } from '../../creative/product-gif.ts'
 import { auditStore } from '../../storefront/health.ts'
 import { defineTools, type Tool } from '../registry.ts'
@@ -128,13 +128,13 @@ export const planTools: Tool[] = defineTools([
   {
     name: 'suggest_page_layout',
     area: 'store',
-    description: 'Choose the blocks and their order for a kind of page (offer, advertorial, quiz, pdp, home) and create it as a draft.',
-    schema: { goal: { type: 'string', enum: ['offer', 'advertorial', 'quiz', 'pdp', 'home'], required: true }, productId: { type: 'string' }, direction: { type: 'string' }, title: { type: 'string' } },
+    description: 'Choose the blocks and their order for a kind of page (offer, advertorial, quiz, pdp, home, science, checkout) and create it as a draft. A checkout page, once published, becomes the store\'s /checkout.',
+    schema: { goal: { type: 'string', enum: PAGE_GOALS, required: true }, productId: { type: 'string' }, direction: { type: 'string' }, title: { type: 'string' } },
     async handler(args, ctx) {
       const product = args.productId ? getProduct(ctx.db, ctx.storeId, args.productId as string) : null
       const avatar = listAvatars(ctx.db, ctx.storeId).find((entry) => entry.selected) ?? null
       const suggestion = await suggestBlocks(modelFor(ctx.db, ctx.storeId, 'pages'), { goal: args.goal as PageGoal, product, research: latestResearch(ctx.db, ctx.storeId), avatar, ...(args.direction ? { direction: args.direction as string } : {}) })
-      const page = createPage(ctx.db, ctx.storeId, { title: (args.title as string) || `${product ? `${product.title} — ` : ''}${args.goal} page (suggested)`, kind: args.goal === 'advertorial' ? 'advertorial' : 'landing', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product ? { productId: product.id } : {}) })
+      const page = createPage(ctx.db, ctx.storeId, { title: (args.title as string) || `${product ? `${product.title} — ` : ''}${args.goal} page (suggested)`, kind: args.goal === 'advertorial' ? 'advertorial' : args.goal === 'checkout' ? 'checkout' : args.goal === 'pdp' ? 'product' : 'landing', role: args.goal === 'checkout' ? 'checkout' : 'page', blocks: suggestion.blocks.map((block) => newBlock(block.type, block.settings ?? {})), ...(product && args.goal !== 'checkout' ? { productId: product.id } : {}) })
       return { summary: `Created "${page.title}" with ${suggestion.blocks.length} blocks (${suggestion.source}). ${suggestion.note}`, artifacts: [{ type: 'table', columns: ['Block', 'Job'], rows: suggestion.blocks.map((block) => [block.type, block.why]) }, { type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open it' }] }
     },
   },

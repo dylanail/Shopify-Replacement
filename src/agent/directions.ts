@@ -215,9 +215,9 @@ export function redirectContent(content: ProductContent, direction: Direction): 
 /* ---------------------------------------------------------------- model */
 
 /** Block types whose settings carry the words a reader sees. */
-const TEXT_BLOCKS = new Set(['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box', 'comparison', 'announcement-bar', 'guarantee', 'byline', 'publication-bar', 'sticky-cta', 'progress-bar', 'countdown', 'review-wall', 'bundle-offer', 'buy-box'])
+const TEXT_BLOCKS = new Set(['headline', 'rich-text', 'numbered-reason', 'pull-quote', 'hero', 'image-with-text', 'multicolumn', 'faq', 'offer-box', 'comparison', 'announcement-bar', 'guarantee', 'byline', 'publication-bar', 'sticky-cta', 'progress-bar', 'countdown', 'review-wall', 'bundle-offer', 'buy-box', 'stats', 'timeline', 'how-it-works', 'value-stack', 'expert-quote', 'letter', 'cost-comparison', 'studies', 'specs', 'rating-strip', 'checkout-steps', 'trust-badges', 'testimonials'])
 /** Setting keys that are addresses, ids or media, never prose. */
-const NOT_TEXT = /^(src|href|image|images|productId|ctaHref|url|id|video|link|collectionId|background|align|width|padding|level|height|overlay|minutes|percent|count|number|showImage|buyNow)$/
+const NOT_TEXT = /^(src|href|image|images|videos|poster|productId|ctaHref|url|id|video|link|collectionId|background|align|width|padding|level|height|overlay|minutes|percent|count|number|showImage|buyNow|minimum|perRow|current|layout|showExpress|showBump|histogram|mode|endsAt)$/
 
 const BLOCKS_SCHEMA = S.obj({
   blocks: S.arr(

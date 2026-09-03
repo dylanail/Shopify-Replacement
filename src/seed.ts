@@ -12,7 +12,7 @@ import { createArticle, createBlog } from './domain/content.ts'
 import { sessionFor, track } from './analytics/events.ts'
 import { onboard } from './agent/onboarding.ts'
 import { upsertBundle } from './domain/bundles.ts'
-import { advertorialTemplate, createPage, landingTemplate } from './pages/store.ts'
+import { advertorialTemplate, checkoutTemplate, createPage, landingTemplate, productTemplate } from './pages/store.ts'
 import { latestResearch } from './agent/research.ts'
 import { updateProduct } from './domain/catalog.ts'
 import { recordAdSpend } from './domain/ops.ts'
@@ -167,7 +167,10 @@ async function main() {
   }
   createPage(db, store.id, { title: `5 reasons fighters are switching to ${hero?.title ?? store.name}`, handle: 'why-fighters-switch', kind: 'advertorial', blocks: advertorialTemplate(templateInput), status: 'published' })
   createPage(db, store.id, { title: `${hero?.title ?? store.name} — the offer`, handle: 'offer', kind: 'landing', blocks: landingTemplate(templateInput), status: 'published' })
-  log.info('advertorial and landing page built from the templates')
+  createPage(db, store.id, { title: `${hero?.title ?? store.name} — product page`, handle: 'product-page', kind: 'product', blocks: productTemplate(templateInput), status: 'published' })
+  // The checkout as blocks: published, so /checkout runs through it and the buy flow is exercised on the block version.
+  createPage(db, store.id, { title: `${store.name} — checkout`, handle: 'checkout', kind: 'checkout', role: 'checkout', blocks: checkoutTemplate(templateInput), status: 'published' })
+  log.info('advertorial, landing, product and checkout pages built from the templates')
 
   // Supplier costs, the way a dropshipper would have them, so margins and
   // delivery estimates are real numbers rather than blanks.

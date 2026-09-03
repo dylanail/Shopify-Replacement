@@ -20,7 +20,7 @@ import { listSeoPages } from '../seo/schema.ts'
 import { PROMPT_LIBRARY } from '../agent/chat.ts'
 import { listRuns } from '../agent/runtime.ts'
 import { latestResearch } from '../agent/research.ts'
-import { listPages, type Page } from '../pages/store.ts'
+import { listPages, type Page, PAGE_TEMPLATES } from '../pages/store.ts'
 import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
 import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
@@ -631,7 +631,7 @@ export function pagesPage(ctx: Ctx): string {
     <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
-      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="offer">Offer page (the funnel landing page)</option><option value="advertorial">Advertorial (listicle)</option><option value="quiz">Quiz funnel</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
+      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template">${PAGE_TEMPLATES.map((template) => `<option value="${escapeHtml(template.key)}" title="${escapeHtml(template.description)}">${escapeHtml(template.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
       <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
       <button class="btn primary" type="submit">Create and open the editor</button></form>
@@ -647,7 +647,7 @@ export function pagesPage(ctx: Ctx): string {
   </div>
   <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
-  ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
+  ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}${page.role === 'checkout' ? ` <span class="tag ${page.status === 'published' ? 'ok' : 'warn'}" title="The most recently updated published checkout page is the store's /checkout">checkout</span>` : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
     <td><span class="tag ${page.status === 'published' ? 'ok' : 'warn'}">${page.status}</span></td><td class="muted">${page.updatedAt.slice(0, 16).replace('T', ' ')}</td>
     <td style="text-align:right"><div class="row" style="justify-content:flex-end"><a class="btn" href="/admin/pages/${escapeHtml(page.id)}/edit">Edit</a>
