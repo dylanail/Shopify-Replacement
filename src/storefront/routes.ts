@@ -14,7 +14,7 @@ import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
-import { getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
+import { canReserve, getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
 import { findArticle, listBlogs } from '../domain/content.ts'
 import { CheckoutError, completeCart, getOrder } from '../domain/orders.ts'
 import { createReview, listReviews, statsFor } from '../domain/reviews.ts'
@@ -571,6 +571,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
+    // Checked before the card is charged, not after: the offer used to take
+    // the money and then append a line for stock that was not there.
+    if (body.accept === 'yes' && offer && !canReserve(current.db, offer.variantId, 1)) {
+      recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}?offer=soldout`)
+    }
     if (body.accept !== 'yes' || !offer) {
       recordDownsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}`)
@@ -595,6 +601,10 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
+    if (body.accept === 'yes' && offer && !canReserve(current.db, offer.variantId, 1)) {
+      recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}/downsell`)
+    }
     if (body.accept !== 'yes' || !offer) {
       recordUpsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}/downsell`)

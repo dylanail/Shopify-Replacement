@@ -172,7 +172,12 @@ export function recordUpsell(
   const items = outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
   db.tx(() => {
-    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    // completeCart refuses a checkout when the stock is not there; the
+    // post-purchase offer threw the same answer away and charged the saved
+    // card anyway, leaving negative inventory and a line nobody could ship.
+    if (outcome.accepted && outcome.line && !reserveInventory(db, outcome.line.variantId, outcome.line.quantity)) {
+      throw new CheckoutError('That is out of stock.')
+    }
     db.update('orders', order.id, {
       items,
       subtotal_cents: order.subtotalCents + extra,
@@ -189,7 +194,9 @@ export function recordDownsell(db: Db, storeId: string, orderId: string, outcome
   if (!order) throw new Error('No order')
   const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
   db.tx(() => {
-    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    if (outcome.accepted && outcome.line && !reserveInventory(db, outcome.line.variantId, outcome.line.quantity)) {
+      throw new CheckoutError('That is out of stock.')
+    }
     db.update('orders', order.id, {
       items: outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items,
       subtotal_cents: order.subtotalCents + extra,

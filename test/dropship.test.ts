@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fresh } from './helpers.ts'
 import { createStore, getStore } from '../src/control/stores.ts'
-import { createProduct, getProduct, updateProduct } from '../src/domain/catalog.ts'
+import { canReserve, createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart } from '../src/domain/cart.ts'
-import { completeCart, recordSupplierOrder, markDelivered } from '../src/domain/orders.ts'
+import { completeCart, recordSupplierOrder, markDelivered, recordUpsell } from '../src/domain/orders.ts'
+import { createPromotion } from '../src/domain/promotions.ts'
+import { totals } from '../src/domain/cart.ts'
 import { carrierFor, deliveryEstimate, importReviews, marginFor, parseCsv, profitReport, recordAdSpend, recentPurchases, roasLines, trackingFor, importProductFromUrl, createFromImport, askQuestion, answerQuestion, listQuestions } from '../src/domain/ops.ts'
 import { ensureShippingProtection, funnelForProducts, resolveBump, resolveOffer, upsertFunnel } from '../src/domain/funnels.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, readDirection, redirectContent, writeAdvertorial, writePdp } from '../src/agent/directions.ts'
@@ -285,4 +287,41 @@ test('the two ROAS lines are computed, and the report says which side of them th
   assert.equal(spent.spendDays, 1)
   assert.equal(spent.roas, 0)
   assert.equal(spent.verdict, null, 'no revenue means no margin, and a line has to be divided into something')
+})
+
+test('the order bump is an add-on, not a second unit that triggers a quantity offer', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bump', prompt: 'bump' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const glove = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 34_000, inventory: 20 }] })
+  const protection = ensureShippingProtection(db, store.id, 299)
+  createPromotion(db, store.id, { title: 'Buy two, save 15%', kind: 'bundle', value: 15, automatic: true, rules: { buyQuantity: 2 } })
+
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, glove.variants[0]!.id, 1)
+  assert.equal(totals(db, store.id, cart).discountCents, 0, 'one glove is not two of anything')
+
+  const withBump = addToCart(db, store.id, cart.id, protection.variants[0]!.id, 1, 'order-bump', 299)
+  const after = totals(db, store.id, withBump)
+  assert.equal(after.discountCents, 0, 'and $2.99 of shipping protection does not make it two')
+  assert.equal(after.subtotalCents, 34_299)
+})
+
+test('a post-purchase offer will not charge for stock that is not there', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Stock', prompt: 'stock' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const glove = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 10_000, inventory: 5 }] })
+  const extra = createProduct(db, store.id, { title: 'Wraps', status: 'published', variants: [{ title: 'One', priceCents: 2_000, inventory: 0 }] })
+  const soldOut = extra.variants[0]!
+  assert.equal(canReserve(db, soldOut.id, 1), false, 'the check the offer makes before it charges')
+
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, glove.variants[0]!.id, 1)
+  const order = completeCart(db, store.id, cart.id, { email: 'b@example.com' })
+  const line = { variantId: soldOut.id, productId: extra.id, title: 'Wraps', variantTitle: 'One', image: '', unitCents: 2_000, quantity: 1, source: 'post-purchase' }
+  assert.throws(
+    () => recordUpsell(db, store.id, order.id, { offered: soldOut.id, accepted: true, line, amountCents: 2_000 }),
+    /out of stock/,
+    'and the last line of defence if it slips through',
+  )
+  assert.equal(getVariant(db, store.id, soldOut.id)?.inventory, 0, 'nothing went negative')
 })

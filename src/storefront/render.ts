@@ -682,11 +682,19 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
     if (window.__elements) window.__elements.update({ amount: t.totalCents });
   }
   var bumps = document.querySelectorAll('.bump input');
+  function sendBump(el){
+    return fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: el.value, on: el.checked }) })
+      .then(function(r){ return r.json() }).then(refresh);
+  }
   bumps.forEach(function(bump){ bump.addEventListener('change', function(){
     bumps.forEach(function(other){ other.checked = bump.checked });
-    fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: bump.value, on: bump.checked }) })
-      .then(function(r){ return r.json() }).then(refresh);
+    sendBump(bump);
   })});
+  // The reference checkouts arrive with the bump ticked, and a box that is
+  // ticked on load never fires a change event: the customer saw "Protect my
+  // order — $2.99", paid, and was charged for neither. Sync it once.
+  var ticked = document.querySelector('.bump input:checked');
+  if (ticked) sendBump(ticked);
   document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
     fetch(base + '/checkout/shipping', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ shippingOptionId: radio.value }) })
       .then(function(r){ return r.json() }).then(refresh);

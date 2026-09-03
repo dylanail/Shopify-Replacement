@@ -130,7 +130,11 @@ export function applyPromotions(
   for (const promotion of candidates) {
     if (promotion.rules.minSubtotalCents && opts.subtotalCents < promotion.rules.minSubtotalCents) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
-    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf)
+    // A gift is not bought and an order bump is not a unit of the product on
+    // offer: counting the $2.99 shipping protection as the second item made a
+    // store-wide "buy two, save 15%" fire on a single-product cart, so every
+    // customer who accepted the bump took 15% off the whole order with it.
+    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf && item.source !== 'order-bump')
     if (!eligible.length && promotion.kind !== 'free_shipping') continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)

@@ -231,6 +231,13 @@ export function getVariant(db: Db, storeId: string, variantId: string): Variant 
  * the admin exposes; without it a sold-out variant refuses the reservation
  * rather than letting the storefront oversell.
  */
+/** Whether a reserve would succeed, without moving anything: the check a post-purchase offer needs before it charges. */
+export function canReserve(db: Db, variantId: string, quantity: number): boolean {
+  const row = db.one<{ inventory: number; allow_backorder: number }>('SELECT inventory, allow_backorder FROM variants WHERE id = ?', variantId)
+  if (!row) return false
+  return row.inventory >= quantity || bool(row.allow_backorder)
+}
+
 export function reserveInventory(db: Db, variantId: string, quantity: number): boolean {
   const row = db.one<{ inventory: number; allow_backorder: number }>(
     'SELECT inventory, allow_backorder FROM variants WHERE id = ?',
