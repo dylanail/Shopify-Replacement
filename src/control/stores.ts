@@ -26,6 +26,8 @@ export type Store = {
   status: 'draft' | 'live' | 'paused'
   prompt: string
   creditsUsed: number
+  referenceImage: string
+  referenceUrl: string
   createdAt: string
 }
 
@@ -50,11 +52,17 @@ function rowToStore(row: Row): Store {
     status: row.status as Store['status'],
     prompt: row.prompt as string,
     creditsUsed: row.credits_used as number,
+    referenceImage: (row.reference_image as string) ?? '',
+    referenceUrl: (row.reference_url as string) ?? '',
     createdAt: row.created_at as string,
   }
 }
 
-export function createStore(db: Db, ownerId: string, input: { name: string; prompt?: string; currency?: string; planSlug?: string }): Store {
+export function createStore(
+  db: Db,
+  ownerId: string,
+  input: { name: string; prompt?: string; currency?: string; planSlug?: string; referenceImage?: string; referenceUrl?: string },
+): Store {
   const storeId = id('store')
   const timestamp = now()
   db.tx(() => {
@@ -69,6 +77,8 @@ export function createStore(db: Db, ownerId: string, input: { name: string; prom
       status: 'draft',
       prompt: input.prompt ?? '',
       credits_used: 0,
+      reference_image: input.referenceImage ?? '',
+      reference_url: input.referenceUrl ?? '',
       created_at: timestamp,
     })
     for (const kind of ['draft', 'live'] as const) {
@@ -111,7 +121,11 @@ export function listStores(db: Db, userId: string): Store[] {
     .map(rowToStore)
 }
 
-export function updateStore(db: Db, storeId: string, patch: Partial<Pick<Store, 'name' | 'currency' | 'status' | 'planSlug'>> & { brand?: Brand }): Store {
+export function updateStore(
+  db: Db,
+  storeId: string,
+  patch: Partial<Pick<Store, 'name' | 'currency' | 'status' | 'planSlug' | 'referenceImage' | 'referenceUrl'>> & { brand?: Brand },
+): Store {
   const store = getStore(db, storeId)
   if (!store) throw new Error(`No store ${storeId}`)
   const values: Row = {}
@@ -119,6 +133,8 @@ export function updateStore(db: Db, storeId: string, patch: Partial<Pick<Store, 
   if (patch.currency !== undefined) values.currency = patch.currency.toUpperCase()
   if (patch.status !== undefined) values.status = patch.status
   if (patch.planSlug !== undefined) values.plan_slug = patch.planSlug
+  if (patch.referenceImage !== undefined) values.reference_image = patch.referenceImage
+  if (patch.referenceUrl !== undefined) values.reference_url = patch.referenceUrl
   if (patch.brand !== undefined) values.brand = { ...store.brand, ...patch.brand }
   db.update('stores', storeId, values)
   return getStore(db, storeId) as Store

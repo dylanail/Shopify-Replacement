@@ -11,6 +11,8 @@ import { setPromotionStatus } from '../domain/promotions.ts'
 import { moderate } from '../domain/reviews.ts'
 import { getSend } from '../email/send.ts'
 import { ask, history } from '../agent/chat.ts'
+import { execute } from '../agent/registry.ts'
+import { saveUpload, UploadError } from '../lib/uploads.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
 import { onboard } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
@@ -124,18 +126,33 @@ export function adminRouter(): Router {
 
   router.get('/onboarding', (ctx) => {
     const user = requireUser(db(), ctx)
-    return html(onboardingPage(user.name || user.email, ctx.query.get('error')))
+    return html(onboardingPage(user.name || user.email, ctx.query.get('error'), listStores(db(), user.id).length > 0))
   })
 
   router.post('/onboarding', async (ctx) => {
     const user = requireUser(db(), ctx)
     const body = await ctx.body()
+    const files = await ctx.files()
     const prompt = String(body.prompt ?? '').trim()
     if (prompt.length < 12) return redirect(`/onboarding?error=${encodeURIComponent('Say a little more — one sentence about what you sell.')}`)
+    const siteUrl = String(body.siteUrl ?? '').trim()
+    if (siteUrl && !/^https?:\/\/[^\s]+$/i.test(siteUrl)) return redirect(`/onboarding?error=${encodeURIComponent('That site address does not look right — include https://')}`)
+    // The upload is saved under a store id that does not exist yet; the store
+    // row is created a moment later. Order does not matter for a disk path.
+    const pendingStoreId = `pending_${user.id.slice(4, 12)}`
+    let referenceImage: string | undefined
+    try {
+      if (files.photo) referenceImage = saveUpload(files.photo, pendingStoreId).url
+    } catch (error) {
+      if (error instanceof UploadError) return redirect(`/onboarding?error=${encodeURIComponent(error.message)}`)
+      throw error
+    }
     const result = await onboard(db(), {
       ownerId: user.id,
       prompt,
       ...(body.planSlug ? { planSlug: String(body.planSlug) } : {}),
+      ...(referenceImage ? { referenceImage } : {}),
+      ...(siteUrl ? { referenceUrl: siteUrl } : {}),
     })
     setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
     return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. Publish when it looks right.`))
@@ -147,6 +164,59 @@ export function adminRouter(): Router {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
     return page(ctx, current, 'dashboard', 'Dashboard', pages.dashboard(ctxFor(current, ctx), range(ctx)))
+  })
+
+  router.get('/admin/stores', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'stores', 'Your stores', pages.storesPage(ctxFor(current, ctx), current.stores))
+  })
+
+  router.get('/admin/research', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'research', 'Customer research', pages.researchPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/research/run', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const result = await execute(
+        'run_customer_research',
+        { brief: String(body.brief ?? ''), siteUrl: String(body.siteUrl ?? ''), rewritePages: body.rewritePages === 'true' },
+        { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'research' },
+      )
+      return back(ctx, result.summary)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Research failed'}`)
+    }
+  })
+
+  router.post('/admin/products/:id/photo', async (ctx) => {
+    const current = session(ctx)
+    const files = await ctx.files()
+    const body = await ctx.body()
+    if (!files.photo) return back(ctx, '!Choose an image first.')
+    try {
+      const saved = saveUpload(files.photo, current.store.id)
+      const result = await execute(
+        'attach_product_photo',
+        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless') },
+        { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
+      )
+      return back(ctx, result.summary)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Upload failed'}`)
+    }
+  })
+
+  router.post('/admin/products/:id/rewrite', async (ctx) => {
+    const current = session(ctx)
+    const result = await execute(
+      'write_product_page',
+      { productId: ctx.params.id as string },
+      { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
+    )
+    return back(ctx, result.summary)
   })
 
   router.get('/admin/switch', (ctx) => {

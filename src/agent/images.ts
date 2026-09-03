@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { escapeHtml } from '../lib/http.ts'
+import { readUpload, uploadAsDataUri } from '../lib/uploads.ts'
 
 /**
  * Product and brand imagery.
@@ -28,6 +29,8 @@ export type ImageRequest = {
   palette?: { primary?: string; secondary?: string; paper?: string; ink?: string }
   label?: string
   kind?: 'product' | 'hero' | 'logo' | 'collection'
+  /** An upload URL (`/_uploads/...`). The output is derived from this photo. */
+  reference?: string
 }
 
 export function seedOf(input: string): number {
@@ -46,6 +49,7 @@ export function imageUrl(request: ImageRequest): string {
   if (request.palette?.secondary) params.set('c2', request.palette.secondary)
   if (request.palette?.paper) params.set('c3', request.palette.paper)
   if (request.palette?.ink) params.set('c4', request.palette.ink)
+  if (request.reference) params.set('ref', request.reference)
   return `/_media/render.svg?${params.toString()}`
 }
 
@@ -65,21 +69,35 @@ export async function enhance(request: ImageRequest & { lanes?: number }): Promi
   return { lanes: urls, preset: request.preset ?? 'white-seamless', tookMs: Date.now() - started }
 }
 
+/**
+ * With a reference photo and an image model, the model *edits* the merchant's
+ * own photograph into the preset scene, so the product in the output is the
+ * product they sell and not a plausible stranger. Without a model, the same
+ * photo is composed into the scene with a ground, a shadow and the brand's
+ * light — a real change the merchant can see, made from their real product.
+ */
 export async function generate(request: ImageRequest): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return imageUrl(request)
   const preset = PRESETS.find((entry) => entry.id === (request.preset ?? 'white-seamless'))
+  const prompt = `Commercial product photograph of ${request.subject}, ${preset?.brief ?? ''}. No text, no watermark.`
   try {
-    const response = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-1',
-        prompt: `Commercial product photograph of ${request.subject}, ${preset?.brief ?? ''}. No text, no watermark.`,
-        size: '1024x1024',
-        n: 1,
-      }),
-    })
+    let response: Response
+    const referenceFile = request.reference ? readUpload(request.reference) : null
+    if (referenceFile) {
+      const form = new FormData()
+      form.set('model', process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-1')
+      form.set('prompt', `Keep this exact product, its shape, colour and details. Re-shoot it as: ${prompt}`)
+      form.set('size', '1024x1024')
+      form.set('image', new Blob([new Uint8Array(referenceFile.data)], { type: referenceFile.type }), 'reference.png')
+      response = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form })
+    } else {
+      response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
+      })
+    }
     if (!response.ok) return imageUrl(request)
     const payload = (await response.json()) as { data?: Array<{ url?: string; b64_json?: string }> }
     const first = payload.data?.[0]
@@ -131,6 +149,11 @@ export function renderSvg(params: URLSearchParams): string {
   }
   const random = rng(seed)
   const dark = preset === 'dark-luxury'
+  const reference = params.get('ref')
+  if (reference && kind !== 'logo') {
+    const composed = composeReference(reference, preset, palette, kind, seed)
+    if (composed) return composed
+  }
   // A hero is a brand surface, not a product cut-out: it takes the brand's own
   // ground so the headline scrim over it reads as deliberate rather than grey.
   const ground =
@@ -215,6 +238,61 @@ export function renderSvg(params: URLSearchParams): string {
   )
 
   return svg(width, height, shapes.join('\n'))
+}
+
+/**
+ * The merchant's photograph, staged.
+ *
+ * The photo is embedded as-is — never redrawn, never "improved" — and the scene
+ * is built around it: a ground that matches the preset, a contact shadow that
+ * makes it sit on something, a light that matches the brand. Six presets, six
+ * scenes, one honest product.
+ */
+function composeReference(reference: string, preset: string, palette: Palette, kind: string, seed: number): string | null {
+  const dataUri = uploadAsDataUri(reference)
+  if (!dataUri) return null
+  const width = kind === 'hero' ? 1600 : 1024
+  const height = kind === 'hero' ? 900 : 1024
+  const dark = preset === 'dark-luxury'
+  const warm = preset === 'golden-hour'
+  const flat = preset === 'flat-lay'
+  const ground =
+    kind === 'hero'
+      ? mix(palette.paper, palette.primary, 0.26)
+      : dark
+        ? mix(palette.ink, '#000000', 0.4)
+        : preset === 'white-seamless'
+          ? '#f7f4f0'
+          : preset === 'studio-3-point'
+            ? '#d9d6d1'
+            : flat
+              ? mix(palette.paper, '#ffffff', 0.25)
+              : mix(palette.paper, palette.primary, 0.1)
+  const inset = kind === 'hero' ? 0.18 : preset === 'lifestyle' ? 0.16 : 0.12
+  const boxW = Math.round(width * (1 - inset * 2))
+  const boxH = Math.round(height * (1 - inset * 2) * (kind === 'hero' ? 0.9 : 0.86))
+  const boxX = Math.round((width - boxW) / 2)
+  const boxY = Math.round((height - boxH) / 2 - (flat ? 0 : height * 0.03))
+  const tilt = flat ? ((seed % 7) - 3) * 1.2 : 0
+  const shadowY = boxY + boxH + (flat ? 6 : 14)
+  return svg(
+    width,
+    height,
+    `<rect width="${width}" height="${height}" fill="${ground}"/>
+     <radialGradient id="g" cx="${warm ? '80%' : '50%'}" cy="${warm ? '18%' : '30%'}" r="75%">
+       <stop offset="0" stop-color="${mix(ground, warm ? '#ffd9a0' : '#ffffff', dark ? 0.16 : 0.5)}"/>
+       <stop offset="1" stop-color="${ground}"/></radialGradient>
+     <rect width="${width}" height="${height}" fill="url(#g)"/>
+     ${dark ? `<rect x="0" y="${Math.round(height * 0.72)}" width="${width}" height="${height}" fill="${mix(palette.ink, '#000', 0.6)}" opacity=".9"/>` : ''}
+     <filter id="soft"><feGaussianBlur stdDeviation="${flat ? 10 : 22}"/></filter>
+     <ellipse cx="${width / 2}" cy="${shadowY}" rx="${Math.round(boxW * 0.42)}" ry="${flat ? 18 : 30}" fill="${dark ? '#000' : palette.ink}" opacity="${dark ? 0.7 : 0.22}" filter="url(#soft)"/>
+     <g transform="rotate(${tilt} ${width / 2} ${height / 2})">
+       <image href="${dataUri}" x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" preserveAspectRatio="xMidYMid meet"/>
+     </g>
+     ${warm ? `<rect width="${width}" height="${height}" fill="#ffb86b" opacity=".12" style="mix-blend-mode:multiply"/>` : ''}
+     <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="${seed % 100}"/><feColorMatrix type="saturate" values="0"/></filter>
+     <rect width="${width}" height="${height}" filter="url(#grain)" opacity="${dark ? 0.06 : 0.035}"/>`,
+  )
 }
 
 function svg(width: number, height: number, inner: string): string {

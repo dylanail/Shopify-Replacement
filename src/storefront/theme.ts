@@ -115,6 +115,38 @@ section{padding-block:var(--section)}
 .buildopt small{color:var(--muted);display:block}
 .trust{display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;font-size:.8rem;color:var(--muted);
   border-top:1px solid var(--line);padding-top:1rem}
+.benefits{list-style:none;margin:0;padding:0;display:grid;gap:.35rem;font-size:.9rem}
+.benefits li::before{content:'—';color:var(--primary);margin-right:.5rem}
+.guarantee{display:flex;gap:.8rem;align-items:flex-start;border:1px solid var(--line);border-radius:var(--radius);padding:.9rem 1rem;background:var(--raise)}
+.guarantee .badge{flex:0 0 auto;width:40px;height:40px;border-radius:999px;display:grid;place-items:center;background:var(--primary);color:#fff;font:600 13px/1 var(--body)}
+.conv{padding-block:calc(var(--section) * .6);border-top:1px solid var(--line)}
+.benefit-grid{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.benefit .n{font:500 11px/1 var(--body);letter-spacing:.2em;color:var(--primary)}
+.benefit h3{margin:.5rem 0 .4rem;font-size:1.25rem}
+.benefit p{font-size:.92rem;color:var(--muted);margin:0}
+.tablewrap{overflow-x:auto}
+table.compare{width:100%;border-collapse:collapse;font-size:.92rem}
+table.compare th,table.compare td{text-align:left;padding:.85rem .9rem;border-bottom:1px solid var(--line);vertical-align:top}
+table.compare thead th{font:500 11px/1 var(--body);letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+table.compare tbody th{font-weight:500;color:var(--muted);width:9rem}
+table.compare .us{background:color-mix(in srgb,var(--primary) 8%,var(--paper));font-weight:500}
+table.compare thead th.us{color:var(--primary)}
+.two-col{display:grid;gap:3rem;grid-template-columns:1fr 1.2fr;align-items:start}
+.specs{margin:.8rem 0 0;display:grid;gap:0}
+.specs div{display:grid;grid-template-columns:8rem 1fr;gap:1rem;padding:.6rem 0;border-bottom:1px solid var(--line);font-size:.92rem}
+.specs dt{color:var(--muted)}.specs dd{margin:0}
+details.faq{border-bottom:1px solid var(--line);padding:.7rem 0}
+details.faq summary{cursor:pointer;font-weight:500;list-style:none;display:flex;justify-content:space-between;gap:1rem}
+details.faq summary::after{content:'+';color:var(--muted)}
+details.faq[open] summary::after{content:'–'}
+details.faq p{margin:.6rem 0 0;color:var(--muted);font-size:.92rem}
+.promise{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));border:1px solid var(--line);border-radius:var(--radius);padding:1.6rem;background:var(--raise)}
+.promise p{font-size:.92rem;margin:.4rem 0 0}
+.stickybar{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.7rem 1rem;background:var(--paper);border-top:1px solid var(--line);transform:translateY(110%);transition:transform .25s ease}
+.stickybar.show{transform:none}
+.stickybar .t{font-family:var(--display);font-size:1rem}.stickybar .p{font-size:.85rem;color:var(--muted)}
+.stickybar .btn{padding:.8rem 1.2rem}
 .micro{font-size:.84rem;color:var(--muted)}
 .prose{max-width:var(--measure)}
 .reviews{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
@@ -156,6 +188,7 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
 .upsell .row form{margin-left:auto}
 @media (max-width:900px){
   .pdp{grid-template-columns:1fr;gap:2rem}
+  .two-col{grid-template-columns:1fr;gap:2rem}
   .buybox{position:static}
   footer.site .wrap{grid-template-columns:1fr 1fr}
   nav.main{display:none}

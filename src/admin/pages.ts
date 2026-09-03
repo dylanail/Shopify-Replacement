@@ -19,6 +19,8 @@ import { TEMPLATES } from '../email/templates.ts'
 import { listSeoPages } from '../seo/schema.ts'
 import { PROMPT_LIBRARY } from '../agent/chat.ts'
 import { listRuns } from '../agent/runtime.ts'
+import { latestResearch } from '../agent/research.ts'
+import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import type { ChatMessage } from '../agent/chat.ts'
@@ -155,7 +157,16 @@ export function productDetail(ctx: Ctx, productId: string): string {
         .slice(0, 4)
         .map((url) => `<img src="${escapeHtml(url)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`)
         .join('')}</div>
-      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Ask the assistant to enhance these: it renders four lanes and attaches the one you pick.</p></div>
+      <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
+        <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>
+        <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
+          .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
+        <button class="btn primary" type="submit">Upload and stage</button></form>
+      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery. Ask the assistant to enhance it and it renders four lanes to pick from.</p></div>
+    <div class="card"><h2>The page</h2>
+      <p class="muted" style="font-size:12px;margin:.3rem 0">${product.content.benefits?.length ?? 0} benefits · ${product.content.comparison?.rows.length ?? 0}-row comparison · ${product.content.specs?.length ?? 0} specs · ${product.content.faq?.length ?? 0} questions${product.content.guarantee ? ' · guarantee' : ''}</p>
+      ${product.content.benefits?.slice(0, 3).map((benefit) => `<p style="font-size:12.5px;margin:.25rem 0">— ${escapeHtml(benefit.title)}</p>`).join('') ?? ''}
+      <form method="post" action="/admin/products/${escapeHtml(product.id)}/rewrite" style="margin-top:.6rem"><button class="btn" type="submit">Rewrite the page from research</button></form></div>
     <div class="card"><h2>Reviews</h2><p style="margin:.3rem 0 0">${stats.count ? `${stats.average} / 5 from ${stats.count}` : 'None yet'}</p>
       ${stats.summary.map((line) => `<p class="muted" style="font-size:12px;margin:.5rem 0 0">${escapeHtml(line)}</p>`).join('')}</div>
     <div class="card"><h2>SEO</h2>
@@ -465,6 +476,75 @@ export function settingsPage(ctx: Ctx): string {
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
+  </div></div>`
+}
+
+/* --------------------------------------------------------------- stores hub */
+
+export function storesPage(ctx: Ctx, stores: Store[]): string {
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Your stores</h1>
+    <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}. Each one is its own catalog, customers, orders, brand and address.</p></div>
+    <a class="btn primary" href="/onboarding">+ Start a new store</a></div>
+  <div class="grid3">${stores.map((store) => {
+    const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
+    const sales = salesSummary(ctx.db, store.id, 30)
+    const plan = planBySlug(store.planSlug)
+    return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
+          <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
+        <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
+      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)} · ${escapeHtml(plan.name)}</div>
+      <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
+      <div class="row" style="margin-top:.4rem">
+        <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
+        <a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">Storefront ↗</a></div>
+    </div>`
+  }).join('')}</div>`
+}
+
+/* ------------------------------------------------------------- research page */
+
+export function researchPage(ctx: Ctx): string {
+  const research = latestResearch(ctx.db, ctx.store.id)
+  const runForm = `<form method="post" action="/admin/research/run" class="card">
+    <h2>Run customer research</h2>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Who buys this, what stops them, what they compare it against, what they will pay. Product pages are written from it.</p>
+    <div class="field"><label>Brief</label><input name="brief" value="${escapeHtml(ctx.store.prompt)}"></div>
+    <div class="field"><label>Existing site to read (optional)</label><input name="siteUrl" type="url" value="${escapeHtml(ctx.store.referenceUrl)}" placeholder="https://"></div>
+    <label class="row" style="font-size:12px;margin-bottom:.7rem"><input type="checkbox" name="rewritePages" value="true" checked> Rewrite every product page from the result</label>
+    <button class="btn primary" type="submit">${research ? 'Run again' : 'Run research'}</button></form>`
+  if (!research) {
+    return `${flash(ctx)}<div class="head"><h1 class="serif">Customer research</h1></div><div class="grid2">${runForm}<div class="card"><p class="muted">Nothing on file yet. Stores built through onboarding get this automatically; this one was not, or it was reset.</p></div></div>`
+  }
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Customer research</h1>
+    <p class="muted" style="margin:.25rem 0 0">${research.createdAt.slice(0, 16).replace('T', ' ')} · source: ${escapeHtml(research.source)}${research.source === 'rules' ? ' (category rules — set ANTHROPIC_API_KEY for model research)' : ''}</p></div></div>
+  <div class="notice" style="margin-bottom:1rem"><strong>Positioning.</strong> ${escapeHtml(research.positioning)}</div>
+  <div class="grid2"><div>
+    <div class="card"><h2>Who buys</h2>
+      ${research.audience.map((persona) => `<div style="border-top:1px solid var(--line);padding:.7rem 0">
+        <div class="row" style="justify-content:space-between"><strong>${escapeHtml(persona.name)}</strong><span class="tag">${Math.round(persona.share * 100)}%</span></div>
+        <p class="muted" style="font-size:12.5px;margin:.3rem 0">${escapeHtml(persona.who)}</p>
+        <p style="font-size:12.5px;margin:.2rem 0"><span class="muted">Wants</span> ${escapeHtml(persona.wants)}</p>
+        <p style="font-size:12.5px;margin:.2rem 0"><span class="muted">Fears</span> ${escapeHtml(persona.fears)}</p>
+        <p style="font-size:12.5px;margin:.2rem 0"><span class="muted">Buys when</span> ${escapeHtml(persona.buysWhen)}</p></div>`).join('')}</div>
+    <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Objections, answered</h2></div>
+      <table class="data"><tbody>${research.objections.map((entry) => `<tr><td style="width:40%"><strong>${escapeHtml(entry.objection)}</strong></td><td class="muted">${escapeHtml(entry.answer)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Competitors</h2></div>
+      <table class="data"><thead><tr><th>Who</th><th>Angle</th><th>Price</th><th>Weakness</th></tr></thead><tbody>
+      ${research.competitors.map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td class="muted">${escapeHtml(entry.angle)}</td><td>${escapeHtml(entry.priceBand)}</td><td class="muted">${escapeHtml(entry.weakness)}</td></tr>`).join('')}</tbody></table></div>
+  </div>
+  <div>
+    ${runForm}
+    <div class="card"><h2>Price anchor</h2>
+      <div class="row" style="gap:1.4rem;margin:.5rem 0"><div><div class="eyebrow">Mass</div><div style="font-size:1.2rem">${format(research.priceAnchor.lowCents, ctx.store.currency)}</div></div>
+        <div><div class="eyebrow">Us</div><div style="font-size:1.2rem;color:var(--accent)">${format(research.priceAnchor.midCents, ctx.store.currency)}</div></div>
+        <div><div class="eyebrow">Bespoke</div><div style="font-size:1.2rem">${format(research.priceAnchor.highCents, ctx.store.currency)}</div></div></div>
+      <p class="muted" style="font-size:12px">${escapeHtml(research.priceAnchor.note)}</p></div>
+    <div class="card"><h2>Purchase triggers</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px">${research.triggers.map((trigger) => `<li>${escapeHtml(trigger)}</li>`).join('')}</ul></div>
+    <div class="card"><h2>Keywords</h2><p style="margin:.4rem 0 0">${research.keywords.map((keyword) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(keyword)}</span>`).join('')}</p></div>
+    <div class="card"><h2>Proof points</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px">${research.proofPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join('')}</ul></div>
+    ${research.sourceNotes.length ? `<div class="card"><h2>From the source</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px">${research.sourceNotes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></div>` : ''}
   </div></div>`
 }
 

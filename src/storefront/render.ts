@@ -158,6 +158,7 @@ export function productPage(
   input: { product: Product; stats: ReviewStats; reviews: Review[]; companions: Product[] },
 ): string {
   const { product, stats, reviews, companions } = input
+  const content = product.content
   const media = [product.heroImage, ...product.media.map((entry) => entry.url)].filter(Boolean)
   const unique = [...new Set(media)]
   const cheapest = product.variants.reduce((best, variant) => (variant.priceCents < best.priceCents ? variant : best), product.variants[0]!)
@@ -209,11 +210,14 @@ export function productPage(
       <button class="btn btn--wide" type="submit" id="pdp-cta">Add to cart — <span>${money(cheapest.priceCents, view)}</span></button>
     </form>
     <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? 'In stock and built to order. Free returns for 30 days.' : 'Made to order. Ships in 14 days.')}</p>
-    <div class="trust"><span>${escapeHtml(product.tags[0] ?? 'Made in small runs')}</span><span>Repaired in-house</span><span>Free shipping over 200</span></div>
+    ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
+    <div class="trust">${(content.trust?.length ? content.trust : [product.tags[0] ?? 'Made in small runs', 'Repaired in-house', 'Free shipping over 200']).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>
+    ${content.guarantee ? `<div class="guarantee"><span class="badge">30</span><div><strong>Thirty-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
     ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
     ${companions.length ? upsellWidget(view, companions) : ''}
   </div>
 </div>
+${conversionSections(view, product, content)}
 <section class="wrap" style="padding-top:0">
   <div class="section-head"><h2>The detail</h2></div>
   <div class="prose">${product.description
@@ -223,6 +227,10 @@ export function productPage(
     .join('')}</div>
 </section>
 ${reviewsSection(view, product, stats, reviews)}
+<div class="stickybar" id="stickybar">
+  <div><div class="t">${escapeHtml(product.title)}</div><div class="p" id="sticky-price">${money(cheapest.priceCents, view)}</div></div>
+  <button class="btn" type="button" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">Add to cart</button>
+</div>
 <script>
 (function(){
   var variants = ${JSON.stringify(
@@ -237,6 +245,11 @@ ${reviewsSection(view, product, stats, reviews)}
     document.getElementById('pdp-variant').value = match.id;
     document.getElementById('pdp-price').textContent = money(match.price);
     document.querySelector('#pdp-cta span').textContent = money(match.price);
+    var sticky = document.getElementById('sticky-price'); if (sticky) sticky.textContent = money(match.price);
+  }
+  var cta = document.getElementById('pdp-cta'), bar = document.getElementById('stickybar');
+  if (cta && bar && 'IntersectionObserver' in window) {
+    new IntersectionObserver(function(entries){ bar.classList.toggle('show', !entries[0].isIntersecting && entries[0].boundingClientRect.top < 0) }, { threshold: 0 }).observe(cta);
   }
   document.querySelectorAll('[data-option]').forEach(function(button){
     button.addEventListener('click', function(){
@@ -278,6 +291,39 @@ ${renderSlot(view.db, view.store.id, 'pdpAnalytics', { productId: product.id, pr
       ]),
     ],
   })
+}
+
+/**
+ * The sections that turn a description into a page that sells: why this one
+ * (benefits), why not the cheaper one (comparison), what exactly it is (specs),
+ * what is stopping me (FAQ), and what happens if it goes wrong (shipping and
+ * guarantee). Each renders only if the research put something there.
+ */
+function conversionSections(view: StoreView, product: Product, content: Product['content']): string {
+  const parts: string[] = []
+  if (content.benefits?.length) {
+    parts.push(`<section class="wrap conv"><div class="section-head"><div><div class="eyebrow">Why this one</div><h2>${escapeHtml(content.audience || 'What you are actually paying for')}</h2></div></div>
+      <div class="benefit-grid">${content.benefits.map((benefit, index) => `<div class="benefit"><span class="n">0${index + 1}</span><h3>${escapeHtml(benefit.title)}</h3><p>${escapeHtml(benefit.body)}</p></div>`).join('')}</div></section>`)
+  }
+  if (content.comparison?.rows.length) {
+    parts.push(`<section class="wrap conv"><div class="section-head"><div><div class="eyebrow">Compared</div><h2>Against ${escapeHtml((content.comparison.themLabel ?? 'the usual').toLowerCase())}</h2></div></div>
+      <div class="tablewrap"><table class="compare"><thead><tr><th></th><th class="us">${escapeHtml(view.store.name)}</th><th>${escapeHtml(content.comparison.themLabel ?? 'The usual')}</th></tr></thead>
+      <tbody>${content.comparison.rows.map((row) => `<tr><th>${escapeHtml(row.label)}</th><td class="us">${escapeHtml(row.us)}</td><td>${escapeHtml(row.them)}</td></tr>`).join('')}</tbody></table></div></section>`)
+  }
+  if (content.specs?.length || content.faq?.length) {
+    parts.push(`<section class="wrap conv two-col">
+      ${content.specs?.length ? `<div><div class="eyebrow">Specifications</div><dl class="specs">${content.specs.map((spec) => `<div><dt>${escapeHtml(spec.label)}</dt><dd>${escapeHtml(spec.value)}</dd></div>`).join('')}</dl></div>` : '<div></div>'}
+      ${content.faq?.length ? `<div><div class="eyebrow">Questions</div>${content.faq.map((entry, index) => `<details class="faq" ${index === 0 ? 'open' : ''}><summary>${escapeHtml(entry.q)}</summary><p>${escapeHtml(entry.a)}</p></details>`).join('')}</div>` : ''}
+    </section>`)
+  }
+  if (content.shipping || content.guarantee) {
+    parts.push(`<section class="wrap conv"><div class="promise">
+      ${content.shipping ? `<div><div class="eyebrow">Shipping</div><p>${escapeHtml(content.shipping)}</p></div>` : ''}
+      ${content.guarantee ? `<div><div class="eyebrow">Guarantee</div><p>${escapeHtml(content.guarantee)}</p></div>` : ''}
+      <div><div class="eyebrow">Repairs</div><p>Handled in-house for as long as we are here. Post it back; we fix it and send it home.</p></div>
+    </div></section>`)
+  }
+  return parts.join('\n')
 }
 
 function upsellWidget(view: StoreView, companions: Product[]): string {

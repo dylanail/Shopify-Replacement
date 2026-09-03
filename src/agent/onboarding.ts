@@ -4,6 +4,7 @@ import { seedDefaultRegion } from '../domain/regions.ts'
 import { seedTodos, refreshTodos } from '../control/todos.ts'
 import { upsertSeoPage } from '../seo/schema.ts'
 import { announcement, brandName, collectionPlan, draftProducts, paletteFor, promotionPlan, readBrief } from './copy.ts'
+import { runResearch } from './research.ts'
 import { listCollections, listProducts } from '../domain/catalog.ts'
 import { createRun, runToCompletion, type PlannedStep, type Run } from './runtime.ts'
 
@@ -17,7 +18,7 @@ import { createRun, runToCompletion, type PlannedStep, type Run } from './runtim
  * product photography depends on the product existing, and that is why it sits
  * *inside* the catalog branch rather than beside it.
  */
-export function planOnboarding(prompt: string): { steps: PlannedStep[]; brandLabel: string } {
+export function planOnboarding(prompt: string, opts: { referenceImage?: string } = {}): { steps: PlannedStep[]; brandLabel: string } {
   const brief = readBrief(prompt)
   const name = brandName(brief)
   const palette = paletteFor(brief)
@@ -64,6 +65,8 @@ export function planOnboarding(prompt: string): { steps: PlannedStep[]; brandLab
         tags: product.tags,
         options: product.options.map((option) => ({ title: option.title, values: option.values.map((value) => value.value) })),
         inventory: 24,
+        role: product.role,
+        ...(opts.referenceImage ? { reference: opts.referenceImage } : {}),
       },
     })
   })
@@ -125,15 +128,25 @@ export type OnboardingResult = { store: Store; run: Run; summaries: string[]; fa
  */
 export async function onboard(
   db: Db,
-  input: { ownerId: string; prompt: string; currency?: string; planSlug?: string },
+  input: { ownerId: string; prompt: string; currency?: string; planSlug?: string; referenceImage?: string; referenceUrl?: string },
 ): Promise<OnboardingResult> {
   const brief = readBrief(input.prompt)
-  const { steps, brandLabel } = planOnboarding(input.prompt)
+  const { steps, brandLabel } = planOnboarding(input.prompt, { ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}) })
   const store = createStore(db, input.ownerId, {
     name: brandLabel,
     prompt: input.prompt,
     ...(input.currency ? { currency: input.currency } : {}),
     ...(input.planSlug ? { planSlug: input.planSlug } : {}),
+    ...(input.referenceImage ? { referenceImage: input.referenceImage } : {}),
+    ...(input.referenceUrl ? { referenceUrl: input.referenceUrl } : {}),
+  })
+
+  // Research runs before anything is written, and on its own: the catalog
+  // branch reads it, so it cannot be a sibling of the catalog branch.
+  await runResearch(db, store.id, {
+    prompt: input.prompt,
+    ...(input.referenceUrl ? { siteUrl: input.referenceUrl } : {}),
+    ...(input.referenceImage ? { imageNote: 'The merchant supplied a product photograph; imagery is derived from it.' } : {}),
   })
   seedDefaultRegion(db, store.id, store.currency)
   seedTodos(db, store.id)

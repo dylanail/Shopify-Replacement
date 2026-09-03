@@ -13,6 +13,7 @@ export const NAV: NavItem[] = [
   { key: 'ai', href: '/admin/ai', label: 'Assistant', glyph: '◮' },
   { key: 'orders', href: '/admin/orders', label: 'Orders', glyph: '▤', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', glyph: '◫', area: 'products' },
+  { key: 'research', href: '/admin/research', label: 'Customer research', glyph: '◎', area: 'products' },
   { key: 'collections', href: '/admin/collections', label: 'Collections', glyph: '◇', area: 'organization' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', glyph: '▣', area: 'customers' },
   { key: 'promotions', href: '/admin/promotions', label: 'Promotions', glyph: '◈', area: 'promotions' },
@@ -62,6 +63,8 @@ export function shell(input: ShellInput): string {
       ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)}</option>`).join('')}
     </select>
   </form>
+  <a class="chip" href="/admin/stores">Stores (${input.stores.length})</a>
+  <a class="chip" href="/onboarding">+ New store</a>
   <button class="chip" type="button" onclick="askThis('I would like to request a feature: ')">🎙 Request a feature</button>
   <div class="spacer"></div>
   <a class="chip" href="${escapeHtml(input.storeUrl)}" target="_blank" rel="noopener">View store ↗</a>
@@ -178,7 +181,7 @@ h1,h2,h3{margin:0;font-weight:500}
 .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:.35rem .8rem;font:500 12px/1 'Inter';
   cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:.35rem}
 .chip:hover{border-color:var(--ink)}
-.publish{background:var(--ink);color:#fff;border:0;border-radius:8px;padding:.5rem 1rem;font:500 12px/1 'Inter';cursor:pointer}
+.publish{background:var(--ink);color:#fff;border:0;border-radius:8px;padding:.5rem 1rem;font:500 12px/1 'Inter',ui-sans-serif,system-ui,sans-serif;cursor:pointer}
 .publish:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
 .frame{display:grid;grid-template-columns:var(--rail) minmax(0,1fr) var(--panel);min-height:calc(100vh - 44px)}
 .rail{background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:.5rem 0;gap:.15rem}
@@ -256,7 +259,7 @@ table.data img{width:36px;height:36px;object-fit:cover;border-radius:6px}
 .tabs a{font-size:12px;text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:.3rem .75rem;background:#fff}
 .tabs a.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 .btn{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--line);background:#fff;border-radius:8px;
-  padding:.5rem .85rem;font:500 12.5px/1 'Inter';cursor:pointer;text-decoration:none}
+  padding:.5rem .85rem;font:500 12.5px/1 'Inter',ui-sans-serif,system-ui,sans-serif;cursor:pointer;text-decoration:none}
 .btn:hover{border-color:var(--ink)}
 .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
 .field{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.7rem}

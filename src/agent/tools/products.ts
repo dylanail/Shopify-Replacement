@@ -4,7 +4,10 @@ import { format } from '../../lib/money.ts'
 import { upsertSeoPage } from '../../seo/schema.ts'
 import { draftProducts, readBrief } from '../copy.ts'
 import { enhance, generate, PRESETS, type PresetId } from '../images.ts'
+import { contentFor, writeProductContent } from '../pages.ts'
+import { latestResearch, rulesResearch } from '../research.ts'
 import { defineTools, type Tool } from '../registry.ts'
+import type { ProductContent } from '../../domain/types.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id)
 
@@ -32,10 +35,13 @@ export const productTools: Tool[] = defineTools([
         },
       },
       inventory: { type: 'number', integer: true, min: 0, default: 25 },
+      reference: { type: 'string', help: 'An upload URL to derive the imagery from. Defaults to the store reference image.' },
+      role: { type: 'string', enum: ['hero', 'complement'], default: 'hero' },
     },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       const title = args.title as string
+      const reference = (args.reference as string | undefined) || store?.referenceImage || undefined
       const price = (args.priceCents as number) ?? 9900
       const rawOptions = (args.options as Array<{ title: string; values: string[] }> | undefined) ?? []
       const options = rawOptions.map((option) => ({
@@ -51,6 +57,18 @@ export const productTools: Tool[] = defineTools([
         kind: 'product',
         label: title,
         ...(store?.brand ? { palette: store.brand } : {}),
+        ...(reference ? { reference } : {}),
+      })
+
+      // The page is written from the research on file. A store that has never
+      // been researched still gets a complete page, from the category rules.
+      const brief = readBrief(`${store?.prompt ?? ''} ${title}`)
+      const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(brief)
+      const content: ProductContent = writeProductContent(research, brief, {
+        title,
+        role: (args.role as 'hero' | 'complement') ?? 'hero',
+        priceCents: price,
+        options,
       })
 
       const combos = options.length
@@ -77,6 +95,7 @@ export const productTools: Tool[] = defineTools([
         options,
         tags: (args.tags as string[]) ?? [],
         seo: { title: `${title} — ${store?.name ?? ''}`.trim(), description: ((args.subtitle as string) || (args.description as string) || title).slice(0, 155) },
+        content,
         variants,
       })
       upsertSeoPage(ctx.db, ctx.storeId, {
@@ -86,7 +105,7 @@ export const productTools: Tool[] = defineTools([
         keyword: product.title.toLowerCase(),
       })
       return {
-        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}.`,
+        summary: `Created ${product.title} with ${product.variants.length} variant${product.variants.length === 1 ? '' : 's'} from ${format(price, store?.currency ?? 'USD')}, ${content.benefits?.length ?? 0} benefits, a comparison and ${content.faq?.length ?? 0} questions answered${reference ? ', imagery from your photo' : ''}.`,
         data: { id: product.id, handle: product.handle },
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/products/${product.id}` }],
       }
@@ -257,12 +276,14 @@ export const productTools: Tool[] = defineTools([
       const store = getStore(ctx.db, ctx.storeId)
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
+      const reference = referenceFor(product.heroImage, product.media.map((entry) => entry.url), store?.referenceImage)
       const sheet = await enhance({
         subject: `${product.title} ${store?.name ?? ''}`,
         preset: args.preset as PresetId,
         kind: 'product',
         label: product.title,
         ...(store?.brand ? { palette: store.brand } : {}),
+        ...(reference ? { reference } : {}),
       })
       const lane = args.attachLane as number | undefined
       if (lane !== undefined && sheet.lanes[lane]) {
@@ -291,18 +312,74 @@ export const productTools: Tool[] = defineTools([
       const store = getStore(ctx.db, ctx.storeId)
       const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
       if (!product) throw new Error('No product with that id')
+      const reference = referenceFor(product.heroImage, product.media.map((entry) => entry.url), store?.referenceImage)
       const url = await generate({
         subject: `${product.title}: ${args.scene as string}`,
         preset: args.preset as PresetId,
         kind: 'product',
         label: product.title,
         ...(store?.brand ? { palette: store.brand } : {}),
+        ...(reference ? { reference } : {}),
       })
       updateProduct(ctx.db, ctx.storeId, product.id, { media: [...product.media, { url, alt: args.scene as string }].slice(0, 8) })
       return { summary: `Added an image to ${product.title}.`, artifacts: [{ type: 'image', urls: [url], caption: args.scene as string }] }
     },
   },
+  {
+    name: 'write_product_page',
+    area: 'products',
+    description: 'Write or rewrite the full product page — benefits, comparison, specs, FAQ, guarantee — from the customer research on file.',
+    schema: { productId: { type: 'string', required: true } },
+    handler(args, ctx) {
+      const store = getStore(ctx.db, ctx.storeId)
+      const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
+      if (!product) throw new Error('No product with that id')
+      const research = latestResearch(ctx.db, ctx.storeId) ?? rulesResearch(readBrief(`${store?.prompt ?? ''} ${product.title}`))
+      const content = contentFor(research, store?.prompt ?? '', product)
+      updateProduct(ctx.db, ctx.storeId, product.id, { content })
+      return {
+        summary: `Rewrote the page for ${product.title}: ${content.benefits?.length ?? 0} benefits, ${content.comparison?.rows.length ?? 0}-row comparison, ${content.faq?.length ?? 0} questions.`,
+        artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/admin/products/${product.id}` }],
+      }
+    },
+  },
+  {
+    name: 'attach_product_photo',
+    area: 'products',
+    description: 'Attach an uploaded photo to a product as its hero image and re-shoot it in a preset.',
+    schema: {
+      productId: { type: 'string', required: true },
+      upload: { type: 'string', required: true, pattern: '^/_uploads/', help: 'The upload URL.' },
+      preset: { type: 'string', enum: PRESET_IDS as unknown as string[], default: 'white-seamless' },
+    },
+    async handler(args, ctx) {
+      const store = getStore(ctx.db, ctx.storeId)
+      const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
+      if (!product) throw new Error('No product with that id')
+      const staged = await generate({
+        subject: `${product.title} ${store?.name ?? ''}`,
+        preset: args.preset as PresetId,
+        kind: 'product',
+        label: product.title,
+        reference: args.upload as string,
+        ...(store?.brand ? { palette: store.brand } : {}),
+      })
+      updateProduct(ctx.db, ctx.storeId, product.id, {
+        heroImage: staged,
+        media: [{ url: staged, alt: `${product.title}, ${args.preset}` }, { url: args.upload as string, alt: `${product.title}, original photo` }, ...product.media].slice(0, 8),
+      })
+      return {
+        summary: `${product.title} now leads with your photo, staged as ${args.preset}. The original is kept in the gallery.`,
+        artifacts: [{ type: 'image', urls: [staged, args.upload as string], caption: `${product.title}: staged and original` }],
+      }
+    },
+  },
 ])
+
+/** The photo a re-shoot should start from: an upload on the product, else the store's. */
+function referenceFor(hero: string, media: string[], storeReference?: string): string | undefined {
+  return [hero, ...media].find((url) => url.startsWith('/_uploads/')) ?? (storeReference || undefined)
+}
 
 /**
  * A colour option renders as a swatch, not as the word "Oxblood" in a box —

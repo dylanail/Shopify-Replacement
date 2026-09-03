@@ -1,6 +1,6 @@
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { handle as toHandle, id } from '../lib/ids.ts'
-import type { Media, Product, ProductOption, Variant } from './types.ts'
+import type { Media, Product, ProductContent, ProductOption, Variant } from './types.ts'
 
 export function rowToVariant(row: Row): Variant {
   return {
@@ -34,6 +34,7 @@ export function rowToProduct(row: Row, variants: Variant[]): Product {
     seo: json(row.seo, {}),
     tags: json(row.tags, [] as string[]),
     subscription: json(row.subscription, {}),
+    content: json(row.content, {} as ProductContent),
     position: row.position as number,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -98,6 +99,7 @@ export type ProductInput = {
   seo?: { title?: string; description?: string }
   tags?: string[]
   subscription?: Product['subscription']
+  content?: ProductContent
   variants?: Array<Partial<Variant> & { title: string; priceCents: number }>
 }
 
@@ -124,6 +126,7 @@ export function createProduct(db: Db, storeId: string, input: ProductInput): Pro
       seo: input.seo ?? {},
       tags: input.tags ?? [],
       subscription: input.subscription ?? {},
+      content: input.content ?? {},
       position: count,
       created_at: timestamp,
       updated_at: timestamp,
@@ -164,6 +167,7 @@ export function updateProduct(db: Db, storeId: string, productId: string, patch:
   if (patch.seo !== undefined) values.seo = { ...existing.seo, ...patch.seo }
   if (patch.tags !== undefined) values.tags = patch.tags
   if (patch.subscription !== undefined) values.subscription = patch.subscription
+  if (patch.content !== undefined) values.content = { ...existing.content, ...patch.content }
   db.update('products', existing.id, values)
   return getProduct(db, storeId, existing.id) as Product
 }

@@ -3,6 +3,7 @@ import { getDb } from './lib/db.ts'
 import { escapeHtml, html, HttpError, makeCtx, Raw, redirect, Router, send, sendError, type Ctx } from './lib/http.ts'
 import { logger } from './lib/log.ts'
 import { renderSvg } from './agent/images.ts'
+import { readUpload } from './lib/uploads.ts'
 import { recoverRuns } from './agent/runtime.ts'
 import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
@@ -58,6 +59,12 @@ const server = createServer(async (req, res) => {
     // without touching the database at all.
     if (ctx.url.pathname === '/_media/render.svg') {
       await send(res, new Raw(renderSvg(ctx.url.searchParams), 'image/svg+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=31536000, immutable' }))
+      return
+    }
+    if (ctx.url.pathname.startsWith('/_uploads/')) {
+      const found = readUpload(ctx.url.pathname)
+      if (!found) throw new HttpError(404, 'No such upload')
+      await send(res, new Raw(found.data, found.type, { 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' }))
       return
     }
     if (ctx.url.pathname === '/healthz') {

@@ -188,3 +188,92 @@ test('the activity stream is a long-lived response the router does not step on',
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal((await fetch(`${base}/healthz`)).status, 200)
 })
+
+/* ------------------------------------------------------- second iteration */
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+
+async function upload(path: string, fields: Record<string, string>, file: { field: string; name: string; type: string; data: Buffer }) {
+  const form = new FormData()
+  for (const [key, value] of Object.entries(fields)) form.set(key, value)
+  form.set(file.field, new Blob([new Uint8Array(file.data)], { type: file.type }), file.name)
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') },
+    body: form,
+    redirect: 'manual',
+  })
+  for (const cookie of response.headers.getSetCookie()) {
+    const [pair] = cookie.split(';')
+    const [name, value = ''] = (pair ?? '').split('=')
+    if (name) jar.set(name.trim(), decodeURIComponent(value))
+  }
+  return { status: response.status, location: response.headers.get('location') ?? '', text: await response.text() }
+}
+
+test('a second store can be started from the admin, with a photo, and both show in the hub', async () => {
+  const hub = await call('/admin/stores')
+  assert.equal(hub.status, 200)
+  assert.match(hub.text, /Start a new store/)
+  assert.match(hub.text, /Ironjaw/)
+
+  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products', planSlug: 'launch' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
+  assert.match(decodeURIComponent(built.location), /Marrow Lab is built/)
+
+  const dashboard = await call('/admin')
+  assert.match(dashboard.text, /Marrow Lab/, 'the new store is selected')
+  const after = await call('/admin/stores')
+  assert.match(after.text, /Ironjaw/)
+  assert.match(after.text, /Marrow Lab/)
+
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  const detail = await call(`/admin/products/${productId}`)
+  assert.match(detail.text, /ref=%2F_uploads%2F/, 'product imagery is derived from the uploaded photo')
+  assert.match(detail.text, /-row comparison/, 'the page content is on file')
+})
+
+test('the research page shows what the catalog was written from', async () => {
+  const research = await call('/admin/research')
+  assert.equal(research.status, 200)
+  assert.match(research.text, /Who buys/)
+  assert.match(research.text, /Objections, answered/)
+  assert.match(research.text, /ingredient reader/i)
+})
+
+test('a product photo can be uploaded and staged from the product page', async () => {
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  const staged = await upload(`/admin/products/${productId}/photo`, { preset: 'dark-luxury' }, { field: 'photo', name: 'p.png', type: 'image/png', data: PNG })
+  assert.equal(staged.status, 302)
+  assert.match(staged.location.replace(/\+/g, ' '), /staged as dark-luxury/)
+
+  const bad = await upload(`/admin/products/${productId}/photo`, { preset: 'lifestyle' }, { field: 'photo', name: 'p.png', type: 'image/png', data: Buffer.from('not a png at all') })
+  assert.match(bad.location.replace(/\+/g, ' '), /does not look like the image/)
+
+  const detail = await call(`/admin/products/${productId}`)
+  const uploadPath = /\/_uploads\/[a-z0-9_]+\/up_[a-z0-9]+\.png/.exec(detail.text)?.[0] ?? ''
+  assert.ok(uploadPath, 'the original is kept in the gallery')
+  const served = await fetch(`${base}${uploadPath}`)
+  assert.equal(served.status, 200)
+  assert.equal(served.headers.get('content-type'), 'image/png')
+  assert.equal(served.headers.get('x-content-type-options'), 'nosniff')
+})
+
+test('the storefront product page carries the conversion sections and the sticky bar', async () => {
+  const dashboard = await call('/admin')
+  const slug2 = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
+  const collection = await call(`/s/${slug2}/collections/all`)
+  const handle = /\/products\/([a-z0-9-]+)/.exec(collection.text)?.[1] ?? ''
+  const pdp = await call(`/s/${slug2}/products/${handle}`)
+  assert.equal(pdp.status, 200)
+  assert.match(pdp.text, /Why this one/)
+  assert.match(pdp.text, /table class="compare"/)
+  assert.match(pdp.text, /details class="faq"/)
+  assert.match(pdp.text, /Thirty-day guarantee/)
+  assert.match(pdp.text, /id="stickybar"/)
+  const hero = /id="pdp-main" src="([^"]+)"/.exec(pdp.text)?.[1]?.replace(/&amp;/g, '&') ?? ''
+  assert.match(hero, /ref=%2F_uploads/)
+  const svg = await (await fetch(`${base}${hero}`)).text()
+  assert.match(svg, /<image href="data:image\/png;base64,/, 'the hero is the merchant photo, staged')
+})

@@ -5,10 +5,13 @@ commerce core, a durable agent runtime with a validated tool registry, generated
 per-brand storefronts, a plugin framework, first-party analytics, transactional
 email, and an admin that is driven by conversation.
 
-You type one sentence. About a hundred milliseconds later there is a store —
-named, branded, three products deep with copy, variants, pricing and imagery,
+You type one sentence — and optionally hand it a product photo and your old
+site. It researches who buys this and what stops them, then a store exists:
+named, branded, three products deep with full pages (benefits, comparison,
+specs, FAQ, guarantee), variants, pricing and imagery derived from your photo,
 with a welcome code, a free-shipping threshold and a bundle already live — at an
-address you can open and buy from.
+address you can open and buy from. Run it again and you have a second store;
+the hub shows them all.
 
 ```
 node --version                     # needs 22.18+ (native TypeScript, node:sqlite)
@@ -32,6 +35,9 @@ npm run reset     # throw the database away and re-seed
 | | |
 |---|---|
 | **Control plane** | users, sessions, stores, draft/live environments, teams and RBAC, invites, plans, domains, audit log, to-do punch list |
+| **Research** | who buys, what stops them, competitors, price anchor, keywords and proof points — per category rules offline, a model when configured, and it reads a pasted site either way |
+| **Product pages** | benefits answering the triggers, a comparison table against the named competitor, specs, FAQ from the objections, guarantee and shipping strip, sticky mobile buy bar — written from the research, never from thin air |
+| **Imagery** | a merchant photo is staged into six scenes (white seamless, lifestyle, dark luxury, flat lay, golden hour, studio) around the *actual* product; with an image model configured it is re-shot rather than staged |
 | **Commerce core** | products, options, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping rates |
 | **Agent** | 74 tools with per-tool schemas, an executor that validates and refuses, durable resumable runs with parallel branches, a model planner and a rules planner |
 | **Storefront** | server-rendered per brand: home, collections, PDP, cart, checkout, order, blog, pages, sitemap, robots, JSON-LD, `llms.txt` |
@@ -43,7 +49,9 @@ npm run reset     # throw the database away and re-seed
 Everything above is exercised by the test suite, and `test/http.test.ts` walks
 the whole product over HTTP with no mocks: register → onboard from a sentence →
 every admin page → drive the assistant → buy something from the storefront →
-watch the order land in the admin.
+watch the order land in the admin → start a second store with a photo upload →
+see both in the hub → stage a product photo → read the conversion sections off
+the live product page.
 
 ---
 
@@ -84,6 +92,19 @@ the middle of a merchant's onboarding is survivable: finished steps stay
 finished, the in-flight step goes back to pending, and `recoverRuns` re-queues
 it on boot. Branches inside a run execute concurrently, which is why onboarding
 looks like four things happening at once rather than a queue.
+
+**Research comes first, and pages can only say what it found.** Onboarding runs
+`agent/research.ts` before a product is written; `agent/pages.ts` is the mapping
+from that record to a page's shape. A benefit is an answer to a purchase
+trigger, a FAQ entry is an objection, a comparison row is a competitor angle.
+There is no path by which a page contains a claim the research did not put
+there.
+
+**Your photo stays your photo.** An upload is embedded into the scene as-is,
+with a ground, a contact shadow and the brand's light around it — never redrawn.
+With `OPENAI_API_KEY` set, the image model *edits* that photo into the scene
+(`images/edits`, not `generations`), so the product in the output is the one
+you sell and not a plausible stranger.
 
 **Draft and live are separate environments.** The assistant only ever edits the
 draft. Publishing copies it over live and bumps a version; rollback goes the
@@ -145,6 +166,10 @@ Named so nobody has to discover it by clicking.
   writes a Next.js project per store and edits its source in a sandbox. The slot
   system, the draft/live split and the build log are the parts of that design
   that survive the simplification; the sandboxed compile loop is not here.
+- **Research without a key is category rules.** Boxing gear, skincare and
+  coffee have hand-written knowledge; other categories get a complete but
+  generic record. Set `ANTHROPIC_API_KEY` and the model writes it from the
+  brief and the pasted site. The admin says which one it is looking at.
 - **GEO tracks nothing.** The half a store controls — a knowledge card at
   `/llms.txt`, structured data, entity descriptors — ships. Measuring where a
   brand gets cited needs live calls to four engines on a schedule, so the admin

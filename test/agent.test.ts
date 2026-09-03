@@ -181,3 +181,14 @@ test('the registry is fully populated and every tool declares a schema', () => {
     assert.equal(typeof tool.schema, 'object')
   }
 })
+
+test('brand names are always real words, whatever the seed, and stop at the end of the name', async () => {
+  const { brandName, readBrief } = await import('../src/agent/copy.ts')
+  for (const prompt of ['a coffee roaster in Lisbon', 'ceramics studio in Kyoto', 'pet supplies for dogs', 'a candle brand', 'artisanal umbrellas', 'x', 'yy', 'zzz']) {
+    const name = brandName(readBrief(prompt))
+    assert.ok(!/undefined|null/.test(name), `${prompt} → ${name}`)
+    assert.ok(name.split(' ').length >= 2, `${prompt} → ${name}`)
+  }
+  assert.equal(brandName(readBrief('A clinical skincare brand called Marrow Lab with three products')), 'Marrow Lab')
+  assert.equal(brandName(readBrief('a store called "Salt & Cedar Supply" in Lisbon')), 'Salt & Cedar Supply')
+})

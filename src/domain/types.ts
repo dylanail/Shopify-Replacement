@@ -22,6 +22,23 @@ export type Variant = {
   position: number
 }
 
+/**
+ * The conversion sections of a product page. Every field is optional because a
+ * product imported from a CSV has none of them yet; the page renders what it
+ * has and the assistant can fill the rest in one call.
+ */
+export type ProductContent = {
+  benefits?: Array<{ title: string; body: string }>
+  comparison?: { rows: Array<{ label: string; us: string; them: string }>; themLabel?: string }
+  specs?: Array<{ label: string; value: string }>
+  faq?: Array<{ q: string; a: string }>
+  guarantee?: string
+  shipping?: string
+  audience?: string
+  /** Short lines for the trust strip under the buy button. */
+  trust?: string[]
+}
+
 export type Product = {
   id: string
   storeId: string
@@ -37,6 +54,7 @@ export type Product = {
   seo: { title?: string; description?: string }
   tags: string[]
   subscription: { cadences?: string[]; discountPercent?: number; trialDays?: number }
+  content: ProductContent
   position: number
   createdAt: string
   updatedAt: string

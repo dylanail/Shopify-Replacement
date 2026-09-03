@@ -15,7 +15,11 @@ export type Ctx = {
   ip: string
   body: () => Promise<Record<string, unknown>>
   raw: () => Promise<Buffer>
+  /** Files from a multipart form, keyed by field name. Empty for other bodies. */
+  files: () => Promise<Record<string, UploadedFile>>
 }
+
+export type UploadedFile = { name: string; type: string; data: Buffer }
 
 export type Handler = (ctx: Ctx) => unknown | Promise<unknown>
 
@@ -132,6 +136,14 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
     cached = Buffer.concat(chunks)
     return cached
   }
+  let parsed: { fields: Record<string, unknown>; files: Record<string, UploadedFile> } | null = null
+  const multipart = async () => {
+    if (parsed) return parsed
+    const type = String(req.headers['content-type'] ?? '')
+    const boundary = /boundary=("?)([^";]+)\1/.exec(type)?.[2]
+    parsed = boundary ? parseMultipart(await raw(), boundary) : { fields: {}, files: {} }
+    return parsed
+  }
   return {
     req,
     res,
@@ -142,10 +154,12 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
     cookies: parseCookies(req.headers.cookie),
     ip: String(req.headers['x-forwarded-for'] ?? '').split(',')[0]?.trim() || req.socket.remoteAddress || '0.0.0.0',
     raw,
+    files: async () => (await multipart()).files,
     body: async () => {
       const buffer = await raw()
       if (!buffer.length) return {}
       const type = String(req.headers['content-type'] ?? '')
+      if (type.startsWith('multipart/form-data')) return (await multipart()).fields
       if (type.includes('application/json')) {
         try {
           const parsed: unknown = JSON.parse(buffer.toString('utf8'))
@@ -165,6 +179,46 @@ export function makeCtx(req: IncomingMessage, res: ServerResponse, params: Recor
       return out
     },
   }
+}
+
+/**
+ * A multipart/form-data parser with no dependencies. It handles what a browser
+ * sends: text fields and file fields, one boundary, CRLF line ends. It does not
+ * try to handle nested multipart or content-transfer-encoding, which browsers
+ * do not send.
+ */
+export function parseMultipart(buffer: Buffer, boundary: string): { fields: Record<string, unknown>; files: Record<string, UploadedFile> } {
+  const fields: Record<string, unknown> = {}
+  const files: Record<string, UploadedFile> = {}
+  const delimiter = Buffer.from(`--${boundary}`)
+  let cursor = buffer.indexOf(delimiter)
+  while (cursor !== -1) {
+    cursor += delimiter.length
+    if (buffer[cursor] === 0x2d && buffer[cursor + 1] === 0x2d) break // closing "--"
+    cursor += 2 // CRLF
+    const headerEnd = buffer.indexOf('\r\n\r\n', cursor)
+    if (headerEnd === -1) break
+    const headers = buffer.subarray(cursor, headerEnd).toString('utf8')
+    const next = buffer.indexOf(delimiter, headerEnd)
+    const bodyEnd = next === -1 ? buffer.length : next - 2
+    const body = buffer.subarray(headerEnd + 4, bodyEnd)
+    const name = /name="([^"]*)"/.exec(headers)?.[1]
+    const filename = /filename="([^"]*)"/.exec(headers)?.[1]
+    const contentType = /content-type:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim() ?? 'application/octet-stream'
+    if (name !== undefined) {
+      if (filename !== undefined) {
+        if (filename && body.length) files[name] = { name: filename, type: contentType, data: Buffer.from(body) }
+      } else {
+        const value = body.toString('utf8')
+        const existing = fields[name]
+        if (existing === undefined) fields[name] = value
+        else if (Array.isArray(existing)) existing.push(value)
+        else fields[name] = [existing, value]
+      }
+    }
+    cursor = next
+  }
+  return { fields, files }
 }
 
 function parseCookies(header?: string): Record<string, string> {

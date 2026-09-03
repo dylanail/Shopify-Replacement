@@ -23,10 +23,10 @@ body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 'Inter',ui-
 h1{font-family:'Playfair Display',Georgia,serif;font-weight:400;font-size:2rem;margin:0 0 .3rem;line-height:1.1}
 p.lead{color:var(--muted);margin:0 0 1.6rem}
 .field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.9rem}
-label{font:500 11px/1 'Inter';letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.field label{font:500 11px/1 'Inter',ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 input,textarea,select{font:inherit;padding:.75rem .85rem;border:1px solid var(--line);border-radius:10px;background:#fff;width:100%;color:inherit}
 textarea{resize:vertical;min-height:96px}
-button{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:.85rem 1.4rem;font:500 14px/1 'Inter';cursor:pointer;width:100%}
+button{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:.85rem 1.4rem;font:500 14px/1 'Inter',ui-sans-serif,system-ui,sans-serif;cursor:pointer;width:100%}
 button:hover{background:var(--accent)}
 .muted{color:var(--muted)}
 .alt{margin-top:1.2rem;font-size:13px;color:var(--muted);text-align:center}
@@ -62,16 +62,23 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
     <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
 }
 
-export function onboardingPage(name: string, error: string | null): string {
+export function onboardingPage(name: string, error: string | null, hasStores = false): string {
   return frame('Build your store', `
+    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin">← Back to your stores</a></p>' : ''}
     <h1>What are you selling?</h1>
-    <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Naming, brand, three products with copy and imagery, and the promotions all run at once.</p>
+    <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Research runs first; then naming, brand, three products with pages and imagery, and the promotions all run at once.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
-    <form method="post" action="/onboarding">
+    <form method="post" action="/onboarding" enctype="multipart/form-data">
       <div class="field"><label for="prompt">Your store, in a sentence</label>
         <textarea id="prompt" name="prompt" required placeholder="${escapeHtml(EXAMPLES[0] ?? '')}"></textarea></div>
       <div class="chips">${EXAMPLES.map((example) => `<button type="button" onclick="document.getElementById('prompt').value=${escapeHtml(JSON.stringify(example))}">${escapeHtml(example.slice(0, 46))}…</button>`).join('')}</div>
-      <label style="font:500 11px/1 'Inter';letter-spacing:.16em;text-transform:uppercase;color:var(--muted)">Plan</label>
+      <div class="field"><label for="photo">A product photo (optional)</label>
+        <input id="photo" name="photo" type="file" accept="image/*">
+        <span class="muted" style="font-size:12px">Product imagery is derived from this photo — staged into six scenes, not replaced with a stranger.</span></div>
+      <div class="field"><label for="siteUrl">Your existing site (optional)</label>
+        <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
+        <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
+      <div class="field" style="margin-bottom:.3rem"><label>Plan</label></div>
       <div class="plans">${PLANS.filter((plan) => plan.monthlyPriceCents >= 0)
         .map((plan) => `<label class="plan"><input type="radio" name="planSlug" value="${plan.slug}" ${plan.slug === 'free' ? 'checked' : ''}>
           <strong>${escapeHtml(plan.name)}</strong> — ${plan.monthlyPriceCents ? `${format(plan.monthlyPriceCents, 'USD')}/mo` : 'free'}<br>
@@ -80,8 +87,9 @@ export function onboardingPage(name: string, error: string | null): string {
       <button type="submit">Build my store</button>
     </form>
     <div class="steps">
+      <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
       <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
-      <div><i></i><span>Writes three products with variants, prices and imagery</span></div>
+      <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
       <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
       <div><i></i><span>Builds the storefront and hands you the address</span></div>
     </div>`)

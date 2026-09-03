@@ -339,6 +339,26 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
       UNIQUE (store_id, source));
     `,
   },
+  {
+    name: '004_research_and_page_content',
+    sql: `
+    -- The page a product renders is more than a description: benefits, a
+    -- comparison, specs, questions and a guarantee. They are one JSON column
+    -- because they are written together, from the same research, in one pass.
+    ALTER TABLE products ADD COLUMN content TEXT NOT NULL DEFAULT '{}';
+
+    -- What was uploaded or pasted to seed the store, so the imagery and the
+    -- research can be regenerated from the same source later.
+    ALTER TABLE stores ADD COLUMN reference_image TEXT NOT NULL DEFAULT '';
+    ALTER TABLE stores ADD COLUMN reference_url TEXT NOT NULL DEFAULT '';
+
+    CREATE TABLE store_research (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      source TEXT NOT NULL DEFAULT 'rules', brief TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+    CREATE INDEX store_research_store ON store_research(store_id, created_at DESC);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

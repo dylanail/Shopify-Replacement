@@ -104,12 +104,18 @@ export function paletteFor(brief: Brief): Palette {
 /** Short, sayable, no "Shop" and no "Online". Two words at most. */
 export function brandName(brief: Brief): string {
   const seed = seedOf(brief.prompt)
-  const explicit = /(?:called|named)\s+"?([A-Za-z][A-Za-z0-9'&. -]{1,28})"?/i.exec(brief.prompt)
+  // "called Marrow Lab with three products" names the brand "Marrow Lab", not
+  // the rest of the sentence: a name is a run of capitalised words, at most four.
+  const explicit = /(?:called|named)\s+"?([A-Z][A-Za-z0-9'.]*(?:\s+(?:&|[A-Z][A-Za-z0-9'.]*)){0,3})"?/.exec(brief.prompt)
   if (explicit?.[1]) return explicit[1].trim().replace(/\s+/g, ' ')
   const head = NAME_HEADS[seed % NAME_HEADS.length] as string
   const useCompound = seed % 3 !== 0
-  const tail = NAME_TAILS[(seed >> 3) % NAME_TAILS.length] as string
-  const suffix = SUFFIXES[(seed >> 5) % SUFFIXES.length] as string
+  // "Marrow" + "row" is not a name. Skip a tail that repeats the head's ending.
+  let tailIndex = (seed >>> 3) % NAME_TAILS.length
+  const clashes = (tail: string) => Array.from({ length: tail.length }, (_, k) => tail.slice(0, k + 1)).some((prefix) => head.toLowerCase().endsWith(prefix))
+  while (clashes(NAME_TAILS[tailIndex] as string)) tailIndex = (tailIndex + 1) % NAME_TAILS.length
+  const tail = NAME_TAILS[tailIndex] as string
+  const suffix = SUFFIXES[(seed >>> 5) % SUFFIXES.length] as string
   return useCompound ? `${head}${tail} ${suffix}` : `${head} ${suffix}`
 }
 
