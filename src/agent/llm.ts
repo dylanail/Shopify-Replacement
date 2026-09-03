@@ -227,8 +227,8 @@ const RULES: Rule[] = [
     match: /\b(domain|dns)\b/i,
     build(_groups, input) {
       const host = /([a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?)/i.exec(input)?.[1]
-      if (!host) return { preamble: 'Tell me the domain you own and I will set it up.', steps: [{ tool: 'list_domains', area: 'setup', args: {} }] }
-      return { preamble: `Attaching ${host}.`, steps: [{ tool: 'connect_domain', area: 'setup', args: { hostname: host } }] }
+      if (!host) return { preamble: 'Tell me the domain you own and I will set it up.', steps: [{ tool: 'list_domains', area: 'domains', args: {} }] }
+      return { preamble: `Attaching ${host}.`, steps: [{ tool: 'connect_domain', area: 'domains', args: { hostname: host } }] }
     },
   },
   {

@@ -437,6 +437,48 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX ad_spend_store ON ad_spend(store_id, day);
     `,
   },
+  {
+    name: '007_ads_domains_avatars',
+    sql: `
+    -- A domain is either hosted here (CNAME to the edge) or forwarded by the
+    -- registrar to the store's public address. What the last check actually
+    -- found is kept, so "not verified" always says why.
+    ALTER TABLE domains ADD COLUMN mode TEXT NOT NULL DEFAULT 'host';
+    ALTER TABLE domains ADD COLUMN registrar TEXT NOT NULL DEFAULT '';
+    ALTER TABLE domains ADD COLUMN last_check TEXT NOT NULL DEFAULT '{}';
+
+    -- Who the pages and ads are written for. Suggested from research, edited
+    -- by hand, chosen per generation.
+    CREATE TABLE avatars (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}', source TEXT NOT NULL DEFAULT 'research',
+      selected INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX avatars_store ON avatars(store_id);
+
+    -- A competitor's page selling the same product, read for its angle.
+    CREATE TABLE competitor_sites (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX competitor_sites_store ON competitor_sites(store_id);
+
+    -- Ads: drafted from research, an avatar and a direction; edited by hand.
+    CREATE TABLE ads (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT 'meta', format TEXT NOT NULL DEFAULT 'static',
+      name TEXT NOT NULL, direction TEXT NOT NULL DEFAULT '', avatar_id TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX ads_store ON ads(store_id, status);
+
+    -- The swipe file: ads worth learning from, wherever they came from.
+    CREATE TABLE ad_inspiration (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      source TEXT NOT NULL DEFAULT 'paste', brand TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+    CREATE INDEX ad_inspiration_store ON ad_inspiration(store_id);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

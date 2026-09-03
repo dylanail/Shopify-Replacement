@@ -26,6 +26,8 @@ after(() => {
 
 const jar = new Map<string, string>()
 
+const flashOf = (location: string) => decodeURIComponent(location.replace(/\+/g, ' '))
+
 async function call(path: string, init: { method?: string; form?: Record<string, string> } = {}) {
   const headers: Record<string, string> = { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') }
   let body: string | undefined
@@ -85,7 +87,7 @@ test('every admin page renders', async () => {
   for (const path of [
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
     '/admin/promotions', '/admin/analytics', '/admin/reviews', '/admin/store', '/admin/marketing',
-    '/admin/plugins', '/admin/settings',
+    '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
   ]) {
     const response = await call(path)
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
@@ -268,6 +270,71 @@ test('a product photo can be uploaded and staged from the product page', async (
   assert.equal(served.status, 200)
   assert.equal(served.headers.get('content-type'), 'image/png')
   assert.equal(served.headers.get('x-content-type-options'), 'nosniff')
+})
+
+test('ads are drafted, edited and exported from the Ads tab', async () => {
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  await call('/admin/avatars/suggest', { form: {} })
+  const drafted = await call('/admin/ads/draft', { form: { productId, platform: 'meta', formats: 'static', direction: 'blunt, for coaches', count: '1' } })
+  assert.equal(drafted.status, 302)
+  assert.match(flashOf(drafted.location), /Drafted 1 ad: static/)
+  const list = await call('/admin/ads')
+  const adId = /ad_[a-z0-9]+/.exec(list.text)?.[0] ?? ''
+  assert.ok(adId, 'the draft is listed')
+  const detail = await call(`/admin/ads/${adId}`)
+  assert.match(detail.text, /Copy for the ad manager/)
+  assert.match(detail.text, /written to/)
+  const saved = await call(`/admin/ads/${adId}/save`, { form: { name: 'Coach static', status: 'ready', hooks: 'My hook\nSecond hook', primaryText: 'Body', headline: 'Head', description: 'Desc', cta: 'Buy' } })
+  assert.equal(saved.status, 302)
+  const after = await call(`/admin/ads/${adId}`)
+  assert.match(after.text, /My hook/)
+  assert.match(after.text, /Coach static/)
+  const kept = await call('/admin/ads/inspiration/read', { form: { text: 'Stop buying gloves twice a year.\nGuaranteed for life.', brand: 'Rival' } })
+  assert.match(flashOf(kept.location), /Kept "Stop buying gloves twice a year\."/)
+  assert.match((await call('/admin/ads')).text, /Rival/)
+})
+
+test('a competitor page pasted on the research page becomes an editable angle', async () => {
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  const read = await call('/admin/competitors/read', { form: { url: 'https://fightco.example.com/p', html: '<html><head><title>ProGlove | FightCo</title></head><body><h1>Stop replacing your gloves</h1><h2>Tired of wrist pain?</h2><p>$89.00 was $149.00, 90-day money-back guarantee</p></body></html>', productId } })
+  assert.match(flashOf(read.location), /FightCo runs the risk-reversal angle/)
+  const research = await call('/admin/research')
+  assert.match(research.text, /Stop replacing your gloves/)
+  assert.match(research.text, /Generate PDP versions with this angle/)
+  const recordId = /cmp_[a-z0-9]+/.exec(research.text)?.[0] ?? ''
+  const applied = await call(`/admin/competitors/${recordId}/apply`, { form: {} })
+  assert.match(flashOf(applied.location), /Folded in/)
+})
+
+test('a domain is attached with the registrar\'s records and a check says what it found', async () => {
+  const attached = await call('/admin/domains', { form: { hostname: 'ironjaw.co', mode: 'host', registrar: 'namecheap' } })
+  assert.equal(attached.status, 302)
+  const page = await call('/admin/domains')
+  assert.match(page.text, /ironjaw\.co/)
+  assert.match(page.text, /Advanced DNS tab/)
+  assert.match(page.text, /_amboras\.ironjaw\.co/)
+  assert.match(page.text, /ALIAS/)
+  const checked = await call('/admin/domains/check', { form: { hostname: 'ironjaw.co' } })
+  assert.match(flashOf(checked.location), /No TXT record|points at/)
+  const settings = await call('/admin/settings')
+  assert.match(settings.text, /ironjaw\.co/)
+  const detached = await call('/admin/domains/remove', { form: { hostname: 'ironjaw.co' } })
+  assert.equal(detached.status, 302)
+})
+
+test('product images are re-shot from a direction, and a lane can be made the hero', async () => {
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  const rendered = await call(`/admin/products/${productId}/regenerate`, { form: { direction: 'on marble, morning light', preset: 'lifestyle', provider: 'svg', lanes: '2' } })
+  assert.match(flashOf(rendered.location), /Rendered 2 Vector stage/)
+  const detail = await call(`/admin/products/${productId}`)
+  assert.match(detail.text, /on marble, morning light/)
+  const lane = /name="url" value="([^"]+)"/.exec(detail.text)?.[1]?.replace(/&amp;/g, '&') ?? ''
+  assert.ok(lane, 'a lane is offered')
+  const used = await call(`/admin/products/${productId}/use-image`, { form: { url: lane, as: 'hero' } })
+  assert.match(flashOf(used.location), /hero image now/)
 })
 
 test('the storefront product page carries the conversion sections and the sticky bar', async () => {

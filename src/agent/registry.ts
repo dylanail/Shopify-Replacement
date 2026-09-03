@@ -16,6 +16,8 @@ export type ToolArea =
   | 'plugins'
   | 'setup'
   | 'seo'
+  | 'ads'
+  | 'domains'
 
 export type Artifact =
   | { type: 'product'; id: string; title: string; image: string; href: string }

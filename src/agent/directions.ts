@@ -25,6 +25,8 @@ export type Direction = {
   mustSay: string[]
   urgency: boolean
   priceLed: boolean
+  /** The avatar this direction was filled from, when one was picked. */
+  avatar?: string
 }
 
 export type Format = {
@@ -172,7 +174,7 @@ export function writePdp(input: WriterInput): BlockInstance[] {
   const reviews = newBlock('review-wall', { headline: 'What people say', count: 6, productId: product.id })
   const faq = newBlock('faq', { headline: 'Questions', items: (content.faq ?? []).map((entry) => `${entry.q}|${entry.a}`).join('\n') })
   const buy = newBlock(direction.priceLed || format.id === 'offer' ? 'bundle-offer' : 'buy-box', { productId: product.id, buyNow: true, ...(format.id === 'premium' ? { showImage: true } : {}) })
-  const hero = newBlock('hero', { headline, sub: product.subtitle, image: product.heroImage, cta: tone.cta, ctaHref: '#offer', height: format.id === 'premium' ? 'large' : 'medium', overlay: format.id === 'premium' ? 25 : 45 })
+  const hero = newBlock('hero', { eyebrow: direction.audience ? `For ${direction.audience}` : '', headline, sub: product.subtitle, image: product.heroImage, cta: tone.cta, ctaHref: '#offer', height: format.id === 'premium' ? 'large' : 'medium', overlay: format.id === 'premium' ? 25 : 45 })
   const trust = newBlock('trust-badges', {})
   const guarantee = newBlock('guarantee', {})
   const urgency = [newBlock('countdown', { text: 'This price ends in', minutes: 20 }), newBlock('progress-bar', { label: 'Only a few of this batch left', percent: 82 })]

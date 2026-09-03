@@ -13,7 +13,8 @@ export const NAV: NavItem[] = [
   { key: 'ai', href: '/admin/ai', label: 'Assistant', glyph: '◮' },
   { key: 'orders', href: '/admin/orders', label: 'Orders', glyph: '▤', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', glyph: '◫', area: 'products' },
-  { key: 'research', href: '/admin/research', label: 'Customer research', glyph: '◎', area: 'products' },
+  { key: 'research', href: '/admin/research', label: 'Research & avatars', glyph: '◎', area: 'products' },
+  { key: 'ads', href: '/admin/ads', label: 'Ads', glyph: '◭', area: 'ads' },
   { key: 'collections', href: '/admin/collections', label: 'Collections', glyph: '◇', area: 'organization' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', glyph: '▣', area: 'customers' },
   { key: 'promotions', href: '/admin/promotions', label: 'Promotions', glyph: '◈', area: 'promotions' },
@@ -26,6 +27,7 @@ export const NAV: NavItem[] = [
   { key: 'store', href: '/admin/store', label: 'Store designer', glyph: '◔', area: 'store' },
   { key: 'marketing', href: '/admin/marketing', label: 'Email & SEO', glyph: '⚌', area: 'emails' },
   { key: 'plugins', href: '/admin/plugins', label: 'Integrations', glyph: '⚙', area: 'plugins' },
+  { key: 'domains', href: '/admin/domains', label: 'Domains', glyph: '⌂', area: 'domains' },
   { key: 'settings', href: '/admin/settings', label: 'Settings', glyph: '⚏', area: 'setup' },
 ]
 

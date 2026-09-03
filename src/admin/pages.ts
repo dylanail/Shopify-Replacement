@@ -7,7 +7,7 @@ import { listOrders, getOrder } from '../domain/orders.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions } from '../domain/regions.ts'
-import { environment, listDomains, type Store } from '../control/stores.ts'
+import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
@@ -30,6 +30,8 @@ import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
+import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
+import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
@@ -174,7 +176,8 @@ export function productDetail(ctx: Ctx, productId: string): string {
         <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
           .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
         <button class="btn primary" type="submit">Upload and stage</button></form>
-      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery. Ask the assistant to enhance it and it renders four lanes to pick from.</p></div>
+      <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery.</p></div>
+    ${regenerateCard(ctx, product)}
     <div class="card"><h2>The page</h2>
       <p class="muted" style="font-size:12px;margin:.3rem 0">${product.content.benefits?.length ?? 0} benefits · ${product.content.comparison?.rows.length ?? 0}-row comparison · ${product.content.specs?.length ?? 0} specs · ${product.content.faq?.length ?? 0} questions${product.content.guarantee ? ' · guarantee' : ''}</p>
       ${product.content.benefits?.slice(0, 3).map((benefit) => `<p style="font-size:12.5px;margin:.25rem 0">— ${escapeHtml(benefit.title)}</p>`).join('') ?? ''}
@@ -229,6 +232,7 @@ function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
       <div class="row"><div class="field" style="flex:1"><label>What</label><select name="kind"><option value="pdp">Product page versions</option><option value="advertorial">Advertorials</option></select></div>
         <div class="field" style="flex:1"><label>How many (if no formats picked)</label><input name="count" value="3"></div></div>
       <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${[...PDP_FORMATS.map((format) => ({ ...format, group: 'pdp' })), ...ADVERTORIAL_FORMATS.map((format) => ({ ...format, group: 'advertorial' }))].map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.group}:${format.id}"> ${escapeHtml(format.name)} <span class="muted">(${format.group})</span></label>`).join('')}</div></div>
+      <div class="field"><label>Avatar — fills audience, angle and tone the direction leaves blank</label><select name="avatarId">${avatarOptions(ctx)}</select></div>
       <div class="field"><label>Direction — free-form. Tone words are read (urgent, premium, warm, clinical, playful, blunt); "quoted phrases" must appear; "for gift buyers" sets the audience; "focus on durability" sets the angle.</label><textarea name="direction" rows="2" placeholder="Premium and understated, for people who train seriously, focus on the repair guarantee"></textarea></div>
       <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="publish" value="true"> Publish immediately</label>
       <button class="btn primary" type="submit">Generate</button></form></div>`
@@ -513,22 +517,14 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
 /* ------------------------------------------------------------------- settings */
 
 export function settingsPage(ctx: Ctx): string {
-  const plan = planBySlug(ctx.store.planSlug)
-  const domains = listDomains(ctx.db, ctx.store.id) as Array<{ hostname: string; status: string; ssl: string; verification_token: string }>
   const regions = listRegions(ctx.db, ctx.store.id)
   const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
-    <div class="card"><h2>Domains</h2>
-      <form method="post" action="/admin/domains" class="row" style="margin:.6rem 0">
-        <input name="hostname" placeholder="yourbrand.com" style="flex:1"><button class="btn primary">Attach</button></form>
-      ${domains.length ? domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0">
-        <span>${escapeHtml(domain.hostname)}</span>
-        <span class="row"><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span>
-        ${domain.status === 'verified' ? '' : `<form method="post" action="/admin/domains/verify"><input type="hidden" name="hostname" value="${escapeHtml(domain.hostname)}"><button class="btn">Verify</button></form>`}</span></div>
-        ${domain.status === 'verified' ? '' : `<p class="muted" style="font-size:11.5px">CNAME → edge.amboras.app · TXT _amboras.${escapeHtml(domain.hostname)} = amboras-verify=${escapeHtml(domain.verification_token)}</p>`}`).join('')
-        : `<p class="muted" style="font-size:12px">On ${escapeHtml(plan.name)}${plan.customDomain ? '' : ', a custom domain needs a paid plan'}. The store is live at its amboras address either way.</p>`}</div>
+    <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
+      ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
+        || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
     <div class="card"><h2>Regions and shipping</h2>
       ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
         <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
@@ -733,7 +729,8 @@ export function researchPage(ctx: Ctx): string {
     <label class="row" style="font-size:12px;margin-bottom:.7rem"><input type="checkbox" name="rewritePages" value="true" checked> Rewrite every product page from the result</label>
     <button class="btn primary" type="submit">${research ? 'Run again' : 'Run research'}</button></form>`
   if (!research) {
-    return `${flash(ctx)}<div class="head"><h1 class="serif">Customer research</h1></div><div class="grid2">${runForm}<div class="card"><p class="muted">Nothing on file yet. Stores built through onboarding get this automatically; this one was not, or it was reset.</p></div></div>`
+    return `${flash(ctx)}<div class="head"><h1 class="serif">Customer research</h1></div><div class="grid2">${runForm}<div class="card"><p class="muted">Nothing on file yet. Stores built through onboarding get this automatically; this one was not, or it was reset.</p></div></div>
+    <div style="margin-top:1rem">${competitorsCard(ctx)}${avatarsCard(ctx)}</div>`
   }
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Customer research</h1>
     <p class="muted" style="margin:.25rem 0 0">${research.createdAt.slice(0, 16).replace('T', ' ')} · source: ${escapeHtml(research.source)}${research.source === 'rules' ? ' (category rules — set ANTHROPIC_API_KEY for model research)' : ''}</p></div></div>
@@ -763,7 +760,8 @@ export function researchPage(ctx: Ctx): string {
     <div class="card"><h2>Keywords</h2><p style="margin:.4rem 0 0">${research.keywords.map((keyword) => `<span class="tag" style="margin:.15rem .15rem 0 0">${escapeHtml(keyword)}</span>`).join('')}</p></div>
     <div class="card"><h2>Proof points</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px">${research.proofPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join('')}</ul></div>
     ${research.sourceNotes.length ? `<div class="card"><h2>From the source</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px">${research.sourceNotes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></div>` : ''}
-  </div></div>`
+  </div></div>
+  <div class="grid2" style="margin-top:1rem"><div>${avatarsCard(ctx)}</div><div>${competitorsCard(ctx)}</div></div>`
 }
 
 /* ------------------------------------------------------------------- ai page */

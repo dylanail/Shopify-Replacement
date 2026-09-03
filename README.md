@@ -37,13 +37,16 @@ npm run reset     # throw the database away and re-seed
 | **Control plane** | users, sessions, stores, draft/live environments, teams and RBAC, invites, plans, domains, audit log, to-do punch list |
 | **Research** | who buys, what stops them, competitors, price anchor, keywords and proof points — per category rules offline, a model when configured, and it reads a pasted site either way |
 | **Product pages** | benefits answering the triggers, a comparison table against the named competitor, specs, FAQ from the objections, guarantee and shipping strip, sticky mobile buy bar — written from the research, never from thin air |
-| **Imagery** | a merchant photo is staged into six scenes (white seamless, lifestyle, dark luxury, flat lay, golden hour, studio) around the *actual* product; with an image model configured it is re-shot rather than staged |
+| **Imagery** | a merchant photo is staged into six scenes (white seamless, lifestyle, dark luxury, flat lay, golden hour, studio) around the *actual* product; with a model configured it is re-shot rather than staged — OpenAI GPT Image 2 (`gpt-image-2`) or Google Gemini 3 Pro Image (`gemini-3-pro-image-preview`), chosen per render — from a free-form art direction ("on marble, morning light, a hand holding it"), as a contact sheet you pick a lane from |
+| **Avatars & angles** | research personas become editable customer avatars (who, wants, fears, angle, hooks, tone, first objection); a competitor page selling the same product is read into an editable angle record (headline, hooks, offer, proof, audience, the angle it runs) that can be folded into the research or used as a direction; picking an avatar fills the audience, angle and tone that free-form direction leaves blank, for versions, advertorials and ads alike |
+| **Ads** | an Ads tab: drafts per product and platform (Meta, TikTok, Google search, YouTube) in ten formats — static, UGC video script with timed beats, problem-agitate-solve, testimonial (only from approved reviews on file), us-vs-them, founder, ten hooks, offer, retargeting, search headlines in Google's limits — from the same research, avatar and direction as the pages; every field editable, revisable under a new direction, exported as text for the ad manager; a swipe file fed by the Meta Ad Library (with a token), competitor links, pasted ads and built-in hook patterns |
+| **Domains** | per store: attach a domain hosted here or forwarded by the registrar, with the exact records and the menu path for Namecheap, GoDaddy, Cloudflare, Squarespace/Google Domains, Porkbun; verification is a real DNS lookup (TXT + CNAME/A) or, for forwarding, following the redirect, and the check records what it found |
 | **Funnels** | ad → advertorial → offer → checkout with an order bump (shipping protection by default, a real hidden product) → one-click upsell → downsell only if the upsell is declined → thank-you page with tracking and related products |
 | **Versions & direction** | product-page versions and advertorials in named formats (listicle, first-person story, problem-agitate-solve, expert take, "we tested five", mistakes; benefit-, story-, UGC-, comparison-, offer-, urgency-led, premium minimal) with free-form direction read into tone, audience, angle and must-say phrases; pdp versions split-tested by session with per-version views, carts, sales and conversion |
 | **Dropshipping ops** | import a product from any Shopify store URL (`/products/x.json`) or an Open Graph page with a markup; supplier and cost per product with a margin calculator; fulfil via supplier with carrier detection from the tracking number; a branded `/track` page; delivery estimates from lead times; ad-spend log; a profit report that subtracts COGS, supplier shipping, fees, refunds and ads |
 | **Conversion widgets** | recent-sales popups and live-viewer counts from real orders and sessions, stock scarcity from real inventory, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, product Q&A, back-in-stock capture, announcement rotator, compare-at badges, abandoned-cart email on a schedule, purchase and add-to-cart events for GA4, Meta and TikTok |
 | **Commerce core** | products, options, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping rates |
-| **Agent** | 74 tools with per-tool schemas, an executor that validates and refuses, durable resumable runs with parallel branches, a model planner and a rules planner |
+| **Agent** | 114 tools with per-tool schemas, an executor that validates and refuses, durable resumable runs with parallel branches, a model planner and a rules planner |
 | **Storefront** | server-rendered per brand: home, collections, PDP, cart, checkout, order, blog, pages, sitemap, robots, JSON-LD, `llms.txt` |
 | **Plugins** | manifest schema, install with settings validation, sealed credentials, storefront slots, capabilities, and AI tools contributed by plugins |
 | **Analytics** | cookieless sessions, event pipeline, KPIs with deltas, funnel with benchmarks, live visitors, order affinity mining |
@@ -55,7 +58,26 @@ the whole product over HTTP with no mocks: register → onboard from a sentence 
 every admin page → drive the assistant → buy something from the storefront →
 watch the order land in the admin → start a second store with a photo upload →
 see both in the hub → stage a product photo → read the conversion sections off
-the live product page.
+the live product page → draft, edit and export an ad → paste a competitor page
+and fold its angle into the research → attach a domain with Namecheap's
+records and check it → re-shoot a product image from a direction and make a
+lane the hero.
+
+### The dropshipper's loop, as the admin now has it
+
+1. **Research** reads the brief and any pasted site. **Competitor pages**
+   selling the same product are read into an angle record on the same page —
+   change any field, write your take, fold it in.
+2. **Avatars** are suggested from the personas: who, wants, fears, the angle
+   that reaches them, five hooks, a tone. Edit them; add your own; switch one
+   off. Every generator has an avatar picker next to its direction box, and a
+   typed word always beats the avatar.
+3. **Product images** are re-shot from a sentence with whichever model is
+   configured; the sheet stays on the product until you pick a lane.
+4. **Versions and advertorials** take the avatar and the direction.
+5. **Ads** take the same avatar and direction, in the format the platform
+   wants, and read the swipe file for hooks.
+6. **Domains** connect the store to a name, with the registrar's own words.
 
 ---
 
@@ -164,7 +186,12 @@ Everything is optional. Nothing is required to run.
 | `AMBORAS_SECRET` | master key for password hashing, credential sealing and visitor fingerprints. **Set this in any real deployment.** |
 | `AMBORAS_STOREFRONT_HOST` | serve storefronts at `*.thisdomain` instead of `/s/:slug` |
 | `ANTHROPIC_API_KEY`, `AMBORAS_MODEL` | let a model plan runs |
-| `OPENAI_API_KEY`, `AMBORAS_IMAGE_MODEL` | generate real imagery |
+| `OPENAI_API_KEY`, `AMBORAS_IMAGE_MODEL` | OpenAI images; the model defaults to `gpt-image-2` (ChatGPT Images 2.0) |
+| `GEMINI_API_KEY`, `AMBORAS_GOOGLE_IMAGE_MODEL` | Google images; defaults to `gemini-3-pro-image-preview` (Nano Banana Pro) |
+| `AMBORAS_IMAGE_PROVIDER` | `openai`, `google` or `svg`: which runs when a render does not say. Default: the first with a key |
+| `META_AD_LIBRARY_TOKEN`, `AMBORAS_AD_LIBRARY_COUNTRY` | search the Meta Ad Library from the Ads tab; the country defaults to `GB` because the API only returns commercial ads for EU/UK reach |
+| `AMBORAS_EDGE_HOST`, `AMBORAS_EDGE_IP` | what hosted domains should point at; default `edge.<AMBORAS_STOREFRONT_HOST>` |
+| `AMBORAS_PUBLIC_ORIGIN` | the address forwarded domains redirect to when there is no storefront host |
 | `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | actually deliver email |
 
 Two path prefixes exist and are deliberately different: `/s/:slug` is the live
@@ -183,8 +210,24 @@ Named so nobody has to discover it by clicking.
   connect flow, sealed keys, a `payment_provider` capability the checkout reads
   — but the demo checkout marks the order captured without a charge. Swapping in
   the Payment Element is a change to one template and one webhook.
-- **Domains verify optimistically.** The records are correct and the state
-  machine is real; nothing resolves DNS or issues a certificate.
+- **Domains verify, certificates do not issue.** The check really looks the
+  name up (TXT and CNAME/A, or follows the redirect for a forwarded domain) and
+  says what it found. `ssl: issued` is a state, not a certificate: TLS
+  termination for custom hostnames belongs to whatever fronts this process
+  (Caddy, a load balancer, Cloudflare), and the Domains page says so. "Mark
+  verified anyway" exists for DNS behind a proxy the lookup cannot see.
+- **Ads are written, not placed.** Nothing here calls an ads API to publish.
+  A draft exports as plain text for the ad manager. The Meta Ad Library
+  search is real when a token is configured, and honest about its scope: the
+  API returns commercial ads only for EU/UK reach, so the default country is
+  GB; competitor US-only ads are pasted in by hand.
+- **Competitor pages are read as text.** Headline, hooks, prices, guarantee,
+  review counts, buttons and audience come from the HTML by rules (or from the
+  model, when configured, on the research pass). Sites that block fetching are
+  pasted in; the extraction is the same either way. It reads what the page
+  says, not what its ads or its numbers actually do.
+- **Testimonial ads never invent.** Without approved reviews on file the
+  format returns an empty draft and says why.
 - **Storefronts are server-rendered here, not exported.** The blueprint's target
   writes a Next.js project per store and edits its source in a sandbox. The slot
   system, the draft/live split and the build log are the parts of that design

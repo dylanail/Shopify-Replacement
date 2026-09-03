@@ -1,6 +1,6 @@
 import { listProducts } from '../../domain/catalog.ts'
 import { statsFor } from '../../domain/reviews.ts'
-import { addDomain, environment, getStore, listDomains, publish, publishState, rollback, setTheme, updateStore, verifyDomain } from '../../control/stores.ts'
+import { environment, getStore, publish, publishState, rollback, setTheme, updateStore } from '../../control/stores.ts'
 import { addShippingOption, createRegion, defaultRegion, listRegions } from '../../domain/regions.ts'
 import { inviteTeammate } from '../../control/auth.ts'
 import { requirePlan } from '../../control/plans.ts'
@@ -174,46 +174,6 @@ export const storefrontTools: Tool[] = defineTools([
     handler(_args, ctx) {
       rollback(ctx.db, ctx.storeId)
       return { summary: 'Draft reset to the live version. Nothing customers see changed.' }
-    },
-  },
-  {
-    name: 'connect_domain',
-    area: 'setup',
-    description: 'Attach a domain you already own and return the DNS records to add.',
-    schema: { hostname: { type: 'string', required: true } },
-    handler(args, ctx) {
-      const store = getStore(ctx.db, ctx.storeId)
-      requirePlan(store?.planSlug ?? 'free', 'customDomain', 'A custom domain')
-      const result = addDomain(ctx.db, ctx.storeId, args.hostname as string)
-      return {
-        summary: `Add these two records at your registrar, then verify ${result.hostname}.`,
-        data: result,
-        artifacts: [{ type: 'table', columns: ['Type', 'Name', 'Value'], rows: result.records.map((record) => [record.type, record.name, record.value]) }],
-      }
-    },
-  },
-  {
-    name: 'verify_domain',
-    area: 'setup',
-    description: 'Check the DNS records and issue the certificate.',
-    schema: { hostname: { type: 'string', required: true } },
-    handler(args, ctx) {
-      const result = verifyDomain(ctx.db, ctx.storeId, (args.hostname as string).toLowerCase())
-      refreshTodos(ctx.db, ctx.storeId)
-      return { summary: `${result.hostname} is verified and its certificate is issued.`, data: result }
-    },
-  },
-  {
-    name: 'list_domains',
-    area: 'setup',
-    description: 'List the domains attached to this store and their status.',
-    schema: {},
-    handler(_args, ctx) {
-      const rows = listDomains(ctx.db, ctx.storeId) as Array<{ hostname: string; status: string; ssl: string }>
-      return {
-        summary: rows.length ? `${rows.length} domain${rows.length === 1 ? '' : 's'}.` : 'No custom domain yet — the store is on its amboras address.',
-        artifacts: [{ type: 'table', columns: ['Domain', 'Status', 'Certificate'], rows: rows.map((row) => [row.hostname, row.status, row.ssl]) }],
-      }
     },
   },
   {

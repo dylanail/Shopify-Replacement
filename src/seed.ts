@@ -18,6 +18,10 @@ import { updateProduct } from './domain/catalog.ts'
 import { recordAdSpend } from './domain/ops.ts'
 import { upsertFunnel } from './domain/funnels.ts'
 import { generateVersions, setVersionWeight } from './pages/versions.ts'
+import { suggestAvatars } from './agent/avatars.ts'
+import { extractAngle, saveCompetitor } from './agent/angles.ts'
+import { draftAds, saveInspiration } from './agent/ads.ts'
+import { attachDomain } from './control/domains.ts'
 
 const log = logger('seed')
 
@@ -194,6 +198,24 @@ async function main() {
       downsell: { ...(products[2]?.variants[0] ? { variantId: products[2].variants[0].id } : {}), discountPercent: 35, headline: 'How about the holdall instead, 35% off, just this once?' },
     })
     log.info('two pdp versions in a split test, a story advertorial, and a funnel with bump, upsell and downsell')
+
+    // Avatars from the research, a competitor read for its angle, a swipe file, and ads written to the coach.
+    const avatars = suggestAvatars(db, store.id)
+    const coach = avatars.find((avatar) => /coach/i.test(avatar.name))
+    saveCompetitor(db, store.id, {
+      productId: hero.id,
+      angle: {
+        ...extractAngle(`<html><head><title>ProGlove Elite | FightCo</title><meta property="og:site_name" content="FightCo"><meta property="og:description" content="Designed for serious boxers who are tired of gloves that fall apart."></head><body>
+          <h1>Stop replacing your gloves every six months</h1><h2>Why 12,000+ boxers switched</h2><h2>Tired of wrist pain after bag work?</h2>
+          <ul><li>Triple-layer foam that keeps its shape</li><li>Genuine cowhide, hand stitched</li><li>Lace-up wrist lock</li></ul>
+          <p>Only $89.00 <s>$149.00</s> — save 40% today. Free worldwide shipping. 90-day money-back guarantee. Rated 4.8/5 from 12,340 reviews.</p><button>Add to cart</button></body></html>`, 'https://fightco.example.com/products/proglove-elite'),
+        take: 'Foam, not horsehair, and the "wrist lock" is velcro under the laces. Their guarantee is the thing to match.',
+      },
+    })
+    saveInspiration(db, store.id, { source: 'paste', brand: 'FightCo', hook: 'Stop replacing your gloves every six months.', primaryText: 'Stop replacing your gloves every six months.\nTriple-layer foam. 90-day guarantee. Free shipping.', notes: 'Running since January. Problem-first, guarantee second.' })
+    await draftAds(db, fresh, { productId: hero.id, platform: 'meta', formats: ['static', 'ugc-script', 'hooks'], direction: 'blunt, focus on the repair guarantee', ...(coach ? { avatarId: coach.id } : {}) })
+    attachDomain(db, store.id, { hostname: 'ironjaw.co', mode: 'host', registrar: 'namecheap' })
+    log.info(`${avatars.length} avatars, a competitor angle, a swipe file, three meta ads and a pending domain`)
   }
 
   publish(db, store.id)

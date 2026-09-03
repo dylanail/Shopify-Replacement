@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { escapeHtml } from '../lib/http.ts'
-import { readUpload, uploadAsDataUri } from '../lib/uploads.ts'
+import { readUpload, saveUpload, uploadAsDataUri } from '../lib/uploads.ts'
 
 /**
  * Product and brand imagery.
@@ -69,44 +69,153 @@ export async function enhance(request: ImageRequest & { lanes?: number }): Promi
   return { lanes: urls, preset: request.preset ?? 'white-seamless', tookMs: Date.now() - started }
 }
 
+/* ------------------------------------------------------------- providers */
+
+/**
+ * Two model families, plus the vector stage.
+ *
+ * OpenAI's GPT Image 2 (the "ChatGPT Images 2.0" model) and Google's Gemini 3
+ * Pro Image ("Nano Banana Pro") are both wired directly, with no SDK. Which
+ * one runs is a choice per request; the default is whichever has a key, and
+ * the vector stage is what you get with neither. The model ids are overridable
+ * so a newer snapshot is one environment variable away, not a code change.
+ */
+export type ImageProvider = 'openai' | 'google' | 'svg'
+
+export type ImageModel = { id: ImageProvider; name: string; model: string; envKey: string; note: string }
+
+export function imageModels(): Array<ImageModel & { available: boolean }> {
+  const models: ImageModel[] = [
+    { id: 'openai', name: 'OpenAI GPT Image 2', model: process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-2', envKey: 'OPENAI_API_KEY', note: 'ChatGPT Images 2.0. Edits your photo into the scene; strong on text and product fidelity.' },
+    { id: 'google', name: 'Google Gemini 3 Pro Image', model: process.env.AMBORAS_GOOGLE_IMAGE_MODEL ?? 'gemini-3-pro-image-preview', envKey: 'GEMINI_API_KEY', note: 'Nano Banana Pro. Keeps the product identity across shots; good at lifestyle composites.' },
+    { id: 'svg', name: 'Vector stage (no key)', model: 'built-in', envKey: '', note: 'Your photo staged into the scene deterministically. Always available.' },
+  ]
+  return models.map((entry) => ({ ...entry, available: entry.id === 'svg' || Boolean(process.env[entry.envKey]) }))
+}
+
+export function defaultProvider(): ImageProvider {
+  const wanted = process.env.AMBORAS_IMAGE_PROVIDER as ImageProvider | undefined
+  const models = imageModels()
+  if (wanted && models.find((entry) => entry.id === wanted)?.available) return wanted
+  return models.find((entry) => entry.available)?.id ?? 'svg'
+}
+
+export type ImageTransport = (url: string, init: RequestInit) => Promise<Response>
+let transport: ImageTransport = (url, init) => fetch(url, init)
+/** Tests swap the network out; nothing else should. */
+export function useImageTransport(next: ImageTransport | null) {
+  transport = next ?? ((url, init) => fetch(url, init))
+}
+
+export type GenerateRequest = ImageRequest & {
+  provider?: ImageProvider
+  /** Free-form: "on marble, morning light, a hand holding it, no props". */
+  direction?: string
+  /** When set, model output is saved as an upload under this store instead of a data URI. */
+  storeId?: string
+}
+
+/** The prompt both models get. The direction is quoted verbatim; it is the merchant's call. */
+export function imagePrompt(request: GenerateRequest): string {
+  const preset = PRESETS.find((entry) => entry.id === (request.preset ?? 'white-seamless'))
+  const base = `Commercial ${request.kind === 'hero' ? 'brand hero' : 'product'} photograph of ${request.subject}, ${preset?.brief ?? ''}.`
+  const direction = request.direction?.trim() ? ` Art direction from the merchant: ${request.direction.trim()}.` : ''
+  const identity = request.reference ? ' Keep this exact product: its shape, colour, label and details must not change; only the scene, light and styling change.' : ''
+  return `${base}${direction}${identity} No added text, no watermark, no logos that are not on the product.`
+}
+
 /**
  * With a reference photo and an image model, the model *edits* the merchant's
- * own photograph into the preset scene, so the product in the output is the
+ * own photograph into the scene, so the product in the output is the
  * product they sell and not a plausible stranger. Without a model, the same
  * photo is composed into the scene with a ground, a shadow and the brand's
  * light — a real change the merchant can see, made from their real product.
  */
-export async function generate(request: ImageRequest): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return imageUrl(request)
-  const preset = PRESETS.find((entry) => entry.id === (request.preset ?? 'white-seamless'))
-  const prompt = `Commercial product photograph of ${request.subject}, ${preset?.brief ?? ''}. No text, no watermark.`
+export async function generate(request: GenerateRequest): Promise<string> {
+  const provider = request.provider ?? defaultProvider()
+  if (provider === 'svg') return imageUrl(request)
+  const model = imageModels().find((entry) => entry.id === provider)
+  const apiKey = model ? process.env[model.envKey] : undefined
+  if (!model || !apiKey) return imageUrl(request)
+  const prompt = imagePrompt(request)
+  const referenceFile = request.reference ? readUpload(request.reference) : null
   try {
-    let response: Response
-    const referenceFile = request.reference ? readUpload(request.reference) : null
-    if (referenceFile) {
-      const form = new FormData()
-      form.set('model', process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-1')
-      form.set('prompt', `Keep this exact product, its shape, colour and details. Re-shoot it as: ${prompt}`)
-      form.set('size', '1024x1024')
-      form.set('image', new Blob([new Uint8Array(referenceFile.data)], { type: referenceFile.type }), 'reference.png')
-      response = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form })
-    } else {
-      response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: process.env.AMBORAS_IMAGE_MODEL ?? 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
-      })
-    }
-    if (!response.ok) return imageUrl(request)
-    const payload = (await response.json()) as { data?: Array<{ url?: string; b64_json?: string }> }
-    const first = payload.data?.[0]
-    if (first?.url) return first.url
-    if (first?.b64_json) return `data:image/png;base64,${first.b64_json}`
-    return imageUrl(request)
+    const output = provider === 'openai' ? await openaiImage(apiKey, model.model, prompt, referenceFile) : await googleImage(apiKey, model.model, prompt, referenceFile)
+    if (!output) return imageUrl(request)
+    return persist(output, request.storeId)
   } catch {
     return imageUrl(request)
   }
+}
+
+type ImageOutput = { url?: string; bytes?: Buffer; type?: string }
+
+async function openaiImage(apiKey: string, model: string, prompt: string, reference: { data: Buffer; type: string } | null): Promise<ImageOutput | null> {
+  let response: Response
+  if (reference) {
+    const form = new FormData()
+    form.set('model', model)
+    form.set('prompt', prompt)
+    form.set('size', '1024x1024')
+    form.set('image', new Blob([new Uint8Array(reference.data)], { type: reference.type }), 'reference.png')
+    response = await transport('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form })
+  } else {
+    response = await transport('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt, size: '1024x1024', n: 1 }),
+    })
+  }
+  if (!response.ok) return null
+  const payload = (await response.json()) as { data?: Array<{ url?: string; b64_json?: string }> }
+  const first = payload.data?.[0]
+  if (first?.b64_json) return { bytes: Buffer.from(first.b64_json, 'base64'), type: 'image/png' }
+  if (first?.url) return { url: first.url }
+  return null
+}
+
+/**
+ * Gemini image models answer `generateContent` with image parts. The reference
+ * photo goes in as inline data ahead of the prompt, which is how the model is
+ * told to keep the subject rather than reinvent it.
+ */
+async function googleImage(apiKey: string, model: string, prompt: string, reference: { data: Buffer; type: string } | null): Promise<ImageOutput | null> {
+  const parts: Array<Record<string, unknown>> = []
+  if (reference) parts.push({ inline_data: { mime_type: reference.type, data: reference.data.toString('base64') } })
+  parts.push({ text: prompt })
+  const response = await transport(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } } }),
+  })
+  if (!response.ok) return null
+  const payload = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string }; inline_data?: { mime_type?: string; data?: string } }> } }> }
+  for (const candidate of payload.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      const inline = part.inlineData ?? (part.inline_data ? { mimeType: part.inline_data.mime_type, data: part.inline_data.data } : undefined)
+      if (inline?.data) return { bytes: Buffer.from(inline.data, 'base64'), type: inline.mimeType ?? 'image/png' }
+    }
+  }
+  return null
+}
+
+/**
+ * Model output is saved as an upload the moment it exists. A remote URL from a
+ * provider expires within the hour, and a multi-megabyte data URI inside a
+ * product row is a page that never loads; a file under `/_uploads` is neither.
+ */
+function persist(output: ImageOutput, storeId?: string): string {
+  if (output.bytes) {
+    if (storeId) {
+      try {
+        return saveUpload({ name: 'generated.png', type: output.type ?? 'image/png', data: output.bytes }, storeId).url
+      } catch {
+        /* fall through to the data URI */
+      }
+    }
+    return `data:${output.type ?? 'image/png'};base64,${output.bytes.toString('base64')}`
+  }
+  return output.url ?? ''
 }
 
 /* --------------------------------------------------------------- vector draw */

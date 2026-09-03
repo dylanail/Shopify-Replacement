@@ -1,7 +1,12 @@
 import { getDb } from '../lib/db.ts'
 import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
 import { endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
-import { addDomain, environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
+import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
+import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
+import { deleteAd, draftAds, getAd, reviseAd, saveAd, saveInspiration, deleteInspiration, readInspiration, type AdPlatform } from '../agent/ads.ts'
+import { deleteAvatar, saveAvatar, suggestAvatars } from '../agent/avatars.ts'
+import { applyCompetitor, deleteCompetitor, getCompetitor, readCompetitor, saveCompetitor, type AngleKind } from '../agent/angles.ts'
+import * as growth from './growth-pages.ts'
 import { install, invalidateStorefrontConfig, uninstall } from '../control/plugins.ts'
 import { PLANS, PlanLimitError, planBySlug } from '../control/plans.ts'
 import { listTodos, recordAudit, refreshTodos, seedTodos } from '../control/todos.ts'
@@ -74,6 +79,11 @@ function storeUrl(ctx: Ctx, store: Store): string {
   const root = process.env.AMBORAS_STOREFRONT_HOST
   if (root) return `${ctx.url.protocol}//${store.slug}.${root}`
   return `/s/${store.slug}`
+}
+
+function publicUrl(ctx: Ctx, store: Store): string {
+  const url = storeUrl(ctx, store)
+  return url.startsWith('http') ? url : `${process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin}${url}`
 }
 
 function back(ctx: Ctx, message?: string): ReturnType<typeof redirect> {
@@ -420,7 +430,7 @@ export function adminRouter(): Router {
     const kind = body.kind === 'advertorial' ? 'advertorial' : 'pdp'
     const formats = picked.filter((entry) => entry.startsWith(`${kind}:`)).map((entry) => entry.split(':')[1] as string)
     try {
-      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true' })
+      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true' })
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'generate_versions', target: ctx.params.id as string, diff: { kind, formats, direction: body.direction, pages: pages.map((page) => page.id) } })
       return back(ctx, `Generated ${pages.length} ${kind === 'pdp' ? 'product page version' : 'advertorial'}${pages.length === 1 ? '' : 's'}: ${pages.map((page) => page.format).join(', ')}.`)
     } catch (error) {
@@ -727,14 +737,32 @@ export function adminRouter(): Router {
     return page(ctx, current, 'settings', 'Settings', pages.settingsPage(ctxFor(current, ctx)))
   })
 
+  router.get('/admin/domains', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'domains', 'Domains', growth.domainsPage(ctxFor(current, ctx)))
+  })
+
   router.post('/admin/domains', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      addDomain(db(), current.store.id, String(body.hostname ?? ''))
-      return back(ctx, 'Add the two DNS records below, then verify.')
+      const record = attachDomain(db(), current.store.id, { hostname: String(body.hostname ?? ''), mode: (body.mode === 'forward' ? 'forward' : 'host') as DomainMode, registrar: String(body.registrar ?? 'other') })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'attach_domain', target: record.hostname, diff: { mode: record.mode, registrar: record.registrar } })
+      return redirect(`/admin/domains?flash=${encodeURIComponent(`${record.hostname} attached. Add the records below at your registrar, then check.`)}`)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not attach that domain'}`)
+    }
+  })
+
+  router.post('/admin/domains/check', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const check = await checkDomain(db(), current.store.id, String(body.hostname ?? ''), publicUrl(ctx, current.store))
+      if (check.verified) refreshTodos(db(), current.store.id)
+      return back(ctx, `${check.verified ? '' : '!'}${check.reason}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not check'}`)
     }
   })
 
@@ -744,10 +772,273 @@ export function adminRouter(): Router {
     try {
       verifyDomain(db(), current.store.id, String(body.hostname ?? ''))
       refreshTodos(db(), current.store.id)
-      return back(ctx, 'Verified and certificate issued.')
+      return back(ctx, 'Marked verified without a lookup. If the name does not resolve here, visitors will not arrive.')
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not verify'}`)
     }
+  })
+
+  router.post('/admin/domains/remove', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    removeDomain(db(), current.store.id, String(body.hostname ?? ''))
+    return back(ctx, 'Detached.')
+  })
+
+  /* ---------------------------------------------------------------- ads */
+
+  router.get('/admin/ads', async (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'ads', 'Ads', await growth.adsPage(ctxFor(current, ctx), { ...(ctx.query.get('q') ? { q: ctx.query.get('q') as string } : {}), ...(ctx.query.get('country') ? { country: ctx.query.get('country') as string } : {}) }))
+  })
+
+  router.post('/admin/ads/draft', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const formats = (Array.isArray(body.formats) ? body.formats : body.formats ? [body.formats] : []) as string[]
+    try {
+      const ads = await draftAds(db(), current.store, { productId: String(body.productId ?? ''), platform: String(body.platform ?? 'meta') as AdPlatform, formats, direction: String(body.direction ?? ''), ...(body.avatarId ? { avatarId: String(body.avatarId) } : {}), count: Number(body.count ?? 3) || 3 })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'draft_ads', target: String(body.productId ?? ''), diff: { formats: ads.map((ad) => ad.format), direction: body.direction } })
+      return redirect(`/admin/ads?flash=${encodeURIComponent(`Drafted ${ads.length} ad${ads.length === 1 ? '' : 's'}: ${ads.map((ad) => ad.format).join(', ')}.`)}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not draft'}`)
+    }
+  })
+
+  router.get('/admin/ads/:id', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'ads', 'Ad', growth.adDetail(ctxFor(current, ctx), ctx.params.id as string))
+  })
+
+  router.post('/admin/ads/:id/save', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const ad = getAd(db(), current.store.id, ctx.params.id as string)
+    if (!ad) return notFound('No such ad')
+    const linesOf = (value: unknown) => String(value ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+    const scriptCount = Number(body.script_count ?? 0) || 0
+    const script = Array.from({ length: scriptCount }, (_, index) => ({ beat: String(body[`script_beat_${index}`] ?? ''), seconds: String(body[`script_seconds_${index}`] ?? ''), line: String(body[`script_line_${index}`] ?? ''), visual: String(body[`script_visual_${index}`] ?? '') }))
+    saveAd(db(), current.store.id, {
+      id: ad.id,
+      name: String(body.name ?? ad.name),
+      status: (['draft', 'ready', 'archived'].includes(String(body.status)) ? String(body.status) : ad.status) as 'draft',
+      body: {
+        hooks: linesOf(body.hooks),
+        primaryText: body.primaryText !== undefined ? String(body.primaryText) : ad.body.primaryText,
+        headline: String(body.headline ?? ad.body.headline),
+        description: String(body.description ?? ad.body.description),
+        cta: String(body.cta ?? ad.body.cta),
+        ...(body.headlines !== undefined ? { headlines: linesOf(body.headlines) } : {}),
+        ...(body.descriptions !== undefined ? { descriptions: linesOf(body.descriptions) } : {}),
+        ...(scriptCount ? { script } : {}),
+      },
+    })
+    return back(ctx, 'Saved.')
+  })
+
+  router.post('/admin/ads/:id/revise', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const ad = await reviseAd(db(), current.store, ctx.params.id as string, String(body.direction ?? ''))
+      return back(ctx, `Revised: "${ad.body.hooks[0] ?? ad.body.headline}".`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not revise'}`)
+    }
+  })
+
+  router.post('/admin/ads/:id/duplicate', (ctx) => {
+    const current = session(ctx)
+    const ad = getAd(db(), current.store.id, ctx.params.id as string)
+    if (!ad) return notFound('No such ad')
+    const copy = saveAd(db(), current.store.id, { productId: ad.productId, platform: ad.platform, format: ad.format, name: `${ad.name} (copy)`, direction: ad.direction, avatarId: ad.avatarId, body: ad.body, status: 'draft' })
+    return redirect(`/admin/ads/${copy.id}?flash=${encodeURIComponent('Duplicated. This is the copy.')}`)
+  })
+
+  router.post('/admin/ads/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteAd(db(), current.store.id, ctx.params.id as string)
+    return redirect(`/admin/ads?flash=${encodeURIComponent('Deleted.')}`)
+  })
+
+  router.post('/admin/ads/inspiration/keep', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const saved = saveInspiration(db(), current.store.id, { hook: String(body.hook ?? ''), brand: String(body.brand ?? ''), url: String(body.url ?? ''), primaryText: String(body.primaryText ?? ''), source: String(body.source ?? 'paste') as 'paste' })
+      return back(ctx, `Kept "${saved.hook.slice(0, 60)}".`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not keep that'}`)
+    }
+  })
+
+  router.post('/admin/ads/inspiration/read', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const read = await readInspiration({ url: String(body.url ?? ''), text: String(body.text ?? ''), brand: String(body.brand ?? '') })
+      const saved = saveInspiration(db(), current.store.id, read)
+      return back(ctx, `Kept "${saved.hook.slice(0, 60)}" (${saved.angle}).${saved.notes ? ` ${saved.notes}` : ''}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not read that'}`)
+    }
+  })
+
+  router.post('/admin/ads/inspiration/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteInspiration(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Removed from the swipe file.')
+  })
+
+  /* ------------------------------------------------------------ avatars */
+
+  router.post('/admin/avatars/suggest', (ctx) => {
+    const current = session(ctx)
+    const avatars = suggestAvatars(db(), current.store.id)
+    return back(ctx, avatars.length ? `${avatars.length} avatars on file.` : '!Run research first; avatars are suggested from it.')
+  })
+
+  router.post('/admin/avatars/save', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const avatar = saveAvatar(db(), current.store.id, {
+        ...(body.id ? { id: String(body.id) } : {}),
+        name: String(body.name ?? ''),
+        who: String(body.who ?? ''),
+        wants: String(body.wants ?? ''),
+        fears: String(body.fears ?? ''),
+        buysWhen: String(body.buysWhen ?? ''),
+        share: (Number(body.share ?? 0) || 0) / 100,
+        angle: String(body.angle ?? ''),
+        hooks: String(body.hooks ?? '').split('\n').map((line) => line.trim()).filter(Boolean),
+        tone: String(body.tone ?? 'plain') as 'plain',
+        objection: String(body.objection ?? ''),
+        answer: String(body.answer ?? ''),
+        selected: body.selected === 'true',
+        ...(body.id ? {} : { source: 'manual' as const }),
+      })
+      return back(ctx, `Saved ${avatar.name}.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
+    }
+  })
+
+  router.post('/admin/avatars/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteAvatar(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Avatar deleted.')
+  })
+
+  /* -------------------------------------------------------- competitors */
+
+  router.post('/admin/competitors/read', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const angle = await readCompetitor({ url: String(body.url ?? ''), html: String(body.html ?? '') })
+      const record = saveCompetitor(db(), current.store.id, { productId: String(body.productId ?? ''), angle })
+      return back(ctx, `${record.brand || 'The page'} runs the ${record.angle} angle${record.headline ? `: "${record.headline.slice(0, 70)}"` : ''}. Edit what was pulled below.${record.notes.length ? ` ${record.notes.join(' ')}` : ''}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not read that page'}`)
+    }
+  })
+
+  router.post('/admin/competitors/:id/save', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const linesOf = (value: unknown) => String(value ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+    saveCompetitor(db(), current.store.id, {
+      id: ctx.params.id as string,
+      productId: String(body.productId ?? ''),
+      angle: {
+        brand: String(body.brand ?? ''),
+        url: String(body.url ?? ''),
+        angle: String(body.angle ?? 'benefit') as AngleKind,
+        headline: String(body.headline ?? ''),
+        subheadline: String(body.subheadline ?? ''),
+        hooks: linesOf(body.hooks),
+        benefits: linesOf(body.benefits),
+        offer: { price: String(body.price ?? ''), comparePrice: String(body.comparePrice ?? ''), discount: String(body.discount ?? ''), shipping: String(body.shipping ?? ''), guarantee: String(body.guarantee ?? ''), bundle: String(body.bundle ?? '') },
+        proof: { reviewCount: String(body.reviewCount ?? ''), rating: String(body.rating ?? ''), badges: String(body.badges ?? '').split(',').map((line) => line.trim()).filter(Boolean) },
+        audience: String(body.audience ?? ''),
+        ctas: String(body.ctas ?? '').split('|').map((line) => line.trim()).filter(Boolean),
+        take: String(body.take ?? ''),
+      },
+    })
+    return back(ctx, 'Saved.')
+  })
+
+  router.post('/admin/competitors/:id/apply', (ctx) => {
+    const current = session(ctx)
+    try {
+      const research = applyCompetitor(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, `Folded in. The research now lists ${research.competitors.length} competitors and ${research.triggers.length} triggers.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not apply'}`)
+    }
+  })
+
+  router.post('/admin/competitors/:id/versions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const record = getCompetitor(db(), current.store.id, ctx.params.id as string)
+    if (!record?.productId) return back(ctx, '!Pick which product this competes with first.')
+    try {
+      const pages = await generateVersions(db(), current.store, { productId: record.productId, kind: 'pdp', direction: String(body.direction ?? ''), count: 2 })
+      return redirect(`/admin/products/${record.productId}?flash=${encodeURIComponent(`Generated ${pages.length} versions from the ${record.angle} angle.`)}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not generate'}`)
+    }
+  })
+
+  router.post('/admin/competitors/:id/ads', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const record = getCompetitor(db(), current.store.id, ctx.params.id as string)
+    if (!record?.productId) return back(ctx, '!Pick which product this competes with first.')
+    try {
+      const ads = await draftAds(db(), current.store, { productId: record.productId, direction: String(body.direction ?? ''), count: 3 })
+      return redirect(`/admin/ads?flash=${encodeURIComponent(`Drafted ${ads.length} ads from the ${record.angle} angle.`)}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not draft'}`)
+    }
+  })
+
+  router.post('/admin/competitors/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteCompetitor(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Deleted.')
+  })
+
+  /* -------------------------------------------------------------- images */
+
+  router.post('/admin/products/:id/regenerate', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const result = await execute(
+        'regenerate_product_image',
+        { productId: ctx.params.id as string, direction: String(body.direction ?? ''), preset: String(body.preset ?? 'white-seamless'), provider: String(body.provider ?? 'auto'), lanes: Math.min(4, Math.max(1, Number(body.lanes ?? 3) || 3)) },
+        { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
+      )
+      return back(ctx, result.summary)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not render'}`)
+    }
+  })
+
+  router.post('/admin/products/:id/use-image', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, ctx.params.id as string)
+    if (!product) return notFound('No such product')
+    const url = String(body.url ?? '')
+    if (!url) return back(ctx, '!No image chosen.')
+    const alt = `${product.title}`
+    if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)].slice(0, 8) })
+    else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }].slice(0, 8) })
+    return back(ctx, body.as === 'hero' ? 'That is the hero image now.' : 'Added to the gallery.')
   })
 
   router.post('/admin/team', async (ctx) => {
