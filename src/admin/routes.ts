@@ -532,7 +532,13 @@ export function adminRouter(): Router {
   router.post('/admin/profit/spend', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    recordAdSpend(db(), current.store.id, { day: String(body.day ?? new Date().toISOString()), platform: String(body.platform ?? 'Other'), amountCents: Math.round(Number(body.amountCents ?? 0)), note: String(body.note ?? '') })
+    recordAdSpend(db(), current.store.id, {
+      day: String(body.day ?? new Date().toISOString()),
+      platform: String(body.platform ?? 'Other'),
+      amountCents: Math.round(Number(body.amountCents ?? 0)),
+      clicks: Math.round(Number(body.clicks ?? 0)) || 0,
+      note: String(body.note ?? ''),
+    })
     return back(ctx, 'Logged.')
   })
 

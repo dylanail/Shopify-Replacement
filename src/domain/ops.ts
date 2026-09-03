@@ -13,7 +13,33 @@ import type { Order, Product, Supplier } from './types.ts'
 
 /* ------------------------------------------------------------- profit */
 
-export type Margin = { priceCents: number; costCents: number; shippingCents: number; feesCents: number; profitCents: number; marginPercent: number }
+export type Margin = {
+  priceCents: number
+  costCents: number
+  shippingCents: number
+  feesCents: number
+  profitCents: number
+  marginPercent: number
+  /** 1 ÷ gross margin, rounded up: below this a sale loses money. Null when there is no margin to divide into. */
+  breakevenRoas: number | null
+  /** Breakeven + 1: the line the course scales above and holds below. */
+  targetRoas: number | null
+}
+
+/**
+ * The two lines every scaling decision is made against.
+ *
+ * Breakeven ROAS is 1 ÷ gross margin rounded up (67% → 1.5, 55% → 1.82) and
+ * target is breakeven + 1. Everything needed for them was already on file —
+ * price, supplier cost, supplier shipping, card fees — and stopping at "42%
+ * margin" left the operator to do this arithmetic in their head every time
+ * they looked at a campaign.
+ */
+export function roasLines(marginPercent: number): { breakevenRoas: number | null; targetRoas: number | null } {
+  if (marginPercent <= 0) return { breakevenRoas: null, targetRoas: null }
+  const breakeven = Math.ceil((100 / marginPercent) * 100) / 100
+  return { breakevenRoas: breakeven, targetRoas: Math.round((breakeven + 1) * 100) / 100 }
+}
 
 /** Card fees at 2.9% + 30c; the platform fee is not charged in personal mode. */
 export function marginFor(priceCents: number, supplier: Supplier): Margin {
@@ -21,16 +47,30 @@ export function marginFor(priceCents: number, supplier: Supplier): Margin {
   const shipping = supplier.shippingCents ?? 0
   const fees = Math.round(priceCents * 0.029) + 30
   const profit = priceCents - cost - shipping - fees
-  return { priceCents, costCents: cost, shippingCents: shipping, feesCents: fees, profitCents: profit, marginPercent: priceCents ? Math.round((profit / priceCents) * 100) : 0 }
+  const marginPercent = priceCents ? Math.round((profit / priceCents) * 100) : 0
+  return { priceCents, costCents: cost, shippingCents: shipping, feesCents: fees, profitCents: profit, marginPercent, ...roasLines(marginPercent) }
 }
 
-export function recordAdSpend(db: Db, storeId: string, input: { day: string; platform: string; amountCents: number; note?: string }) {
-  db.insert('ad_spend', { id: id('ads'), store_id: storeId, day: input.day.slice(0, 10), platform: input.platform, amount_cents: input.amountCents, note: input.note ?? '', created_at: now() })
+export function recordAdSpend(db: Db, storeId: string, input: { day: string; platform: string; amountCents: number; clicks?: number; note?: string }) {
+  db.insert('ad_spend', {
+    id: id('ads'),
+    store_id: storeId,
+    day: input.day.slice(0, 10),
+    platform: input.platform,
+    amount_cents: input.amountCents,
+    clicks: Math.max(0, Math.round(input.clicks ?? 0)),
+    note: input.note ?? '',
+    created_at: now(),
+  })
 }
 
 export function listAdSpend(db: Db, storeId: string, days = 30) {
   const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
-  return db.all<{ id: string; day: string; platform: string; amount_cents: number; note: string }>('SELECT id, day, platform, amount_cents, note FROM ad_spend WHERE store_id = ? AND day >= ? ORDER BY day DESC', storeId, from)
+  return db.all<{ id: string; day: string; platform: string; amount_cents: number; clicks: number; note: string }>(
+    'SELECT id, day, platform, amount_cents, clicks, note FROM ad_spend WHERE store_id = ? AND day >= ? ORDER BY day DESC',
+    storeId,
+    from,
+  )
 }
 
 export type ProfitReport = {
@@ -44,6 +84,20 @@ export type ProfitReport = {
   profitCents: number
   orders: number
   roas: number | null
+  /** Clicks bought over the window, and what each one cost. Null when no clicks were logged. */
+  clicks: number
+  cpcCents: number | null
+  /** Blended gross margin over the window, and the two lines that follow from it. */
+  marginPercent: number
+  breakevenRoas: number | null
+  targetRoas: number | null
+  /**
+   * What the course does with those lines: above target, scale; between the
+   * lines, hold; below breakeven, scale down. Null when there is no spend to
+   * judge, and never trusted on fewer than three days of it.
+   */
+  verdict: 'scale' | 'hold' | 'cut' | null
+  spendDays: number
   perDay: Array<{ day: string; revenue: number; spend: number; profit: number }>
 }
 
@@ -80,14 +134,39 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
     byDay.set(day, entry)
   }
   let adSpend = 0
+  let clicks = 0
+  // Cost per click divides only the spend that has clicks recorded against it.
+  // Blending in the rows logged without clicks would inflate it silently, and
+  // the number decides whether a page is worth its traffic.
+  let clickedSpend = 0
+  const spendDays = new Set<string>()
   for (const row of listAdSpend(db, storeId, days)) {
     adSpend += row.amount_cents
+    if (row.clicks > 0) {
+      clicks += row.clicks
+      clickedSpend += row.amount_cents
+    }
+    if (row.amount_cents > 0) spendDays.add(row.day)
     const entry = byDay.get(row.day) ?? { revenue: 0, spend: 0, profit: 0 }
     entry.spend += row.amount_cents
     entry.profit -= row.amount_cents
     byDay.set(row.day, entry)
   }
   const profit = revenue - refunds - cogs - supplierShipping - fees - adSpend
+  // Gross margin is what is left of revenue before a penny of ad spend: the
+  // denominator of the breakeven line, so ad spend must stay out of it.
+  const grossMargin = revenue - refunds - cogs - supplierShipping - fees
+  const marginPercent = revenue ? Math.round((grossMargin / revenue) * 100) : 0
+  const lines = roasLines(marginPercent)
+  const roas = adSpend ? Math.round((revenue / adSpend) * 100) / 100 : null
+  const verdict =
+    roas === null || lines.breakevenRoas === null || lines.targetRoas === null
+      ? null
+      : roas >= lines.targetRoas
+        ? ('scale' as const)
+        : roas >= lines.breakevenRoas
+          ? ('hold' as const)
+          : ('cut' as const)
   return {
     days,
     revenueCents: revenue,
@@ -98,7 +177,13 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
     adSpendCents: adSpend,
     profitCents: profit,
     orders: orders.length,
-    roas: adSpend ? Math.round((revenue / adSpend) * 100) / 100 : null,
+    roas,
+    clicks,
+    cpcCents: clicks ? Math.round(clickedSpend / clicks) : null,
+    marginPercent,
+    ...lines,
+    verdict,
+    spendDays: spendDays.size,
     perDay: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, entry]) => ({ day, ...entry })),
   }
 }

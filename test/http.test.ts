@@ -285,7 +285,7 @@ test('a second store can be started from the admin, with a photo, and both show 
   assert.equal(hub.status, 200)
   assert.match(hub.text, /New store/)
   assert.match(hub.text, /Ironjaw/)
-  assert.match(hub.text, /orders \/ 30d/, 'the hub says whether each store is a business yet')
+  assert.match(hub.text, /orders(&nbsp;| )\/(&nbsp;| )30d/, 'the hub says whether each store is a business yet')
   assert.ok(!/class="rail"/.test(hub.text), 'the hub is the account, not one store: no store rail around it')
 
   const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
@@ -423,12 +423,23 @@ test('the storefront serves generated legal pages, takes behaviour beacons, and 
   const terms = await call(`/s/${slug}/pages/terms`)
   assert.equal(terms.status, 200)
   assert.match(terms.text, /Returns and the guarantee/)
+  // Point the admin at the store the beacon is about to hit, or these
+  // assertions are about whichever store happened to be selected.
+  const hub = await call('/admin/stores')
+  const card = hub.text.split('class="card storecard"').find((chunk) => chunk.includes(`/s/${slug}`)) ?? ''
+  const storeId = /storeId=(store_[a-z0-9]+)/.exec(card)?.[1] ?? ''
+  assert.ok(storeId, 'the hub links each store by id')
+  await call(`/admin/switch?storeId=${storeId}`)
+  const count = (text: string, needle: RegExp) => (text.match(needle) ?? []).length
+  const before = (await call('/admin/analytics')).text
+  const purchasesBefore = count(before, /checkout\.complete/g)
+
   const beacon = await fetch(`${base}/s/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/pages/privacy', e: [{ t: 'scroll', m: { depth: 50 } }, { t: 'cta.click', m: { label: 'Buy' } }, { t: 'checkout.complete', m: {} }] }) })
   assert.equal(beacon.status, 204)
   const analytics = await call('/admin/analytics')
   assert.match(analytics.text, /What visitors did/)
-  assert.match(analytics.text, /scroll|cta\.click/, 'the beacon events reached the ticker')
-  assert.ok(!/checkout\.complete/.test(analytics.text), 'a beacon cannot claim a purchase')
+  assert.ok(count(analytics.text, /cta\.click/g) > count(before, /cta\.click/g), 'the beacon events reached the ticker')
+  assert.equal(count(analytics.text, /checkout\.complete/g), purchasesBefore, 'a beacon cannot claim a purchase')
   const missing = await call(`/s/${slug}/go/nothing`)
   assert.equal(missing.status, 404)
   const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })

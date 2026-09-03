@@ -6,7 +6,7 @@ import { createProduct, getProduct, updateProduct } from '../src/domain/catalog.
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart } from '../src/domain/cart.ts'
 import { completeCart, recordSupplierOrder, markDelivered } from '../src/domain/orders.ts'
-import { carrierFor, deliveryEstimate, importReviews, marginFor, parseCsv, profitReport, recordAdSpend, recentPurchases, trackingFor, importProductFromUrl, createFromImport, askQuestion, answerQuestion, listQuestions } from '../src/domain/ops.ts'
+import { carrierFor, deliveryEstimate, importReviews, marginFor, parseCsv, profitReport, recordAdSpend, recentPurchases, roasLines, trackingFor, importProductFromUrl, createFromImport, askQuestion, answerQuestion, listQuestions } from '../src/domain/ops.ts'
 import { ensureShippingProtection, funnelForProducts, resolveBump, resolveOffer, upsertFunnel } from '../src/domain/funnels.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, readDirection, redirectContent, writeAdvertorial, writePdp } from '../src/agent/directions.ts'
 import { readBrief } from '../src/agent/copy.ts'
@@ -254,4 +254,35 @@ test('one person\'s platform: a store carries no plan, and hidden products stay 
   assert.equal(listProducts(db, store.id, {}).length, 0)
   assert.equal(listProducts(db, store.id, { includeHidden: true }).length, 1)
   assert.ok(getProduct(db, store.id, 'nope') === null)
+})
+
+test('the two ROAS lines are computed, and the report says which side of them the spend is on', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Lines', prompt: 'lines' })
+
+  // 67% margin → breakeven 1.5, target 2.5 (the course's own worked example).
+  assert.deepEqual(roasLines(67), { breakevenRoas: 1.5, targetRoas: 2.5 })
+  assert.deepEqual(roasLines(55), { breakevenRoas: 1.82, targetRoas: 2.82 })
+  assert.deepEqual(roasLines(0), { breakevenRoas: null, targetRoas: null })
+  assert.deepEqual(roasLines(-12), { breakevenRoas: null, targetRoas: null }, 'a product that loses money has no line to scale on')
+
+  const margin = marginFor(10_000, { costCents: 2_000, shippingCents: 500 } as never)
+  assert.equal(margin.marginPercent, 72)
+  assert.equal(margin.breakevenRoas, 1.39)
+  assert.equal(margin.targetRoas, 2.39)
+
+  const empty = profitReport(db, store.id, 30)
+  assert.equal(empty.roas, null)
+  assert.equal(empty.verdict, null, 'nothing to judge without spend')
+  assert.equal(empty.cpcCents, null)
+
+  recordAdSpend(db, store.id, { day: new Date().toISOString(), platform: 'Meta', amountCents: 20_000, clicks: 400 })
+  recordAdSpend(db, store.id, { day: new Date().toISOString(), platform: 'TikTok', amountCents: 99_000 })
+  const spent = profitReport(db, store.id, 30)
+  assert.equal(spent.clicks, 400)
+  assert.equal(spent.cpcCents, 50, 'CPC divides only the spend that had clicks logged with it, not the day someone forgot')
+  assert.equal(spent.adSpendCents, 119_000, 'while the spend total still counts every row')
+  assert.equal(spent.spendDays, 1)
+  assert.equal(spent.roas, 0)
+  assert.equal(spent.verdict, null, 'no revenue means no margin, and a line has to be divided into something')
 })

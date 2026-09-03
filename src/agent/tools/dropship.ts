@@ -95,11 +95,13 @@ export const dropshipTools: Tool[] = defineTools([
   {
     name: 'record_ad_spend',
     area: 'analytics',
-    description: 'Log ad spend for a day so the profit report can subtract it.',
-    schema: { day: { type: 'string', help: 'YYYY-MM-DD; defaults to today.' }, platform: { type: 'string', default: 'Meta' }, amountCents: { type: 'number', integer: true, min: 0, required: true }, note: { type: 'string' } },
+    description: 'Log ad spend for a day so the profit report can subtract it. Clicks are optional but give the report a cost per click to judge revenue per session against.',
+    schema: { day: { type: 'string', help: 'YYYY-MM-DD; defaults to today.' }, platform: { type: 'string', default: 'Meta' }, amountCents: { type: 'number', integer: true, min: 0, required: true }, clicks: { type: 'number', integer: true, min: 0 }, note: { type: 'string' } },
     handler(args, ctx) {
-      recordAdSpend(ctx.db, ctx.storeId, { day: (args.day as string) || new Date().toISOString(), platform: args.platform as string, amountCents: args.amountCents as number, note: (args.note as string) ?? '' })
-      return { summary: `Logged ${format(args.amountCents as number, getStore(ctx.db, ctx.storeId)?.currency ?? 'USD')} of ${args.platform} spend.` }
+      const clicks = (args.clicks as number) ?? 0
+      const currency = getStore(ctx.db, ctx.storeId)?.currency ?? 'USD'
+      recordAdSpend(ctx.db, ctx.storeId, { day: (args.day as string) || new Date().toISOString(), platform: args.platform as string, amountCents: args.amountCents as number, clicks, note: (args.note as string) ?? '' })
+      return { summary: `Logged ${format(args.amountCents as number, currency)} of ${args.platform} spend${clicks ? ` over ${clicks} clicks — ${format(Math.round((args.amountCents as number) / clicks), currency)} a click` : ''}.` }
     },
   },
   {
@@ -112,9 +114,9 @@ export const dropshipTools: Tool[] = defineTools([
       const currency = store?.currency ?? 'USD'
       const report = profitReport(ctx.db, ctx.storeId, args.days as number)
       return {
-        summary: `${args.days} days: ${format(report.revenueCents, currency)} revenue, ${format(report.cogsCents + report.supplierShippingCents, currency)} COGS, ${format(report.adSpendCents, currency)} ads → ${format(report.profitCents, currency)} net${report.roas !== null ? ` (ROAS ${report.roas}×)` : ''}.`,
+        summary: `${args.days} days: ${format(report.revenueCents, currency)} revenue, ${format(report.cogsCents + report.supplierShippingCents, currency)} COGS, ${format(report.adSpendCents, currency)} ads → ${format(report.profitCents, currency)} net${report.roas !== null ? ` (ROAS ${report.roas}×)` : ''}.${report.breakevenRoas !== null ? ` Gross margin ${report.marginPercent}% puts breakeven at ${report.breakevenRoas}× and target at ${report.targetRoas}×${report.verdict ? `: ${{ scale: 'above target, scale up 20%', hold: 'between the lines, hold', cut: 'below breakeven, scale down 20%' }[report.verdict]}` : ''}.` : ''}`,
         data: report,
-        artifacts: [{ type: 'table', columns: ['Line', 'Amount'], rows: [['Revenue', format(report.revenueCents, currency)], ['Refunds', `−${format(report.refundsCents, currency)}`], ['COGS', `−${format(report.cogsCents, currency)}`], ['Supplier shipping', `−${format(report.supplierShippingCents, currency)}`], ['Card fees', `−${format(report.feesCents, currency)}`], ['Ad spend', `−${format(report.adSpendCents, currency)}`], ['Net profit', format(report.profitCents, currency)]] }],
+        artifacts: [{ type: 'table', columns: ['Line', 'Amount'], rows: [['Revenue', format(report.revenueCents, currency)], ['Refunds', `−${format(report.refundsCents, currency)}`], ['COGS', `−${format(report.cogsCents, currency)}`], ['Supplier shipping', `−${format(report.supplierShippingCents, currency)}`], ['Card fees', `−${format(report.feesCents, currency)}`], ['Ad spend', `−${format(report.adSpendCents, currency)}`], ['Net profit', format(report.profitCents, currency)], ['Gross margin', `${report.marginPercent}%`], ['Breakeven ROAS', report.breakevenRoas === null ? '—' : `${report.breakevenRoas}×`], ['Target ROAS', report.targetRoas === null ? '—' : `${report.targetRoas}×`], ['Cost per click', report.cpcCents === null ? '—' : format(report.cpcCents, currency)]] }],
       }
     },
   },

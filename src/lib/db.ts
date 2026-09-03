@@ -551,6 +551,15 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE custom_blocks ADD COLUMN js TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    name: '012_ad_clicks',
+    sql: `
+    -- Revenue per session decides nothing on its own: the course compares it
+    -- against the cost of the click that produced it. Clicks live beside the
+    -- spend they were bought with so a CPC exists without a second source.
+    ALTER TABLE ad_spend ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ]
 
 function migrate(db: Db) {

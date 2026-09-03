@@ -15,6 +15,7 @@ import { legalFor } from '../storefront/legal.ts'
 import { DEFAULT_POPUP } from '../storefront/behaviour.ts'
 import { behaviour, type Range } from '../analytics/events.ts'
 import { funnelGroups, funnelStats } from '../domain/funnels.ts'
+import { profitReport } from '../domain/ops.ts'
 import { calendarMonth } from '../agent/knowledge.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
@@ -277,15 +278,29 @@ export function healthCard(ctx: Ctx, run: boolean): string {
 
 /* --------------------------------------------------------- analytics card */
 
+const DAYS_IN: Record<Range, number> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90 }
+
+/**
+ * A page's revenue per session only means something against what its traffic
+ * cost, so the cost per click over the same window rides along and each page
+ * is called against it rather than left as a bare number.
+ */
+function cpcFor(ctx: Ctx, range: Range): number | null {
+  return profitReport(ctx.db, ctx.store.id, DAYS_IN[range]).cpcCents
+}
+
 export function behaviourCard(ctx: Ctx, range: Range): string {
   const report = behaviour(ctx.db, ctx.store.id, range)
+  const cpc = cpcFor(ctx, range)
+  const against = (perSession: number) =>
+    cpc === null ? '' : `<span class="tag ${perSession > cpc ? 'ok' : 'bad'}" style="margin-left:.3rem">${perSession > cpc ? 'above' : 'below'} CPC</span>`
   const bar = (label: string, value: number, of: number) => `<div class="barrow"><span>${e(label)}</span><span class="track"><span class="fill" style="width:${of ? Math.min(100, (value / of) * 100).toFixed(1) : 0}%"></span></span><span>${value}</span></div>`
   return `<div class="grid2"><div class="card"><h2>What visitors did</h2>
     <div class="eyebrow" style="margin-top:.6rem">Scroll depth (sessions reaching)</div><div class="bars" style="margin-top:.4rem">${([25, 50, 75, 100] as const).map((depth) => bar(`${depth}%`, report.scroll[depth], report.sessions)).join('')}</div>
     <div class="eyebrow" style="margin-top:.8rem">Buttons pressed</div><table class="data" style="margin-top:.3rem"><tbody>${report.ctas.slice(0, 8).map((cta) => `<tr><td>${e(cta.label || '(no label)')}</td><td class="muted">${e(cta.path)}</td><td style="text-align:right">${cta.clicks}</td></tr>`).join('') || '<tr><td class="muted">No clicks recorded yet.</td></tr>'}</tbody></table>
     <p class="muted" style="font-size:12px;margin:.6rem 0 0">Popup: shown to ${report.popup.shows}, ${report.popup.submits} signed up.${report.quiz.length ? ` Quiz: ${report.quiz.map((step) => `step ${step.step}: ${step.count}`).join(', ')}; ${report.quiz[0]?.completes ?? 0} finished.` : ''}</p></div>
-  <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Per page</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Revenue per session is AOV × conversion: the number a split test is decided on.</p></div>
-    <table class="data"><thead><tr><th>Page</th><th>Sessions</th><th>Read half</th><th>CTA</th><th>Carts</th><th>Bought</th><th>Rev / session</th></tr></thead><tbody>${report.pages.slice(0, 12).map((page) => `<tr><td class="muted">${e(page.path)}</td><td>${page.sessions}</td><td>${page.sessions ? Math.round((page.readHalf / page.sessions) * 100) : 0}%</td><td>${page.ctaClicks}</td><td>${page.carts}</td><td>${page.purchases}</td><td>${format(page.revenuePerSessionCents, ctx.store.currency)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:1.2rem">No page views yet.</td></tr>'}</tbody></table></div></div>
+  <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Per page</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Revenue per session is AOV × conversion: the number a split test is decided on, and it is decided against the cost of the click. ${cpc === null ? 'Log clicks with your ad spend on the Profit page and each row gets called here.' : `Cost per click over this window: <strong>${format(cpc, ctx.store.currency)}</strong>.`}</p></div>
+    <table class="data"><thead><tr><th>Page</th><th>Sessions</th><th>Read half</th><th>CTA</th><th>Carts</th><th>Bought</th><th>Rev / session</th></tr></thead><tbody>${report.pages.slice(0, 12).map((page) => `<tr><td class="muted">${e(page.path)}</td><td>${page.sessions}</td><td>${page.sessions ? Math.round((page.readHalf / page.sessions) * 100) : 0}%</td><td>${page.ctaClicks}</td><td>${page.carts}</td><td>${page.purchases}</td><td>${format(page.revenuePerSessionCents, ctx.store.currency)}${page.sessions ? against(page.revenuePerSessionCents) : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:1.2rem">No page views yet.</td></tr>'}</tbody></table></div></div>
   ${report.sections.length ? `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Sections seen</h2></div><table class="data"><thead><tr><th>Page</th><th>Section</th><th>Sessions</th></tr></thead><tbody>${report.sections.slice(0, 16).map((section) => `<tr><td class="muted">${e(section.path)}</td><td>${e(section.blockType)} <span class="muted" style="font-size:11px">${e(section.blockId)}</span></td><td>${section.views}</td></tr>`).join('')}</tbody></table></div>` : ''}`
 }
 
@@ -293,11 +308,12 @@ export function behaviourCard(ctx: Ctx, range: Range): string {
 
 export function funnelTestCard(ctx: Ctx): string {
   const groups = funnelGroups(ctx.db, ctx.store.id)
+  const cpc = profitReport(ctx.db, ctx.store.id, 30).cpcCents
   if (!groups.length) return `<div class="card"><h2>Funnel split tests</h2><p class="muted" style="font-size:12.5px">Give two or more funnels the same test group name and a weight, then send traffic to <code>${e(ctx.storeUrl)}/go/&lt;group&gt;</code>. Each visitor is assigned one funnel and followed to the order.</p></div>`
   return groups.map((group) => {
     const stats = funnelStats(ctx.db, ctx.store.id, group)
-    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code></p></div>
-      <table class="data"><thead><tr><th>Funnel</th><th>Weight</th><th>Sessions</th><th>Carts</th><th>Orders</th><th>Revenue</th><th>Rev / session</th></tr></thead><tbody>${stats.map((row) => `<tr><td>${e(row.name)}</td><td>${row.weight}</td><td>${row.sessions}</td><td>${row.carts}</td><td>${row.purchases}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td><strong>${format(row.revenuePerSessionCents, ctx.store.currency)}</strong></td></tr>`).join('')}</tbody></table></div>`
+    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code>${cpc === null ? ' · log clicks with your ad spend to compare these against cost per click' : ` · winning means revenue per session above the ${format(cpc, ctx.store.currency)} it costs to buy one`}</p></div>
+      <table class="data"><thead><tr><th>Funnel</th><th>Weight</th><th>Sessions</th><th>Carts</th><th>Orders</th><th>Revenue</th><th>Rev / session</th></tr></thead><tbody>${stats.map((row) => `<tr><td>${e(row.name)}</td><td>${row.weight}</td><td>${row.sessions}</td><td>${row.carts}</td><td>${row.purchases}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td><strong>${format(row.revenuePerSessionCents, ctx.store.currency)}</strong>${cpc !== null && row.sessions ? ` <span class="tag ${row.revenuePerSessionCents > cpc ? 'ok' : 'bad'}">${row.revenuePerSessionCents > cpc ? 'above' : 'below'} CPC</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`
   }).join('')
 }
 

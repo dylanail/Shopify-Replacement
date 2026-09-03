@@ -23,7 +23,7 @@ import { latestResearch } from '../agent/research.ts'
 import { listPages, type Page, PAGE_TEMPLATES } from '../pages/store.ts'
 import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
-import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
+import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport, type ProfitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
@@ -212,7 +212,9 @@ function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
     <table class="data" style="margin-top:.8rem"><tr><td>Price</td><td style="text-align:right">${format(margin.priceCents, currency)}</td></tr>
       <tr><td>Cost</td><td style="text-align:right">−${format(margin.costCents, currency)}</td></tr><tr><td>Supplier shipping</td><td style="text-align:right">−${format(margin.shippingCents, currency)}</td></tr>
       <tr><td>Card fees</td><td style="text-align:right">−${format(margin.feesCents, currency)}</td></tr>
-      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr></table>
+      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr>
+      <tr><td>Breakeven ROAS <span class="muted" style="font-size:11px">1 ÷ margin</span></td><td style="text-align:right">${margin.breakevenRoas === null ? '<span class="muted">set a cost</span>' : `${margin.breakevenRoas}×`}</td></tr>
+      <tr><td>Target ROAS <span class="muted" style="font-size:11px">breakeven + 1, the line to scale above</span></td><td style="text-align:right">${margin.targetRoas === null ? '<span class="muted">—</span>' : `<strong>${margin.targetRoas}×</strong>`}</td></tr></table>
     <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
 }
 
@@ -575,6 +577,40 @@ function modelsCard(ctx: Ctx): string {
 
 /* --------------------------------------------------------------- profit */
 
+/**
+ * Breakeven and target ROAS, and what the course does at each side of them.
+ *
+ * The inputs were all on file already; the report stopped at "ROAS 2.1x" and
+ * left the operator to work out whether that was a scale, a hold or a cut.
+ */
+function roasCard(report: ProfitReport, currency: string): string {
+  if (report.breakevenRoas === null || report.targetRoas === null) {
+    const why = !report.revenueCents
+      ? 'No sales in this window, so there is no gross margin to divide into.'
+      : 'Every sale in this window cost more than it made. Set supplier cost and shipping on each product, or the price is wrong.'
+    return `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--warn)"><strong>No line to scale on.</strong> ${why} Breakeven ROAS is 1 ÷ gross margin; target is that plus one.</div>`
+  }
+  const verdict = {
+    scale: ['ok', 'Scale.', 'Above target. Raise budget 20%, and expect ROAS to fall 5–25% as it settles.'],
+    hold: ['warn', 'Hold.', 'Between breakeven and target: profitable, not yet worth more budget.'],
+    cut: ['bad', 'Scale down.', 'Below breakeven, so every sale loses money. Cut 20%, never below your minimum daily spend.'],
+  }[report.verdict ?? 'hold'] as [string, string, string]
+  const tile = (label: string, value: string, note = '') =>
+    `<div class="kpi"><div class="label">${label}</div><div class="value">${escapeHtml(value)}</div>${note ? `<div class="delta">${escapeHtml(note)}</div>` : ''}</div>`
+  return `<div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+    ${tile('Gross margin', `${report.marginPercent}%`, 'revenue less COGS, shipping, fees')}
+    ${tile('Breakeven ROAS', `${report.breakevenRoas}×`, '1 ÷ margin')}
+    ${tile('Target ROAS', `${report.targetRoas}×`, 'breakeven + 1')}
+    ${tile('Cost per click', report.cpcCents === null ? '—' : format(report.cpcCents, currency), report.clicks ? `${report.clicks} clicks, on the spend logged with them` : 'log clicks with spend')}
+  </div>
+  ${report.roas === null
+    ? `<div class="notice" style="margin-bottom:1rem">No ad spend logged for this window, so there is nothing to hold against those lines.</div>`
+    : `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--${verdict[0] === 'ok' ? 'ok' : verdict[0] === 'bad' ? 'bad' : 'warn'})">
+        <strong>${escapeHtml(verdict[1])}</strong> ${report.roas}× against a ${report.breakevenRoas}× breakeven and a ${report.targetRoas}× target. ${escapeHtml(verdict[2])}
+        ${report.spendDays < 3 ? ` <span class="muted">Only ${report.spendDays} day${report.spendDays === 1 ? '' : 's'} of spend on file — never act on fewer than three.</span>` : ''}
+      </div>`}`
+}
+
 export function profitPage(ctx: Ctx, days: number): string {
   const report = profitReport(ctx.db, ctx.store.id, days)
   const spend = listAdSpend(ctx.db, ctx.store.id, days)
@@ -584,14 +620,18 @@ export function profitPage(ctx: Ctx, days: number): string {
     <form method="get"><select name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
   <div class="kpis"><div class="kpi"><div class="label">Revenue</div><div class="value">${format(report.revenueCents, currency)}</div><div class="delta">${report.orders} orders</div></div>
     <div class="kpi"><div class="label">COGS + supplier shipping</div><div class="value">−${format(report.cogsCents + report.supplierShippingCents, currency)}</div></div>
-    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
+    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta ${report.verdict === 'cut' ? 'neg' : ''}">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
     <div class="kpi"><div class="label">Fees + refunds</div><div class="value">−${format(report.feesCents + report.refundsCents, currency)}</div></div>
     <div class="kpi"><div class="label">Net profit</div><div class="value" style="color:${report.profitCents >= 0 ? 'var(--ok)' : 'var(--bad)'}">${format(report.profitCents, currency)}</div><div class="delta ${report.profitCents < 0 ? 'neg' : ''}">${report.revenueCents ? Math.round((report.profitCents / report.revenueCents) * 100) : 0}% margin</div></div></div>
+  ${roasCard(report, currency)}
   <div class="grid2"><div class="card"><h2>Profit by day</h2><div class="spark" style="margin-top:.7rem;height:64px">${report.perDay.map((day) => `<i style="height:${Math.max(2, (Math.abs(day.profit) / peak) * 64)}px;background:${day.profit >= 0 ? 'var(--ok)' : 'var(--bad)'}" title="${day.day}: ${format(day.profit, currency)} (rev ${format(day.revenue, currency)}, spend ${format(day.spend, currency)})"></i>`).join('') || '<span class="muted">No orders in the window.</span>'}</div></div>
   <div><form method="post" action="/admin/profit/spend" class="card"><h2>Log ad spend</h2>
-    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div></div>
-    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div><button class="btn primary" type="submit">Log</button></form>
-    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
+    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div>
+      <div class="field" style="flex:1"><label>Clicks</label><input name="clicks" placeholder="420"></div></div>
+    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div>
+    <p class="muted" style="font-size:11.5px;margin:-.2rem 0 .6rem">Clicks are optional, but without them there is no cost per click to judge revenue per session against.</p>
+    <button class="btn primary" type="submit">Log</button></form>
+    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Clicks</th><th>CPC</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td>${row.clicks || '—'}</td><td>${row.clicks ? format(Math.round(row.amount_cents / row.clicks), currency) : '—'}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
 }
 
 /* --------------------------------------------------------------- funnels */
