@@ -130,10 +130,11 @@ export function applyPromotions(
   for (const promotion of candidates) {
     if (promotion.rules.minSubtotalCents && opts.subtotalCents < promotion.rules.minSubtotalCents) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
-    const eligible = eligibleItems(promotion, items, collectionsByProduct)
+    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf)
     if (!eligible.length && promotion.kind !== 'free_shipping') continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
+    if (promotion.rules.minQuantity && units < promotion.rules.minQuantity) continue
     let amount = 0
 
     switch (promotion.kind) {
@@ -176,6 +177,17 @@ export function applyPromotions(
     }
   }
 
+  // Quantity discounts do not stack. A store-wide "buy two, save 15%" and a
+  // product's own bundle tiers are two answers to the same question; the
+  // customer gets the better one, not both.
+  const quantityKinds = new Set(['bundle', 'tiered'])
+  const quantity = outcome.applied.filter((entry) => quantityKinds.has(all.find((promotion) => promotion.id === entry.id)?.kind ?? ''))
+  if (quantity.length > 1) {
+    const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))
+    const dropped = quantity.filter((entry) => entry.id !== best.id)
+    outcome.applied = outcome.applied.filter((entry) => !dropped.includes(entry))
+    outcome.discountCents -= dropped.reduce((sum, entry) => sum + entry.amountCents, 0)
+  }
   outcome.discountCents = Math.min(outcome.discountCents, opts.subtotalCents)
   return outcome
 }

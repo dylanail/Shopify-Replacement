@@ -95,20 +95,23 @@ export function addShippingOption(
 }
 
 /** Per-region free-shipping thresholds: the cheapest option that clears wins. */
-export function rateFor(region: Region | null, subtotalCents: number, freeShipping: boolean): { name: string; amountCents: number; gapCents: number | null } {
+export function rateFor(region: Region | null, subtotalCents: number, freeShipping: boolean, optionId?: string): { name: string; amountCents: number; gapCents: number | null; optionId: string } {
   if (!region || !region.shipping.length) {
-    return { name: 'Standard', amountCents: freeShipping ? 0 : 0, gapCents: null }
+    return { name: 'Standard', amountCents: 0, gapCents: null, optionId: '' }
   }
-  const option = region.shipping[0] as ShippingOption
-  if (freeShipping) return { name: `${option.name} (free)`, amountCents: 0, gapCents: null }
+  const option = (optionId ? region.shipping.find((entry) => entry.id === optionId) : undefined) ?? (region.shipping[0] as ShippingOption)
+  // Free shipping earned by a promotion applies to the standard rate; a
+  // customer who picks express still pays the difference.
+  if (freeShipping && option.position === 0) return { name: `${option.name} (free)`, amountCents: 0, gapCents: null, optionId: option.id }
   const threshold = option.freeAboveCents
   if (threshold !== null && subtotalCents >= threshold) {
-    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: null }
+    return { name: `${option.name} (free over threshold)`, amountCents: 0, gapCents: null, optionId: option.id }
   }
   return {
     name: option.name,
     amountCents: option.amountCents,
     gapCents: threshold === null ? null : Math.max(0, threshold - subtotalCents),
+    optionId: option.id,
   }
 }
 

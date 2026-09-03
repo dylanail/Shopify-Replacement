@@ -359,6 +359,39 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX store_research_store ON store_research(store_id, created_at DESC);
     `,
   },
+  {
+    name: '005_pages_bundles_payments',
+    sql: `
+    -- A page is either a list of blocks or a raw HTML document. Cloned pages
+    -- start as HTML; built pages start as blocks; either can be switched.
+    CREATE TABLE pages (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      title TEXT NOT NULL, handle TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'landing',
+      mode TEXT NOT NULL DEFAULT 'blocks', blocks TEXT NOT NULL DEFAULT '[]',
+      raw_html TEXT NOT NULL DEFAULT '', head_html TEXT NOT NULL DEFAULT '',
+      seo TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'draft',
+      source_url TEXT NOT NULL DEFAULT '', is_home INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (store_id, handle));
+    CREATE INDEX pages_store ON pages(store_id, status);
+
+    CREATE TABLE bundles (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+      tiers TEXT NOT NULL DEFAULT '[]', style TEXT NOT NULL DEFAULT '{}',
+      promotion_id TEXT, status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL, UNIQUE (store_id, product_id));
+
+    ALTER TABLE orders ADD COLUMN payment_provider TEXT NOT NULL DEFAULT 'demo';
+    ALTER TABLE orders ADD COLUMN payment_intent_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE orders ADD COLUMN payment_customer_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE orders ADD COLUMN payment_method_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE orders ADD COLUMN shipping_option_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE orders ADD COLUMN upsell TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE carts ADD COLUMN shipping_option_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE carts ADD COLUMN payment_intent_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE carts ADD COLUMN checkout TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
 ]
 
 function migrate(db: Db) {

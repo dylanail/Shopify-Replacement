@@ -13,6 +13,15 @@ import { getSend } from '../email/send.ts'
 import { ask, history } from '../agent/chat.ts'
 import { execute } from '../agent/registry.ts'
 import { saveUpload, UploadError } from '../lib/uploads.ts'
+import { advertorialTemplate, blankTemplate, createPage, deletePage, duplicatePage, getPage, landingTemplate, updatePage } from '../pages/store.ts'
+import { clonePage, extractBlocks } from '../pages/clone.ts'
+import { blockDefinition } from '../pages/blocks.ts'
+import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
+import { latestResearch } from '../agent/research.ts'
+import { getProduct } from '../domain/catalog.ts'
+import { editorPage } from './editor.ts'
+import { stripeFor } from '../payments/stripe.ts'
+import { getOrder } from '../domain/orders.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
 import { onboard } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
@@ -219,6 +228,161 @@ export function adminRouter(): Router {
     return back(ctx, result.summary)
   })
 
+  /* ------------------------------------------------------------- pages */
+
+  router.get('/admin/pages', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'pages', 'Pages & funnels', pages.pagesPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/pages/new', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = body.productId ? getProduct(db(), current.store.id, String(body.productId)) : null
+    const research = latestResearch(db(), current.store.id)
+    const input = {
+      storeName: current.store.name,
+      ...(product ? { product: { id: product.id, title: product.title, image: product.heroImage, subtitle: product.subtitle } } : {}),
+      research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
+    }
+    const template = String(body.template ?? 'blank')
+    const blocks = template === 'advertorial' ? advertorialTemplate(input) : template === 'landing' ? landingTemplate(input) : blankTemplate()
+    const created = createPage(db(), current.store.id, {
+      title: String(body.title ?? '').trim() || (template === 'advertorial' ? `Why people are switching to ${product?.title ?? current.store.name}` : template === 'landing' ? `${product?.title ?? current.store.name} — offer` : 'New page'),
+      kind: template === 'advertorial' ? 'advertorial' : 'landing',
+      blocks,
+    })
+    return redirect(`/admin/pages/${created.id}/edit`)
+  })
+
+  router.post('/admin/pages/html', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const created = createPage(db(), current.store.id, { title: String(body.title ?? 'New page'), kind: 'custom', mode: 'html', rawHtml: String(body.html ?? '') })
+    return redirect(`/admin/pages/${created.id}/edit`)
+  })
+
+  router.post('/admin/pages/clone', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const url = String(body.url ?? '').trim()
+    if (!/^https?:\/\//i.test(url)) return back(ctx, '!Paste a full URL, starting with https://')
+    try {
+      const result = await clonePage(url, { storeId: current.store.id, keepScripts: body.keepScripts === 'true' })
+      const created = createPage(db(), current.store.id, {
+        title: result.title,
+        kind: 'custom',
+        mode: 'html',
+        rawHtml: result.html,
+        seo: { title: result.title, description: result.description },
+        sourceUrl: result.sourceUrl,
+      })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_page', target: result.sourceUrl, diff: { stylesheets: result.stylesheets, images: result.imagesLocalized, notes: result.notes } })
+      return redirect(`/admin/pages/${created.id}/edit?flash=${encodeURIComponent(`Cloned. ${result.stylesheets} stylesheets inlined, ${result.imagesLocalized} images copied in.${result.notes.length ? ` ${result.notes[0]}` : ''}`)}`)
+    } catch (error) {
+      return back(ctx, `!Could not clone that page: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
+  })
+
+  router.get('/admin/pages/:id/edit', (ctx) => {
+    const current = session(ctx)
+    const found = getPage(db(), current.store.id, ctx.params.id as string)
+    if (!found) throw notFound('No such page')
+    const products = listProducts(db(), current.store.id, { status: 'published', limit: 100 }).map((product) => ({ id: product.id, title: product.title }))
+    return html(editorPage({ page: found, storeSlug: current.store.slug, products }))
+  })
+
+  router.post('/admin/pages/:id/save', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
+    const unknown = blocks.find((block) => !blockDefinition(block.type))
+    if (unknown) return { error: `Unknown block type ${unknown.type}` }
+    const seo = (body.seo ?? {}) as Record<string, unknown>
+    const updated = updatePage(db(), current.store.id, ctx.params.id as string, {
+      title: String(body.title ?? 'Untitled').trim() || 'Untitled',
+      mode: body.mode === 'html' ? 'html' : 'blocks',
+      blocks: blocks.map((block) => ({ id: block.id || `blk_${Math.random().toString(36).slice(2, 10)}`, type: block.type, settings: block.settings ?? {} })),
+      rawHtml: String(body.rawHtml ?? ''),
+      headHtml: String(body.headHtml ?? ''),
+      status: body.status === 'published' ? 'published' : 'draft',
+      isHome: body.isHome === true,
+      seo: { title: String(seo.title ?? ''), description: String(seo.description ?? ''), image: String(seo.image ?? '') },
+    })
+    return { ok: true, handle: updated.handle, updatedAt: updated.updatedAt }
+  })
+
+  router.post('/admin/pages/:id/extract', (ctx) => {
+    const current = session(ctx)
+    const found = getPage(db(), current.store.id, ctx.params.id as string)
+    if (!found) throw notFound('No such page')
+    const blocks = extractBlocks(found.rawHtml).map((block) => ({ id: `blk_${Math.random().toString(36).slice(2, 10)}`, ...block }))
+    return { blocks: [{ id: `blk_${Math.random().toString(36).slice(2, 10)}`, type: 'header', settings: {} }, ...blocks, { id: `blk_${Math.random().toString(36).slice(2, 10)}`, type: 'footer', settings: {} }] }
+  })
+
+  router.post('/admin/pages/:id/duplicate', (ctx) => {
+    const current = session(ctx)
+    const copy = duplicatePage(db(), current.store.id, ctx.params.id as string)
+    return redirect(`/admin/pages/${copy.id}/edit`)
+  })
+
+  router.post('/admin/pages/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deletePage(db(), current.store.id, ctx.params.id as string)
+    return redirect('/admin/pages?flash=Deleted.')
+  })
+
+  /* ----------------------------------------------------------- bundles */
+
+  router.get('/admin/bundles', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'bundles', 'Bundles', pages.bundlesPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/bundles', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const tiers: BundleTier[] = String(body.tiers ?? '')
+      .split('\n')
+      .map((line) => line.split('|').map((part) => part.trim()))
+      .filter((parts) => parts[0])
+      .map((parts) => ({
+        quantity: Number(parts[0]),
+        discountPercent: Number(parts[1] ?? 0),
+        label: parts[2] || `Buy ${parts[0]}`,
+        ...(parts[3] ? { badge: parts[3] } : {}),
+        ...(parts[4] === 'ship' ? { freeShipping: true } : {}),
+        ...(parts[5] ? { giftVariantId: parts[5], giftLabel: parts[6] ?? '' } : {}),
+      }))
+    if (body.giftVariantId && tiers.length) {
+      const top = tiers[tiers.length - 1] as BundleTier
+      top.giftVariantId = String(body.giftVariantId)
+      top.giftLabel = String(body.giftLabel ?? 'free gift')
+    }
+    try {
+      upsertBundle(db(), current.store.id, {
+        productId: String(body.productId ?? ''),
+        title: String(body.title ?? 'Bundle & save'),
+        tiers,
+        style: { layout: body.layout === 'row' ? 'row' : 'stacked', ...(body.accent ? { accent: String(body.accent) } : {}) },
+      })
+      return back(ctx, 'Bundle saved. It is live on the product page and enforced in the cart.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
+    }
+  })
+
+  router.post('/admin/bundles/:id/delete', (ctx) => {
+    const current = session(ctx)
+    removeBundle(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Bundle removed and its promotions disabled.')
+  })
+
+  router.get('/admin/settings/payments', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'settings', 'Payments', pages.paymentsPage(ctxFor(current, ctx)))
+  })
+
   router.get('/admin/switch', (ctx) => {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
@@ -280,11 +444,22 @@ export function adminRouter(): Router {
     return back(ctx, 'Marked fulfilled.')
   })
 
-  router.post('/admin/orders/:id/refund', (ctx) => {
+  router.post('/admin/orders/:id/refund', async (ctx) => {
     const current = session(ctx)
     requireRole(db(), current.user.id, current.store.id, 'admin')
-    const order = refundOrder(db(), current.store.id, ctx.params.id as string, { reason: 'Refunded from the admin' })
-    return back(ctx, `Refunded. Payment is now ${order.paymentStatus}.`)
+    const existing = getOrder(db(), current.store.id, ctx.params.id as string)
+    if (!existing) throw notFound('No such order')
+    if (existing.paymentProvider === 'stripe' && existing.paymentIntentId) {
+      const stripe = stripeFor(db(), current.store.id)
+      if (!stripe) return back(ctx, '!This order was paid through Stripe, which is no longer connected.')
+      try {
+        await stripe.client.refunds.create({ paymentIntentId: existing.paymentIntentId, reason: 'requested_by_customer' })
+      } catch (error) {
+        return back(ctx, `!Stripe refused the refund: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+    }
+    const order = refundOrder(db(), current.store.id, existing.id, { reason: 'Refunded from the admin' })
+    return back(ctx, `Refunded${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}. Payment is now ${order.paymentStatus}.`)
   })
 
   router.get('/admin/customers', (ctx) => {

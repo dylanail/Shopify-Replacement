@@ -33,9 +33,11 @@ export const FIRST_PARTY: Plugin[] = [
         settingsSchema: {
           publishableKey: { type: 'string', label: 'Publishable key', pattern: '^pk_(test|live)_', required: true, help: 'Safe to expose; the storefront reads it.' },
           secretKey: { type: 'string', label: 'Secret key', pattern: '^sk_(test|live)_', required: true, help: 'Sealed at rest and never returned to the browser.' },
+          webhookSecret: { type: 'string', label: 'Webhook signing secret', pattern: '^whsec_', help: 'From the webhook endpoint you add in Stripe, pointing at /webhooks/stripe/<store id>. Sealed at rest.' },
           captureMode: { type: 'string', label: 'Capture', enum: ['automatic', 'manual'], default: 'automatic' },
+          saveCards: { type: 'boolean', label: 'Save cards for one-click post-purchase offers', default: true },
         },
-        secretFields: ['secretKey'],
+        secretFields: ['secretKey', 'webhookSecret'],
         aiTools: [
           {
             name: 'connect_stripe',
@@ -43,6 +45,7 @@ export const FIRST_PARTY: Plugin[] = [
             schema: {
               publishableKey: { type: 'string', required: true, pattern: '^pk_(test|live)_' },
               secretKey: { type: 'string', required: true, pattern: '^sk_(test|live)_' },
+              webhookSecret: { type: 'string', pattern: '^whsec_' },
             },
             example: "connect_stripe({ publishableKey: 'pk_test_...', secretKey: 'sk_test_...' })",
           },

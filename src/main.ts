@@ -58,7 +58,7 @@ const server = createServer(async (req, res) => {
     // Generated imagery is deterministic, so it can be cached hard and served
     // without touching the database at all.
     if (ctx.url.pathname === '/_media/render.svg') {
-      await send(res, new Raw(renderSvg(ctx.url.searchParams), 'image/svg+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=31536000, immutable' }))
+      await send(res, new Raw(renderSvg(ctx.url.searchParams), 'image/svg+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=31536000, immutable' }), req)
       return
     }
     if (ctx.url.pathname.startsWith('/_uploads/')) {
@@ -83,19 +83,19 @@ const server = createServer(async (req, res) => {
       if (match) {
         const scoped = makeCtx(req, res, match.params) as Ctx & { storefront: { store: Store; preview: boolean } }
         scoped.storefront = { store: store.store, preview: store.preview }
-        await send(res, await match.handler(scoped))
+        await send(res, await match.handler(scoped), req)
         return
       }
     }
 
     const adminMatch = admin.match(req.method ?? 'GET', ctx.url.pathname)
     if (adminMatch) {
-      await send(res, await adminMatch.handler(makeCtx(req, res, adminMatch.params)))
+      await send(res, await adminMatch.handler(makeCtx(req, res, adminMatch.params)), req)
       return
     }
 
     if (ctx.url.pathname === '/') {
-      await send(res, html(marketingHome()))
+      await send(res, html(marketingHome()), req)
       return
     }
     throw new HttpError(404, 'Nothing here')

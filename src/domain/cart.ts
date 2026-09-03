@@ -1,9 +1,12 @@
 import { json, now, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { bundleFor, tierFor } from './bundles.ts'
 import { getProduct, getVariant } from './catalog.ts'
 import { applyPromotions } from './promotions.ts'
 import { defaultRegion, getRegion, rateFor } from './regions.ts'
-import type { LineItem, Totals } from './types.ts'
+import type { Address, LineItem, Totals } from './types.ts'
+
+export type CheckoutDraft = { email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean }
 
 export type Cart = {
   id: string
@@ -13,6 +16,9 @@ export type Cart = {
   discountCode: string
   regionId: string | null
   orderId: string | null
+  shippingOptionId: string
+  paymentIntentId: string
+  checkout: CheckoutDraft
   createdAt: string
   updatedAt: string
 }
@@ -26,6 +32,9 @@ function rowToCart(row: Row): Cart {
     discountCode: row.discount_code as string,
     regionId: (row.region_id as string | null) ?? null,
     orderId: (row.order_id as string | null) ?? null,
+    shippingOptionId: (row.shipping_option_id as string) ?? '',
+    paymentIntentId: (row.payment_intent_id as string) ?? '',
+    checkout: json(row.checkout, {} as CheckoutDraft),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -76,7 +85,7 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
       ...(source ? { source } : {}),
     })
   }
-  db.update('carts', cart.id, { items, updated_at: now() })
+  db.update('carts', cart.id, { items: reconcileGifts(db, storeId, items), updated_at: now() })
   return getCart(db, storeId, cart.id) as Cart
 }
 
@@ -84,10 +93,62 @@ export function setQuantity(db: Db, storeId: string, cartId: string, variantId: 
   const cart = getCart(db, storeId, cartId)
   if (!cart) throw new Error('No cart')
   const items = cart.items
-    .map((item) => (item.variantId === variantId ? { ...item, quantity } : item))
+    .map((item) => (item.variantId === variantId && !item.giftOf ? { ...item, quantity } : item))
     .filter((item) => item.quantity > 0)
-  db.update('carts', cart.id, { items, updated_at: now() })
+  db.update('carts', cart.id, { items: reconcileGifts(db, storeId, items), updated_at: now() })
   return getCart(db, storeId, cart.id) as Cart
+}
+
+/**
+ * Bundle gifts are derived, never stored as a decision. After any change to
+ * the lines, every product with a bundle is checked: if its paid quantity
+ * earns a tier with a gift, the gift line exists at zero; if not, it does not.
+ * A customer cannot keep the gift by dropping the second glove in the cart.
+ */
+export function reconcileGifts(db: Db, storeId: string, items: LineItem[]): LineItem[] {
+  const paid = items.filter((item) => !item.giftOf)
+  const kept = [...paid]
+  const byProduct = new Map<string, number>()
+  for (const item of paid) byProduct.set(item.productId, (byProduct.get(item.productId) ?? 0) + item.quantity)
+  for (const [productId, quantity] of byProduct) {
+    const bundle = bundleFor(db, storeId, productId)
+    if (!bundle) continue
+    const tier = tierFor(bundle, quantity)
+    if (!tier?.giftVariantId) continue
+    const variant = getVariant(db, storeId, tier.giftVariantId)
+    const product = variant ? getProduct(db, storeId, variant.productId) : null
+    if (!variant || !product) continue
+    kept.push({
+      variantId: variant.id,
+      productId: product.id,
+      title: product.title,
+      variantTitle: `${variant.title} — free gift`,
+      image: variant.image || product.heroImage,
+      unitCents: 0,
+      quantity: 1,
+      source: 'bundle-gift',
+      giftOf: productId,
+    })
+  }
+  return kept
+}
+
+export function setShipping(db: Db, storeId: string, cartId: string, shippingOptionId: string): Cart {
+  const cart = getCart(db, storeId, cartId)
+  if (!cart) throw new Error('No cart')
+  db.update('carts', cart.id, { shipping_option_id: shippingOptionId, updated_at: now() })
+  return getCart(db, storeId, cart.id) as Cart
+}
+
+export function saveCheckoutDraft(db: Db, storeId: string, cartId: string, draft: CheckoutDraft): Cart {
+  const cart = getCart(db, storeId, cartId)
+  if (!cart) throw new Error('No cart')
+  db.update('carts', cart.id, { checkout: { ...cart.checkout, ...draft }, email: draft.email ?? cart.email, updated_at: now() })
+  return getCart(db, storeId, cart.id) as Cart
+}
+
+export function attachPaymentIntent(db: Db, storeId: string, cartId: string, paymentIntentId: string) {
+  db.run('UPDATE carts SET payment_intent_id = ?, updated_at = ? WHERE id = ? AND store_id = ?', paymentIntentId, now(), cartId, storeId)
 }
 
 export function applyCode(db: Db, storeId: string, cartId: string, code: string): Cart {
@@ -113,7 +174,7 @@ export function totals(db: Db, storeId: string, cart: Cart, opts: { isFirstOrder
     ...(opts.isFirstOrder === undefined ? {} : { isFirstOrder: opts.isFirstOrder }),
   })
   const discounted = Math.max(0, subtotalCents - promo.discountCents)
-  const rate = rateFor(region, discounted, promo.freeShipping)
+  const rate = rateFor(region, discounted, promo.freeShipping, cart.shippingOptionId || undefined)
   const shippingCents = cart.items.length ? rate.amountCents : 0
   const taxCents = Math.round(discounted * (region?.taxRate ?? 0))
   return {
@@ -125,5 +186,7 @@ export function totals(db: Db, storeId: string, cart: Cart, opts: { isFirstOrder
     currency,
     appliedPromotions: promo.applied,
     freeShippingGapCents: cart.items.length ? rate.gapCents : null,
+    shippingOptionId: rate.optionId,
+    shippingName: rate.name,
   }
 }

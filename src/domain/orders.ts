@@ -26,6 +26,12 @@ export function rowToOrder(row: Row): Order {
     address: json(row.address, {} as Address),
     fulfillments: json(row.fulfillments, []),
     refunds: json(row.refunds, []),
+    paymentProvider: ((row.payment_provider as string) || 'demo') as Order['paymentProvider'],
+    paymentIntentId: (row.payment_intent_id as string) ?? '',
+    paymentCustomerId: (row.payment_customer_id as string) ?? '',
+    paymentMethodId: (row.payment_method_id as string) ?? '',
+    shippingOptionId: (row.shipping_option_id as string) ?? '',
+    upsell: json(row.upsell, {}),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -64,7 +70,13 @@ export function completeCart(
   db: Db,
   storeId: string,
   cartId: string,
-  input: { email: string; name?: string; address?: Address; marketing?: boolean; paymentMethod?: string },
+  input: {
+    email: string
+    name?: string
+    address?: Address
+    marketing?: boolean
+    payment?: { provider: 'demo' | 'stripe'; intentId?: string; customerId?: string; methodId?: string; status?: Order['paymentStatus'] }
+  },
 ): Order {
   const cart = getCart(db, storeId, cartId)
   if (!cart) throw new CheckoutError('No cart')
@@ -108,13 +120,20 @@ export function completeCart(
       total_cents: amounts.totalCents,
       discount_code: cart.discountCode,
       status: 'completed',
-      // The demo captures on completion; a live deployment flips this to
-      // `awaiting` and lets the Stripe webhook move it to `captured`.
-      payment_status: 'captured',
+      // Demo orders capture on completion. A Stripe order arrives here only
+      // after the PaymentIntent succeeded, so it is captured too; the webhook
+      // is the second opinion that can also move it to refunded.
+      payment_status: input.payment?.status ?? 'captured',
       fulfillment_status: 'unfulfilled',
       address: input.address ?? {},
       fulfillments: [],
       refunds: [],
+      payment_provider: input.payment?.provider ?? 'demo',
+      payment_intent_id: input.payment?.intentId ?? '',
+      payment_customer_id: input.payment?.customerId ?? '',
+      payment_method_id: input.payment?.methodId ?? '',
+      shipping_option_id: amounts.shippingOptionId,
+      upsell: {},
       created_at: timestamp,
       updated_at: timestamp,
     })
@@ -123,6 +142,43 @@ export function completeCart(
     db.update('carts', cart.id, { order_id: orderId, email: input.email, updated_at: timestamp })
     return getOrder(db, storeId, orderId) as Order
   })
+}
+
+export function orderByPaymentIntent(db: Db, storeId: string, intentId: string): Order | null {
+  const row = db.one('SELECT * FROM orders WHERE store_id = ? AND payment_intent_id = ?', storeId, intentId)
+  return row ? rowToOrder(row) : null
+}
+
+export function setPaymentStatus(db: Db, storeId: string, orderId: string, status: Order['paymentStatus']) {
+  db.run('UPDATE orders SET payment_status = ?, updated_at = ? WHERE id = ? AND store_id = ?', status, now(), orderId, storeId)
+}
+
+/**
+ * The post-purchase offer. Accepting adds the line to the same order and
+ * charges it — off-session against the saved method on Stripe, on the spot in
+ * demo mode. Declining is recorded too, so the offer is shown exactly once.
+ */
+export function recordUpsell(
+  db: Db,
+  storeId: string,
+  orderId: string,
+  outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number; paymentIntentId?: string },
+): Order {
+  const order = getOrder(db, storeId, orderId)
+  if (!order) throw new Error('No order')
+  const items = outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items
+  const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
+  db.tx(() => {
+    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    db.update('orders', order.id, {
+      items,
+      subtotal_cents: order.subtotalCents + extra,
+      total_cents: order.totalCents + extra,
+      upsell: { offered: outcome.offered, accepted: outcome.accepted, ...(outcome.line ? { variantId: outcome.line.variantId } : {}), amountCents: extra, ...(outcome.paymentIntentId ? { paymentIntentId: outcome.paymentIntentId } : {}) },
+      updated_at: now(),
+    })
+  })
+  return getOrder(db, storeId, order.id) as Order
 }
 
 export function fulfillOrder(db: Db, storeId: string, orderId: string, input: { provider?: string; tracking?: string } = {}): Order {

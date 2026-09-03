@@ -148,11 +148,18 @@ test('a visitor can buy something, and the order shows up in the admin', async (
   assert.match(bad.text, /valid email/)
 
   const placed = await call(`/s/${slug}/checkout`, {
-    form: { email: 'buyer@example.com', name: 'A Buyer', line1: '1 Road', city: 'Austin', postal: '78701', country: 'US' },
+    form: { email: 'buyer@example.com', firstName: 'A', lastName: 'Buyer', line1: '1 Road', city: 'Austin', postal: '78701', country: 'US' },
   })
-  assert.match(placed.location, /\/orders\/order_/)
-  const confirmation = await call(placed.location.replace(base, ''))
+  assert.match(placed.location, /\/orders\/order_[a-z0-9]+\/offer$/, 'checkout lands on the one-click offer')
+  const offerPath = placed.location.replace(base, '')
+  const offer = await call(offerPath)
+  assert.equal(offer.status, 200)
+  assert.match(offer.text, /Add .* to this order/)
+  const declined = await call(offerPath, { form: { accept: 'no' } })
+  assert.match(declined.location, /\/orders\/order_[a-z0-9]+$/)
+  const confirmation = await call(declined.location.replace(base, ''))
   assert.match(confirmation.text, /Thank you/)
+  assert.equal((await call(offerPath)).status, 302, 'the offer is shown exactly once')
 
   const orders = await call('/admin/orders')
   assert.match(orders.text, /buyer@example.com/)

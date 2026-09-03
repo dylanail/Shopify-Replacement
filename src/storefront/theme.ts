@@ -186,7 +186,36 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
 .upsell .row{display:flex;gap:.8rem;align-items:center}
 .upsell img{width:52px;height:52px;object-fit:cover;border-radius:var(--radius)}
 .upsell .row form{margin-left:auto}
+.checkout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);min-height:100vh}
+.co-main{padding:2.2rem clamp(1rem,5vw,4rem) 3rem;max-width:44rem;justify-self:end;width:100%}
+.co-side{background:var(--raise);border-left:1px solid var(--line);padding:2.2rem clamp(1rem,4vw,3rem);position:sticky;top:0;height:100vh;overflow:auto}
+.co-logo{display:inline-block;font-family:var(--display);font-size:1.4rem;letter-spacing:.06em;text-transform:uppercase;text-decoration:none;margin-bottom:1.6rem}
+.co-block{padding-block:1.2rem}.co-block h2{font-family:var(--body);font-weight:600;font-size:1.05rem;margin-bottom:.8rem}
+.co-block .field{margin-bottom:.6rem}
+.check{display:flex;gap:.5rem;align-items:center}
+.express{margin-bottom:.8rem}.express .or{display:flex;align-items:center;gap:1rem;color:var(--muted);font-size:.8rem;margin-top:1rem}
+.express .or::before,.express .or::after{content:'';flex:1;border-top:1px solid var(--line)}
+.methods{display:grid;gap:.5rem}
+.method{display:flex;gap:.7rem;align-items:center;border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem;cursor:pointer;background:var(--raise)}
+.method:has(input:checked){border-color:var(--ink)}.method b{margin-left:auto;font-weight:500}
+.pay-el{min-height:120px}
+.pay-demo{border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--raise)}
+.pay-demo .row{display:flex;justify-content:space-between;align-items:center}
+.cards i{font:600 9px/1 var(--body);letter-spacing:.06em;border:1px solid var(--line);border-radius:3px;padding:.25rem .35rem;margin-left:.3rem;font-style:normal;background:#fff;color:#1a1a1a}
+.pay{margin-top:1.2rem;padding:1.15rem;font-size:15px}
+.center{text-align:center;margin-top:.9rem}
+.co-summary-mobile{display:none;border:1px solid var(--line);border-radius:var(--radius);background:var(--raise);padding:.8rem 1rem;margin-bottom:1rem}
+.co-summary-mobile summary{display:flex;justify-content:space-between;cursor:pointer;list-style:none;font-size:.92rem}
+.summary-body .lines td{padding:.6rem 0}
+.thumb{position:relative;display:inline-block}.thumb img{width:56px;height:56px;object-fit:cover;border-radius:var(--radius);border:1px solid var(--line)}
+.thumb b{position:absolute;top:-6px;right:-6px;background:var(--muted);color:#fff;font:600 11px/1 var(--body);width:20px;height:20px;border-radius:999px;display:grid;place-items:center}
+.code{display:flex;gap:.5rem;margin:1rem 0}
+.upsell-page{max-width:min(760px,92vw);padding-block:3rem}
+.upsell-card{display:grid;gap:2rem;grid-template-columns:200px 1fr;align-items:center;border:1px solid var(--line);border-radius:var(--radius);padding:1.6rem;background:var(--raise)}
+.upsell-card img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}
 @media (max-width:900px){
+  .checkout{grid-template-columns:1fr}.co-side{display:none}.co-summary-mobile{display:block}.co-main{justify-self:stretch;max-width:none}
+  .upsell-card{grid-template-columns:1fr}
   .pdp{grid-template-columns:1fr;gap:2rem}
   .two-col{grid-template-columns:1fr;gap:2rem}
   .buybox{position:static}
@@ -196,7 +225,13 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
 `
 }
 
-/** Google Fonts are the only external request the storefront makes. */
+/**
+ * Google Fonts is the only external request a storefront makes, and it is
+ * made so it cannot block paint: preconnect, a preloaded stylesheet swapped in
+ * on load, `display=swap` on every face, and only the weights the theme uses.
+ * Text renders in the fallback stack instantly and upgrades when the woff2
+ * arrives.
+ */
 export function fontLink(brand: Brand): string {
   const families = new Set<string>()
   for (const stack of [brand.displayFont, brand.bodyFont]) {
@@ -204,7 +239,8 @@ export function fontLink(brand: Brand): string {
     if (first) families.add(first.replace(/ /g, '+'))
   }
   if (!families.size) return ''
-  const query = [...families].map((family) => `family=${family}:wght@300;400;500;600`).join('&')
+  const query = [...families].map((family) => `family=${family}:wght@400;500;600`).join('&')
+  const href = `https://fonts.googleapis.com/css2?${query}&display=swap`
   return `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?${query}&display=swap">`
+<link rel="preload" as="style" href="${href}"><link rel="stylesheet" href="${href}" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="${href}"></noscript>`
 }

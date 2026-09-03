@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { brotliCompressSync, gzipSync, constants as zlib } from 'node:zlib'
 import { logger } from './log.ts'
 
 const log = logger('http')
@@ -241,7 +242,34 @@ export function setCookie(res: ServerResponse, name: string, value: string, opti
   res.setHeader('Set-Cookie', [...list, parts.join('; ')])
 }
 
-export async function send(res: ServerResponse, result: unknown) {
+/**
+ * Every text response is compressed when the client accepts it. Brotli where
+ * offered, gzip otherwise; nothing under a kilobyte, nothing already binary.
+ * A generated storefront page is ~40KB of HTML with its CSS inlined — about
+ * 8KB on the wire this way, in one round trip, with no external stylesheet to
+ * block on.
+ */
+function writeBody(req: IncomingMessage | undefined, res: ServerResponse, status: number, body: Buffer, headers: Record<string, string | number>) {
+  const type = String(headers['Content-Type'] ?? '')
+  const compressible = /^(text\/|application\/(json|xml|javascript)|image\/svg)/.test(type) && body.length > 1024
+  const accept = String(req?.headers['accept-encoding'] ?? '')
+  if (compressible && /\bbr\b/.test(accept)) {
+    const out = brotliCompressSync(body, { params: { [zlib.BROTLI_PARAM_QUALITY]: 5 } })
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'br', 'Content-Length': out.length, Vary: 'Accept-Encoding' })
+    res.end(out)
+    return
+  }
+  if (compressible && /\bgzip\b/.test(accept)) {
+    const out = gzipSync(body, { level: 6 })
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', 'Content-Length': out.length, Vary: 'Accept-Encoding' })
+    res.end(out)
+    return
+  }
+  res.writeHead(status, { ...headers, 'Content-Length': body.length })
+  res.end(body)
+}
+
+export async function send(res: ServerResponse, result: unknown, req?: IncomingMessage) {
   // A handler that streams (server-sent events) has already written headers and
   // owns the response for as long as it stays open. Anything the router would
   // add after that is a crash, not a response.
@@ -252,15 +280,12 @@ export async function send(res: ServerResponse, result: unknown) {
     return
   }
   if (result instanceof Html) {
-    const body = Buffer.from(result.body, 'utf8')
-    res.writeHead(result.status, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length })
-    res.end(body)
+    writeBody(req, res, result.status, Buffer.from(result.body, 'utf8'), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-cache' })
     return
   }
   if (result instanceof Raw) {
     const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, 'utf8')
-    res.writeHead(200, { 'Content-Type': result.contentType, 'Content-Length': body.length, ...result.headers })
-    res.end(body)
+    writeBody(req, res, 200, body, { 'Content-Type': result.contentType, ...result.headers })
     return
   }
   if (result === undefined) {
@@ -268,9 +293,7 @@ export async function send(res: ServerResponse, result: unknown) {
     res.end()
     return
   }
-  const body = Buffer.from(JSON.stringify(result, null, 2), 'utf8')
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length })
-  res.end(body)
+  writeBody(req, res, 200, Buffer.from(JSON.stringify(result, null, 2), 'utf8'), { 'Content-Type': 'application/json; charset=utf-8' })
 }
 
 export function sendError(res: ServerResponse, error: unknown, wantsHtml: boolean) {

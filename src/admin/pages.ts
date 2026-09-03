@@ -20,6 +20,9 @@ import { listSeoPages } from '../seo/schema.ts'
 import { PROMPT_LIBRARY } from '../agent/chat.ts'
 import { listRuns } from '../agent/runtime.ts'
 import { latestResearch } from '../agent/research.ts'
+import { listPages, type Page } from '../pages/store.ts'
+import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
+import { getInstalled, hasCredentials } from '../control/plugins.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
@@ -438,7 +441,7 @@ export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
   const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1></div>
+  return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     <div class="card"><h2>Domains</h2>
       <form method="post" action="/admin/domains" class="row" style="margin:.6rem 0">
@@ -476,6 +479,100 @@ export function settingsPage(ctx: Ctx): string {
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
+  </div></div>`
+}
+
+/* ------------------------------------------------------------ pages hub */
+
+export function pagesPage(ctx: Ctx): string {
+  const pages = listPages(ctx.db, ctx.store.id)
+  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 50 })
+  const productOptions = products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Pages &amp; funnels</h1>
+    <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
+  <div class="grid3" style="margin-bottom:1.2rem">
+    <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
+      <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template"><option value="advertorial">Advertorial (listicle)</option><option value="landing">Product landing page</option><option value="blank">Blank</option></select></div>
+      <div class="field"><label>Product</label><select name="productId"><option value="">— none —</option>${productOptions}</select></div>
+      <div class="field"><label>Title</label><input name="title" placeholder="5 reasons people are switching"></div>
+      <button class="btn primary" type="submit">Create and open the editor</button></form>
+    <form method="post" action="/admin/pages/clone" class="card"><h2>Clone a reference page</h2>
+      <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Paste any URL. Its stylesheets are inlined, every link and image made absolute, images copied into your uploads. You get the page, as HTML, to edit or use as a template.</p>
+      <div class="field"><label>URL</label><input name="url" type="url" required placeholder="https://"></div>
+      <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="keepScripts" value="true"> Keep scripts (pixels, chat widgets, the source's app)</label>
+      <button class="btn primary" type="submit">Clone it</button></form>
+    <form method="post" action="/admin/pages/html" class="card"><h2>Paste raw HTML</h2>
+      <div class="field" style="margin-top:.6rem"><label>Title</label><input name="title" placeholder="My page" required></div>
+      <div class="field"><label>HTML</label><textarea name="html" rows="5" placeholder="<!doctype html>…"></textarea></div>
+      <button class="btn primary" type="submit">Create</button></form>
+  </div>
+  <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
+  ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
+    <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
+    <td><span class="tag ${page.status === 'published' ? 'ok' : 'warn'}">${page.status}</span></td><td class="muted">${page.updatedAt.slice(0, 16).replace('T', ' ')}</td>
+    <td style="text-align:right"><div class="row" style="justify-content:flex-end"><a class="btn" href="/admin/pages/${escapeHtml(page.id)}/edit">Edit</a>
+      <a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(page.handle)}" target="_blank" rel="noopener">View ↗</a>
+      <form method="post" action="/admin/pages/${escapeHtml(page.id)}/duplicate"><button class="btn">Duplicate</button></form>
+      <form method="post" action="/admin/pages/${escapeHtml(page.id)}/delete" onsubmit="return confirm('Delete this page?')"><button class="btn">Delete</button></form></div></td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted" style="padding:1.4rem">No pages yet. Start from the advertorial template, clone a page, or paste HTML.</td></tr>'}
+  </tbody></table></div>`
+}
+
+/* --------------------------------------------------------------- bundles */
+
+export function bundlesPage(ctx: Ctx): string {
+  const bundles = listBundles(ctx.db, ctx.store.id)
+  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const titles = new Map(products.map((product) => [product.id, product]))
+  const tiersField = (tiers: typeof DEFAULT_TIERS) => tiers.map((tier) => `${tier.quantity}|${tier.discountPercent}|${tier.label}|${tier.badge ?? ''}|${tier.freeShipping ? 'ship' : ''}|${tier.giftVariantId ?? ''}|${tier.giftLabel ?? ''}`).join('\n')
+  const variantOptions = products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}">${escapeHtml(product.title)} — ${escapeHtml(variant.title)}</option>`)).join('')
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Bundles</h1>
+    <p class="muted" style="margin:.25rem 0 0">Quantity breaks on the product page: buy 1, buy 2 and save, buy 3 and save more with free shipping and a gift. The tiers are enforced in the cart, not just drawn on the page.</p></div></div>
+  <div class="grid2"><div>
+    ${bundles.length ? bundles.map((bundle) => { const product = titles.get(bundle.productId); return `<div class="card"><div class="row" style="justify-content:space-between"><h2>${escapeHtml(product?.title ?? bundle.productId)}</h2><span class="tag ${bundle.status === 'active' ? 'ok' : ''}">${bundle.status}</span></div>
+      <table class="data" style="margin:.5rem 0"><thead><tr><th>Tier</th><th>Qty</th><th>Off</th><th>Badge</th><th>Unlocks</th></tr></thead><tbody>${bundle.tiers.map((tier) => `<tr><td>${escapeHtml(tier.label)}</td><td>${tier.quantity}</td><td>${tier.discountPercent}%</td><td>${escapeHtml(tier.badge ?? '—')}</td><td class="muted">${[tier.freeShipping ? 'free shipping' : '', tier.giftVariantId ? `gift: ${escapeHtml(tier.giftLabel || tier.giftVariantId)}` : ''].filter(Boolean).join(', ') || '—'}</td></tr>`).join('')}</tbody></table>
+      <div class="row"><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product?.handle ?? '')}" target="_blank" rel="noopener">See it on the page ↗</a>
+        <form method="post" action="/admin/bundles/${escapeHtml(bundle.id)}/delete"><button class="btn">Remove</button></form></div></div>` }).join('')
+      : '<div class="card"><p class="muted">No bundles yet. Create one on the right — it appears on that product page and in any "Bundle offer" block.</p></div>'}
+  </div>
+  <form method="post" action="/admin/bundles" class="card"><h2>Create or replace a bundle</h2>
+    <div class="field" style="margin-top:.6rem"><label>Product</label><select name="productId" required>${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')}</select></div>
+    <div class="field"><label>Widget title</label><input name="title" value="Bundle & save"></div>
+    <div class="field"><label>Tiers — one per line: quantity | % off | label | badge | ship (for free shipping) | gift variant id | gift label</label>
+      <textarea name="tiers" rows="4">${escapeHtml(tiersField(DEFAULT_TIERS))}</textarea></div>
+    <div class="field"><label>Gift variant on the top tier (optional)</label><select name="giftVariantId"><option value="">— none —</option>${variantOptions}</select></div>
+    <div class="field"><label>Gift label</label><input name="giftLabel" placeholder="Free hand wraps"></div>
+    <div class="row"><div class="field" style="flex:1"><label>Layout</label><select name="layout"><option value="stacked">Stacked</option><option value="row">Side by side</option></select></div>
+      <div class="field" style="flex:1"><label>Accent colour</label><input name="accent" placeholder="#7a4a2b"></div></div>
+    <button class="btn primary" type="submit">Save bundle</button></form></div>`
+}
+
+/* -------------------------------------------------------------- payments */
+
+export function paymentsPage(ctx: Ctx): string {
+  const stripe = getInstalled(ctx.db, ctx.store.id, 'stripe')
+  const connected = Boolean(stripe && hasCredentials(ctx.db, ctx.store.id, 'stripe'))
+  const webhookUrl = `${ctx.storeUrl.startsWith('http') ? ctx.storeUrl : '{your store address}'}/webhooks/stripe`
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Payments</h1>
+    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes to your Stripe account; the platform fee is billed separately.</p></div>
+    <span class="tag ${connected ? 'ok' : 'warn'}">${connected ? 'Stripe connected' : 'Demo mode — orders place without a charge'}</span></div>
+  <div class="grid2"><form method="post" action="/admin/plugins/stripe/settings" class="card"><h2>Stripe keys</h2>
+    <div class="field" style="margin-top:.6rem"><label>Publishable key</label><input name="publishableKey" value="${escapeHtml(String(stripe?.settings.publishableKey ?? ''))}" placeholder="pk_live_…" required></div>
+    <div class="field"><label>Secret key ${connected ? '<span class="muted">— sealed; paste again to replace</span>' : ''}</label><input name="secretKey" placeholder="sk_live_…" ${connected ? '' : 'required'}></div>
+    <div class="field"><label>Webhook signing secret</label><input name="webhookSecret" placeholder="whsec_…"></div>
+    <div class="field"><label>Capture</label><select name="captureMode"><option ${stripe?.settings.captureMode === 'automatic' ? 'selected' : ''}>automatic</option><option ${stripe?.settings.captureMode === 'manual' ? 'selected' : ''}>manual</option></select></div>
+    <label class="row" style="font-size:12px;margin-bottom:.7rem"><input type="checkbox" name="saveCards" value="true" ${stripe?.settings.saveCards !== false ? 'checked' : ''}> Save cards for one-click post-purchase offers</label>
+    <button class="btn primary" type="submit">${connected ? 'Update' : 'Connect Stripe'}</button></form>
+  <div>
+    <div class="card"><h2>What the checkout does</h2><ul style="margin:.4rem 0 0;padding-left:1.1rem;font-size:12.5px;color:var(--muted)">
+      <li>Express row at the top: Apple Pay, Google Pay and Link appear on devices that have them</li>
+      <li>Contact → delivery → shipping method → payment, one page, one button</li>
+      <li>Order summary on the right; collapsed to one line on a phone</li>
+      <li>Buy-now from any product page or buy box skips the cart</li>
+      <li>After payment, one post-purchase offer, charged to the saved card in one click</li>
+      <li>Refunds from the order page go back through Stripe when the order was paid there</li></ul></div>
+    <div class="card"><h2>Webhook</h2><p class="muted" style="font-size:12px">Add an endpoint in Stripe pointing at:</p><code style="font-size:12px;word-break:break-all">${escapeHtml(webhookUrl)}</code>
+      <p class="muted" style="font-size:12px;margin-top:.6rem">Events: <code>payment_intent.succeeded</code>, <code>charge.refunded</code>. Paste its signing secret above. Unsigned deliveries are rejected.</p></div>
   </div></div>`
 }
 

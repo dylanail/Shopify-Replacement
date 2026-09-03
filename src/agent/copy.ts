@@ -13,13 +13,13 @@ import { seedOf } from './images.ts'
 export type Palette = { primary: string; secondary: string; paper: string; ink: string; displayFont: string; bodyFont: string; mood: string }
 
 const PALETTES: Palette[] = [
-  { mood: 'heritage', primary: '#7a4a2b', secondary: '#5d1f28', paper: '#f4ece1', ink: '#241a14', displayFont: "'Playfair Display', Georgia, serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'clinical', primary: '#2f6f6a', secondary: '#123c39', paper: '#f6f8f7', ink: '#14201e', displayFont: "'Fraunces', Georgia, serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'botanical', primary: '#4d6b3c', secondary: '#2c3f24', paper: '#f5f4ea', ink: '#1e2418', displayFont: "'Cormorant Garamond', Georgia, serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'midnight', primary: '#3b3f7a', secondary: '#191b3d', paper: '#f2f2f7', ink: '#15162a', displayFont: "'Libre Baskerville', Georgia, serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'sunbaked', primary: '#c2622c', secondary: '#7d2f18', paper: '#fbf1e5', ink: '#2b1a10', displayFont: "'Playfair Display', Georgia, serif", bodyFont: "'Manrope', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'monochrome', primary: '#2b2b2b', secondary: '#000000', paper: '#f7f7f5', ink: '#111111', displayFont: "'Inter', ui-sans-serif, system-ui, sans-serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
-  { mood: 'petal', primary: '#a8496b', secondary: '#5d2138', paper: '#fbf0f2', ink: '#2c161d', displayFont: "'Cormorant Garamond', Georgia, serif", bodyFont: "'Inter', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'heritage', primary: '#7a4a2b', secondary: '#5d1f28', paper: '#f4ece1', ink: '#241a14', displayFont: "'Fraunces', Georgia, serif", bodyFont: "'Manrope', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'clinical', primary: '#2f6f6a', secondary: '#123c39', paper: '#f6f8f7', ink: '#14201e', displayFont: "'Instrument Serif', Georgia, serif", bodyFont: "'DM Sans', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'botanical', primary: '#4d6b3c', secondary: '#2c3f24', paper: '#f5f4ea', ink: '#1e2418', displayFont: "'Newsreader', Georgia, serif", bodyFont: "'Onest', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'midnight', primary: '#3b3f7a', secondary: '#191b3d', paper: '#f2f2f7', ink: '#15162a', displayFont: "'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif", bodyFont: "'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'sunbaked', primary: '#c2622c', secondary: '#7d2f18', paper: '#fbf1e5', ink: '#2b1a10', displayFont: "'Syne', ui-sans-serif, system-ui, sans-serif", bodyFont: "'Outfit', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'monochrome', primary: '#2b2b2b', secondary: '#000000', paper: '#f7f7f5', ink: '#111111', displayFont: "'Space Grotesk', ui-sans-serif, system-ui, sans-serif", bodyFont: "'Inter Tight', ui-sans-serif, system-ui, sans-serif" },
+  { mood: 'petal', primary: '#a8496b', secondary: '#5d2138', paper: '#fbf0f2', ink: '#2c161d', displayFont: "'Instrument Serif', Georgia, serif", bodyFont: "'Sora', ui-sans-serif, system-ui, sans-serif" },
 ]
 
 const MOOD_WORDS: Array<[string, string[]]> = [

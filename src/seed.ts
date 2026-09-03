@@ -11,6 +11,9 @@ import { createReview, moderate } from './domain/reviews.ts'
 import { createArticle, createBlog } from './domain/content.ts'
 import { sessionFor, track } from './analytics/events.ts'
 import { onboard } from './agent/onboarding.ts'
+import { upsertBundle } from './domain/bundles.ts'
+import { advertorialTemplate, createPage, landingTemplate } from './pages/store.ts'
+import { latestResearch } from './agent/research.ts'
 
 const log = logger('seed')
 
@@ -131,6 +134,32 @@ async function main() {
     db.run('UPDATE orders SET created_at = ?, updated_at = ? WHERE id = ?', at, at, row.id)
   })
 
+  // A quantity-break bundle on the hero, with the wraps as the top-tier gift.
+  const wraps = products[1]
+  if (hero) {
+    upsertBundle(db, store.id, {
+      productId: hero.id,
+      title: 'Bundle & save',
+      tiers: [
+        { quantity: 1, discountPercent: 0, label: 'One pair' },
+        { quantity: 2, discountPercent: 15, label: 'Two pairs', badge: 'Most popular', freeShipping: true },
+        { quantity: 3, discountPercent: 25, label: 'Three pairs', badge: 'Best value', freeShipping: true, ...(wraps?.variants[0] ? { giftVariantId: wraps.variants[0].id, giftLabel: `free ${wraps.title.replace(/^The /, '')}` } : {}) },
+      ],
+    })
+    log.info(`bundle on ${hero.title}`)
+  }
+
+  // An advertorial and a landing page, from the templates, wired to the research.
+  const research = latestResearch(db, store.id)
+  const templateInput = {
+    storeName: store.name,
+    ...(hero ? { product: { id: hero.id, title: hero.title, image: hero.heroImage, subtitle: hero.subtitle } } : {}),
+    research: research ? { triggers: research.triggers, objections: research.objections, comparison: research.comparison, competitors: research.competitors } : null,
+  }
+  createPage(db, store.id, { title: `5 reasons fighters are switching to ${hero?.title ?? store.name}`, handle: 'why-fighters-switch', kind: 'advertorial', blocks: advertorialTemplate(templateInput), status: 'published' })
+  createPage(db, store.id, { title: `${hero?.title ?? store.name} — the offer`, handle: 'offer', kind: 'landing', blocks: landingTemplate(templateInput), status: 'published' })
+  log.info('advertorial and landing page built from the templates')
+
   publish(db, store.id)
   log.info(`published ${store.name}`)
 
@@ -138,6 +167,7 @@ async function main() {
   log.info(`  sign in at http://localhost:${process.env.PORT ?? 4100}/login`)
   log.info(`  ${email} / ${password}`)
   log.info(`  storefront: http://localhost:${process.env.PORT ?? 4100}/s/${store.slug}`)
+  log.info(`  advertorial: http://localhost:${process.env.PORT ?? 4100}/s/${store.slug}/pages/why-fighters-switch`)
 }
 
 await main()

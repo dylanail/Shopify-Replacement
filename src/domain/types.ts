@@ -71,6 +71,8 @@ export type LineItem = {
   quantity: number
   /** Set when the line was added by a bundle, upsell or cross-sell component. */
   source?: string
+  /** A gift line: added by a bundle tier, priced at zero, removed if the tier is lost. */
+  giftOf?: string
 }
 
 export type Address = {
@@ -92,6 +94,8 @@ export type Totals = {
   appliedPromotions: Array<{ id: string; title: string; code: string; amountCents: Cents }>
   /** How much more the cart needs to clear the free-shipping threshold. */
   freeShippingGapCents: Cents | null
+  shippingOptionId: string
+  shippingName: string
 }
 
 export type Order = {
@@ -113,6 +117,12 @@ export type Order = {
   address: Address
   fulfillments: Array<{ id: string; provider: string; tracking: string; createdAt: string }>
   refunds: Array<{ id: string; amountCents: Cents; reason: string; createdAt: string }>
+  paymentProvider: 'demo' | 'stripe'
+  paymentIntentId: string
+  paymentCustomerId: string
+  paymentMethodId: string
+  shippingOptionId: string
+  upsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents; paymentIntentId?: string }
   createdAt: string
   updatedAt: string
 }
@@ -143,6 +153,8 @@ export type Promotion = {
     tiers?: Array<{ quantity: number; percent: number }>
     regionIds?: string[]
     firstOrderOnly?: boolean
+    /** Minimum eligible units before the promotion pays out (bundle tiers). */
+    minQuantity?: number
   }
   automatic: boolean
   status: 'active' | 'scheduled' | 'disabled' | 'expired'

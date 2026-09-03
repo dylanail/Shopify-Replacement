@@ -19,6 +19,8 @@ export const NAV: NavItem[] = [
   { key: 'promotions', href: '/admin/promotions', label: 'Promotions', glyph: '◈', area: 'promotions' },
   { key: 'analytics', href: '/admin/analytics', label: 'Analytics', glyph: '▥', area: 'analytics' },
   { key: 'reviews', href: '/admin/reviews', label: 'Reviews', glyph: '★', area: 'reviews' },
+  { key: 'pages', href: '/admin/pages', label: 'Pages & funnels', glyph: '▤', area: 'store' },
+  { key: 'bundles', href: '/admin/bundles', label: 'Bundles', glyph: '⧉', area: 'promotions' },
   { key: 'store', href: '/admin/store', label: 'Store designer', glyph: '◔', area: 'store' },
   { key: 'marketing', href: '/admin/marketing', label: 'Email & SEO', glyph: '⚌', area: 'emails' },
   { key: 'plugins', href: '/admin/plugins', label: 'Integrations', glyph: '⚙', area: 'plugins' },
