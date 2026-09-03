@@ -426,3 +426,13 @@ test('the storefront serves generated legal pages, takes behaviour beacons, and 
   const preview = await fetch(`${base}/preview/${slug}/_t`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ p: '/', e: [{ t: 'scroll', m: { depth: 100 } }] }) })
   assert.equal(preview.status, 204, 'preview beacons are accepted and dropped')
 })
+
+test('the scheme a proxy forwards is the scheme the request is seen under', async () => {
+  const { makeCtx } = await import('../src/lib/http.ts')
+  const fake = (headers: Record<string, string>) =>
+    makeCtx({ headers: { host: 'admin.example.com', ...headers }, url: '/admin', socket: {} } as never, {} as never, {})
+  assert.equal(fake({}).url.origin, 'http://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'https' }).url.origin, 'https://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'https, http' }).url.origin, 'https://admin.example.com')
+  assert.equal(fake({ 'x-forwarded-proto': 'ftp' }).url.origin, 'http://admin.example.com')
+})
