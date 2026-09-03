@@ -44,9 +44,10 @@ async function call(path: string, init: { method?: string; form?: Record<string,
 
 let slug = ''
 
-test('the marketing page, login and register are served', async () => {
-  assert.equal((await call('/')).status, 200)
-  assert.match((await call('/')).text, /AI-native/)
+test('the root is the admin, and login and register are served', async () => {
+  assert.equal((await call('/')).status, 302)
+  assert.equal((await call('/')).location, '/admin')
+  assert.match((await call('/about-this-platform')).text, /AI-native/)
   assert.equal((await call('/login')).status, 200)
   assert.equal((await call('/healthz')).status, 200)
   assert.equal((await call('/nope')).status, 404)
@@ -156,8 +157,10 @@ test('a visitor can buy something, and the order shows up in the admin', async (
   assert.equal(offer.status, 200)
   assert.match(offer.text, /Add .* to this order/)
   const declined = await call(offerPath, { form: { accept: 'no' } })
-  assert.match(declined.location, /\/orders\/order_[a-z0-9]+$/)
-  const confirmation = await call(declined.location.replace(base, ''))
+  assert.match(declined.location, /\/orders\/order_[a-z0-9]+\/downsell$/, 'a declined upsell goes to the downsell step')
+  const downsell = await call(declined.location.replace(base, ''))
+  assert.match(downsell.location, /\/orders\/order_[a-z0-9]+$/, 'with no funnel configured there is no downsell, so straight to the order')
+  const confirmation = await call(downsell.location.replace(base, ''))
   assert.match(confirmation.text, /Thank you/)
   assert.equal((await call(offerPath)).status, 302, 'the offer is shown exactly once')
 

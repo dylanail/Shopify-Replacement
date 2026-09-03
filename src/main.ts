@@ -5,6 +5,7 @@ import { logger } from './lib/log.ts'
 import { renderSvg } from './agent/images.ts'
 import { readUpload } from './lib/uploads.ts'
 import { recoverRuns } from './agent/runtime.ts'
+import { sweepAbandonedCarts } from './email/abandoned.ts'
 import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
@@ -94,7 +95,12 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    // Personal mode: there is nothing to sell at the root. It is the admin.
     if (ctx.url.pathname === '/') {
+      await send(res, redirect('/admin'), req)
+      return
+    }
+    if (ctx.url.pathname === '/about-this-platform') {
       await send(res, html(marketingHome()), req)
       return
     }
@@ -114,6 +120,10 @@ const server = createServer(async (req, res) => {
 
 const db = getDb()
 recoverRuns(db)
+// Abandoned carts are swept every ten minutes; the four-hour wait is the
+// window the review-app crowd settled on.
+const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
+setInterval(() => void sweepAbandonedCarts(db, { hours: 4, origin }).catch(() => undefined), 10 * 60_000).unref()
 server.listen(PORT, () => {
   log.info(`amboras on http://localhost:${PORT}`)
   log.info(ROOT_DOMAIN ? `storefronts on *.${ROOT_DOMAIN}` : 'storefronts on /preview/:slug (set AMBORAS_STOREFRONT_HOST for subdomains)')

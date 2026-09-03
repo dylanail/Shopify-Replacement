@@ -3,7 +3,7 @@ import { logger } from './lib/log.ts'
 import './agent/tools/index.ts'
 import { register } from './control/auth.ts'
 import { install } from './control/plugins.ts'
-import { publish, updateStore } from './control/stores.ts'
+import { getStore, publish, updateStore } from './control/stores.ts'
 import { addToCart, applyCode, createCart } from './domain/cart.ts'
 import { listProducts } from './domain/catalog.ts'
 import { completeCart, fulfillOrder } from './domain/orders.ts'
@@ -14,6 +14,10 @@ import { onboard } from './agent/onboarding.ts'
 import { upsertBundle } from './domain/bundles.ts'
 import { advertorialTemplate, createPage, landingTemplate } from './pages/store.ts'
 import { latestResearch } from './agent/research.ts'
+import { updateProduct } from './domain/catalog.ts'
+import { recordAdSpend } from './domain/ops.ts'
+import { upsertFunnel } from './domain/funnels.ts'
+import { generateVersions, setVersionWeight } from './pages/versions.ts'
 
 const log = logger('seed')
 
@@ -159,6 +163,38 @@ async function main() {
   createPage(db, store.id, { title: `5 reasons fighters are switching to ${hero?.title ?? store.name}`, handle: 'why-fighters-switch', kind: 'advertorial', blocks: advertorialTemplate(templateInput), status: 'published' })
   createPage(db, store.id, { title: `${hero?.title ?? store.name} — the offer`, handle: 'offer', kind: 'landing', blocks: landingTemplate(templateInput), status: 'published' })
   log.info('advertorial and landing page built from the templates')
+
+  // Supplier costs, the way a dropshipper would have them, so margins and
+  // delivery estimates are real numbers rather than blanks.
+  const costs = [8900, 600, 4200]
+  products.forEach((product, index) => {
+    updateProduct(db, store.id, product.id, {
+      supplier: { name: 'Taller Regina (CDMX)', url: 'https://example.com/supplier', costCents: costs[index] ?? 2000, shippingCents: 1200, processingDays: 3, shippingDaysMin: 5, shippingDaysMax: 9 },
+      ...(index === 0 ? { metadata: { sizeChart: 'Weight|Hand circumference|Best for\n12oz|17–19cm|Bag work\n14oz|19–21cm|Pads, light sparring\n16oz|21–23cm|Sparring\n18oz|23cm+|Heavy sparring' } } : {}),
+    })
+  })
+  for (let day = 1; day <= 12; day++) {
+    recordAdSpend(db, store.id, { day: new Date(Date.now() - day * 86400000).toISOString(), platform: day % 3 ? 'Meta' : 'TikTok', amountCents: 9000 + (day % 4) * 2500, note: 'Sparring glove — UGC creative' })
+  }
+
+  // Two product-page versions in a split test, and a funnel around the hero.
+  if (hero) {
+    const fresh = getStore(db, store.id) ?? store
+    const [benefit, urgency] = await generateVersions(db, fresh, { productId: hero.id, kind: 'pdp', formats: ['benefit', 'urgency'], direction: 'for people who train seriously, focus on the repair guarantee', publish: true })
+    if (benefit) setVersionWeight(db, store.id, benefit.id, 1)
+    if (urgency) setVersionWeight(db, store.id, urgency.id, 1)
+    const [advertorial] = await generateVersions(db, fresh, { productId: hero.id, kind: 'advertorial', formats: ['story'], direction: 'warm, first person, focus on the wrist', publish: true })
+    upsertFunnel(db, store.id, {
+      name: 'Sparring glove — cold traffic',
+      productId: hero.id,
+      advertorialPageId: advertorial?.id ?? '',
+      offerPageId: db.one<{ id: string }>("SELECT id FROM pages WHERE store_id = ? AND handle = 'offer'", store.id)?.id ?? '',
+      bump: { enabled: true, priceCents: 299 },
+      upsell: { ...(wraps?.variants[0] ? { variantId: wraps.variants[0].id } : {}), discountPercent: 20, headline: 'Add the hand wraps to this order for 20% off?' },
+      downsell: { ...(products[2]?.variants[0] ? { variantId: products[2].variants[0].id } : {}), discountPercent: 35, headline: 'How about the holdall instead, 35% off, just this once?' },
+    })
+    log.info('two pdp versions in a split test, a story advertorial, and a funnel with bump, upsell and downsell')
+  }
 
   publish(db, store.id)
   log.info(`published ${store.name}`)

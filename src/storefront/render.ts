@@ -11,6 +11,8 @@ import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import type { Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
+import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '../domain/ops.ts'
+import type { ResolvedBump, ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
 import { fontLink, themeCss } from './theme.ts'
@@ -50,7 +52,7 @@ ${fontLink(brand)}
 ${page.jsonLd?.length ? jsonLdTag(page.jsonLd) : ''}
 ${page.head ?? ''}
 ${renderSlot(view.db, store.id, 'headEnd', {}, { preview: view.preview })}
-</head><body>
+</head><body data-cart-subtotal="${view.totals?.subtotalCents ?? 0}">
 ${view.preview ? '<div class="announce" style="background:#1a1a1a">DRAFT PREVIEW — not what customers see</div>' : ''}
 ${page.bare ? '' : `${brand.announcement ? `<div class="announce">${escapeHtml(brand.announcement)}</div>` : ''}
 ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview })}
@@ -232,7 +234,8 @@ export function productPage(
     ${stats.count ? `<div class="rating"><span class="stars">${stars(stats.average)}</span> ${stats.average} &middot; ${stats.count} reviews</div>` : ''}
     ${product.subtitle ? `<div class="eyebrow">${escapeHtml(product.subtitle)}</div>` : ''}
     <h1 style="font-size:clamp(2rem,4vw,3rem)">${escapeHtml(product.title)}</h1>
-    <div class="price-lg" id="pdp-price">${money(cheapest.priceCents, view)}</div>
+    <div class="price-row"><div class="price-lg" id="pdp-price">${money(cheapest.priceCents, view)}</div>${cheapest.compareAtCents && cheapest.compareAtCents > cheapest.priceCents ? `<s class="compare-at">${money(cheapest.compareAtCents, view)}</s><span class="off">−${Math.round((1 - cheapest.priceCents / cheapest.compareAtCents) * 100)}%</span>` : ''}</div>
+    ${pdpSignals(view, product)}
     ${optionBlocks}
     ${buildOptions}
     <form method="post" action="${view.base}/cart/add" class="buyform" id="pdp-form">
@@ -245,6 +248,8 @@ export function productPage(
     ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
     <div class="trust">${(content.trust?.length ? content.trust : [product.tags[0] ?? 'Made in small runs', 'Repaired in-house', 'Free shipping over 200']).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>
     ${content.guarantee ? `<div class="guarantee"><span class="badge">30</span><div><strong>Thirty-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
+    <div class="payicons small"><i>VISA</i><i>MC</i><i>AMEX</i><i>Apple Pay</i><i>Google Pay</i><i>PayPal</i></div>
+    ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
     ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
     ${companions.length ? upsellWidget(view, companions) : ''}
   </div>
@@ -259,6 +264,7 @@ ${conversionSections(view, product, content)}
     .join('')}</div>
 </section>
 ${reviewsSection(view, product, stats, reviews)}
+${qaSection(view, product)}
 <div class="stickybar" id="stickybar">
   <div><div class="t">${escapeHtml(product.title)}</div><div class="p" id="sticky-price">${money(cheapest.priceCents, view)}</div></div>
   <button class="btn" type="button" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">Add to cart</button>
@@ -362,6 +368,64 @@ function conversionSections(view: StoreView, product: Product, content: Product[
   return parts.join('\n')
 }
 
+/** The live signals under the price: delivery window, viewers, stock. All from real data; each hides when it has nothing honest to say. */
+function pdpSignals(view: StoreView, product: Product): string {
+  const parts: string[] = []
+  const estimate = deliveryEstimate(product.supplier)
+  parts.push(`<div class="edd" data-cutoff="15"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${escapeHtml(estimate.from)} – ${escapeHtml(estimate.to)}</b></div></div>`)
+  const stock = product.variants.reduce((sum, variant) => sum + Math.max(0, variant.inventory), 0)
+  if (stock > 0 && stock <= 15) parts.push(`<div class="scarcity"><div class="meta">Only <b>${stock}</b> left in this batch</div><div class="track"><div class="fill" style="width:${Math.max(6, Math.round((stock / 15) * 100))}%"></div></div></div>`)
+  const viewers = view.preview ? 0 : viewersNow(view.db, view.store.id, product.id)
+  if (viewers >= 3) parts.push(`<div class="viewers"><i></i> ${viewers} people are looking at this right now</div>`)
+  return `<div class="signals">${parts.join('')}</div>`
+}
+
+function qaSection(view: StoreView, product: Product): string {
+  const questions = listQuestions(view.db, view.store.id, { productId: product.id, status: 'answered' })
+  return `<section class="wrap conv"><div class="section-head"><div><div class="eyebrow">Questions</div><h2>Ask about ${escapeHtml(product.title)}</h2></div></div>
+    <div class="two-col"><div>${questions.map((entry) => `<details class="faq"><summary>${escapeHtml(entry.question)}</summary><p>${escapeHtml(entry.answer)}${entry.asker ? ` <span class="micro">— asked by ${escapeHtml(entry.asker)}</span>` : ''}</p></details>`).join('') || '<p class="micro">No questions yet. Ask the first one.</p>'}</div>
+    <form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/questions" class="qa-form"><div class="two"><input name="asker" placeholder="Your name"><input name="email" type="email" placeholder="Email, for the answer"></div><textarea name="question" rows="2" required placeholder="What do you want to know?"></textarea><button class="btn btn--ghost" type="submit">Ask</button></form></div></section>`
+}
+
+/* --------------------------------------------------------------- tracking */
+
+export function trackPage(view: StoreView, input: { tracking?: TrackingView | null; error?: string; related?: Product[] }): string {
+  const { tracking } = input
+  const body = `<section class="wrap" style="max-width:min(720px,92vw)">
+    <div class="eyebrow">Track your order</div><h2 style="margin:.6rem 0 1rem">Where is it?</h2>
+    ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1rem">${escapeHtml(input.error)}</div>` : ''}
+    <form method="get" action="${view.base}/track" class="two" style="margin-bottom:2rem"><div class="field"><label>Order number</label><input name="order" placeholder="1001" required value="${escapeHtml(tracking?.order.displayId ?? '')}"></div><div class="field"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><button class="btn" type="submit" style="grid-column:1/-1">Find my order</button></form>
+    ${tracking ? `<div class="timeline">${tracking.steps.map((step) => `<div class="step ${step.done ? 'done' : ''}"><i></i><div><strong>${escapeHtml(step.label)}</strong><div class="micro">${step.at ? escapeHtml(step.at.slice(0, 10)) : ''}${step.detail ? ` · ${escapeHtml(step.detail)}` : ''}</div></div></div>`).join('')}</div>
+      ${tracking.tracking ? `<p><a class="btn btn--ghost" href="${escapeHtml(tracking.tracking.url)}" target="_blank" rel="noopener">Track with ${escapeHtml(tracking.tracking.carrier)} ↗</a></p>` : tracking.estimate ? `<p class="micro">Estimated delivery ${escapeHtml(tracking.estimate.from)} – ${escapeHtml(tracking.estimate.to)}. You will get the tracking number the moment it ships.</p>` : ''}
+      <table class="lines" style="margin-top:1.4rem">${tracking.order.items.map((item) => `<tr><td style="width:64px"><img src="${escapeHtml(item.image)}" alt=""></td><td>${escapeHtml(item.title)}<div class="micro">${escapeHtml(item.variantTitle)} × ${item.quantity}</div></td></tr>`).join('')}</table>` : ''}
+    ${input.related?.length ? `<div class="section-head" style="margin-top:3rem"><h2>While you wait</h2></div><div class="grid">${input.related.map((product) => productCard(view, product)).join('')}</div>` : ''}
+  </section>`
+  return layout(view, { title: `Track your order — ${view.store.name}`, description: 'Order tracking', body })
+}
+
+/* ---------------------------------------------------------------- funnel */
+
+export function bumpHtml(view: StoreView, bump: ResolvedBump | null): string {
+  if (!bump) return ''
+  return `<label class="bump"><input type="checkbox" name="bumpVariantId" value="${escapeHtml(bump.variantId)}" ${bump.product.metadata.kind === 'shipping-protection' ? 'checked' : ''}>
+    <span><strong>${escapeHtml(bump.label)} — ${money(bump.priceCents, view)}</strong><span class="micro" style="display:block">${escapeHtml(bump.text)}</span></span></label>`
+}
+
+export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell'): string {
+  const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+  const body = `<section class="wrap upsell-page">
+    <div class="eyebrow">Order #${order.displayId} confirmed — ${step === 'downsell' ? 'one last thing' : 'one more thing'}</div>
+    <h1 style="font-size:clamp(1.8rem,4vw,2.8rem);margin:.6rem 0 1.2rem">${escapeHtml(offer.headline)}</h1>
+    <div class="upsell-card"><img src="${escapeHtml(offer.product.heroImage)}" alt="${escapeHtml(offer.product.title)}">
+      <div><p class="lead" style="margin:0 0 .6rem">${escapeHtml(offer.text)}</p>
+        <div class="price-lg">${format(price, order.currency)} ${offer.discountPercent ? `<s class="micro">${format(offer.priceCents, order.currency)}</s>` : ''}</div>
+        <p class="micro">Ships with your order. ${order.paymentProvider === 'stripe' ? 'Charged to the card you just used — no form.' : 'Added to your order in one click.'}</p>
+        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency)}</button></form>
+        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
+      </div></div></section>`
+  return layout(view, { title: `One more thing — ${view.store.name}`, description: 'Your order', body, bare: true })
+}
+
 function upsellWidget(view: StoreView, companions: Product[]): string {
   return `<div class="upsell"><div class="eyebrow">Goes with this</div>
     ${companions
@@ -405,6 +469,7 @@ function reviewsSection(view: StoreView, product: Product, stats: ReviewStats, r
         (review) => `<article class="review"><div class="stars">${stars(review.rating)}</div>
           ${review.title ? `<h3 style="margin:.5rem 0 .35rem">${escapeHtml(review.title)}</h3>` : ''}
           <p style="margin:.4rem 0 0;font-size:.94rem">${escapeHtml(review.body)}</p>
+          ${review.media.length ? `<div class="review-media">${review.media.slice(0, 4).map((url) => `<img src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>` : ''}
           <div class="who">${escapeHtml(review.author)}${review.verified ? ' &middot; verified buyer' : ''} &middot; ${review.createdAt.slice(0, 10)}</div>
           ${review.reply ? `<div class="reply"><strong>${escapeHtml(view.store.name)}:</strong> ${escapeHtml(review.reply)}</div>` : ''}</article>`,
       )
@@ -467,6 +532,7 @@ export type CheckoutInput = {
   error?: string
   stripe?: { publishableKey: string } | null
   isFirstOrder?: boolean
+  bump?: ResolvedBump | null
 }
 
 /**
@@ -516,6 +582,7 @@ export function checkoutPage(view: StoreView, input: CheckoutInput): string {
         <div class="field"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for delivery updates)" value="${escapeHtml(draft.phone ?? '')}" aria-label="Phone"></div></section>
       <section class="co-block"><h2>Shipping method</h2>
         <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
+      ${input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''}
       <section class="co-block"><h2>Payment</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
         ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
           <p class="micro">No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.</p></div>`}
@@ -532,6 +599,15 @@ ${renderSlot(view.db, view.store.id, 'checkoutStart', {}, { preview: view.previe
   var base = document.querySelector('.checkout').dataset.base;
   var fmt = ${JSON.stringify({ currency: totals.currency })};
   function money(c){ try { return new Intl.NumberFormat('en-US',{style:'currency',currency:fmt.currency}).format(c/100) } catch(e){ return (c/100).toFixed(2) } }
+  var bump = document.querySelector('.bump input');
+  bump && bump.addEventListener('change', function(){
+    fetch(base + '/checkout/bump', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ variantId: bump.value, on: bump.checked }) })
+      .then(function(r){ return r.json() }).then(function(t){
+        document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
+        document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
+        if (window.__elements) window.__elements.update({ amount: t.totalCents });
+      });
+  });
   document.querySelectorAll('#methods input').forEach(function(radio){ radio.addEventListener('change', function(){
     fetch(base + '/checkout/shipping', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ shippingOptionId: radio.value }) })
       .then(function(r){ return r.json() }).then(function(t){
@@ -601,7 +677,7 @@ export function upsellPage(view: StoreView, order: Order, offer: { product: Prod
   return layout(view, { title: `One more thing — ${view.store.name}`, description: 'Your order', body, bare: true })
 }
 
-export function orderPage(view: StoreView, order: Order): string {
+export function orderPage(view: StoreView, order: Order, related: Product[] = []): string {
   const body = `<section class="wrap" style="max-width:min(680px,92vw)">
     <div class="eyebrow">Order confirmed${order.upsell.accepted ? ' · offer added' : ''}</div>
     <h2 style="margin:.6rem 0 1rem">Thank you — order #${order.displayId}</h2>
@@ -616,8 +692,9 @@ export function orderPage(view: StoreView, order: Order): string {
       ${order.discountCents ? `<div><span>Discount${order.discountCode ? ` (${escapeHtml(order.discountCode)})` : ''}</span><span>-${format(order.discountCents, order.currency)}</span></div>` : ''}
       <div><span>Shipping</span><span>${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</span></div>
       <div class="grand"><span>Total</span><span>${format(order.totalCents, order.currency)}</span></div></div>
-    <p style="margin-top:2rem"><a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
-    ${renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents }, { preview: view.preview })}
+    <p style="margin-top:2rem" class="row"><a class="btn btn--ghost" href="${view.base}/track?order=${order.displayId}">Track this order</a> <a class="btn btn--ghost" href="${view.base}/">Keep shopping</a></p>
+    ${related.length ? `<div class="section-head" style="margin-top:3rem"><h2>Goes with your order</h2></div><div class="grid">${related.map((product) => productCard(view, product)).join('')}</div>` : ''}
+    ${renderSlot(view.db, view.store.id, 'orderConfirmed', { orderId: order.id, total: order.totalCents, currency: order.currency }, { preview: view.preview })}
   </section>`
   return layout(view, { title: `Order #${order.displayId}`, description: 'Order confirmation', body })
 }

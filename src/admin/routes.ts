@@ -21,7 +21,12 @@ import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
 import { stripeFor } from '../payments/stripe.ts'
-import { getOrder } from '../domain/orders.ts'
+import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.ts'
+import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
+import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
+import { generateVersions, setVersionWeight } from '../pages/versions.ts'
+import { sendEmail, orderContext } from '../email/send.ts'
+import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
 import { onboard } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
@@ -383,6 +388,143 @@ export function adminRouter(): Router {
     return page(ctx, current, 'settings', 'Payments', pages.paymentsPage(ctxFor(current, ctx)))
   })
 
+  /* ------------------------------------------------- dropshipping ops */
+
+  router.post('/admin/products/import', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products', confirmed: true })
+      const productId = (result.data as { id?: string })?.id
+      return redirect(productId ? `/admin/products/${productId}?flash=${encodeURIComponent(result.summary)}` : `/admin/products?flash=${encodeURIComponent(result.summary)}`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Import failed'}`)
+    }
+  })
+
+  router.post('/admin/products/:id/supplier', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const number = (key: string) => (body[key] === undefined || body[key] === '' ? undefined : Number(body[key]))
+    updateProduct(db(), current.store.id, ctx.params.id as string, {
+      supplier: { name: String(body.name ?? ''), url: String(body.url ?? ''), sku: String(body.sku ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), processingDays: number('processingDays'), shippingDaysMin: number('shippingDaysMin'), shippingDaysMax: number('shippingDaysMax') },
+      metadata: { sizeChart: String(body.sizeChart ?? '') },
+    })
+    return back(ctx, 'Supplier saved. Margins and delivery estimates use it now.')
+  })
+
+  router.post('/admin/products/:id/versions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const picked = (Array.isArray(body.formats) ? body.formats : body.formats ? [body.formats] : []) as string[]
+    const kind = body.kind === 'advertorial' ? 'advertorial' : 'pdp'
+    const formats = picked.filter((entry) => entry.startsWith(`${kind}:`)).map((entry) => entry.split(':')[1] as string)
+    try {
+      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true' })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'generate_versions', target: ctx.params.id as string, diff: { kind, formats, direction: body.direction, pages: pages.map((page) => page.id) } })
+      return back(ctx, `Generated ${pages.length} ${kind === 'pdp' ? 'product page version' : 'advertorial'}${pages.length === 1 ? '' : 's'}: ${pages.map((page) => page.format).join(', ')}.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not generate'}`)
+    }
+  })
+
+  router.post('/admin/versions/:id/weight', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const page = setVersionWeight(db(), current.store.id, ctx.params.id as string, Number(body.weight ?? 0))
+    return back(ctx, page.weight > 0 ? `${page.title} is in the test at weight ${page.weight}.` : `${page.title} is out of the test.`)
+  })
+
+  router.post('/admin/orders/:id/supplier', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const number = (key: string) => (body[key] === undefined || body[key] === '' ? undefined : Number(body[key]))
+    const order = recordSupplierOrder(db(), current.store.id, ctx.params.id as string, { supplier: String(body.supplier ?? ''), orderId: String(body.orderId ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), ...(body.tracking ? { tracking: String(body.tracking) } : {}), ...(body.carrier ? { carrier: String(body.carrier) } : {}) })
+    if (body.tracking) {
+      const shipment = order.fulfillments.at(-1)
+      void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
+    }
+    return back(ctx, body.tracking ? 'Saved and marked shipped; the customer has the tracking link.' : 'Supplier order saved.')
+  })
+
+  router.post('/admin/orders/:id/delivered', (ctx) => {
+    const current = session(ctx)
+    const order = markDelivered(db(), current.store.id, ctx.params.id as string)
+    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)) }).catch(() => undefined)
+    return back(ctx, 'Marked delivered. The review request goes out a week from now.')
+  })
+
+  router.get('/admin/profit', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'profit', 'Profit', pages.profitPage(ctxFor(current, ctx), Number(ctx.query.get('days') ?? 30) || 30))
+  })
+
+  router.post('/admin/profit/spend', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    recordAdSpend(db(), current.store.id, { day: String(body.day ?? new Date().toISOString()), platform: String(body.platform ?? 'Other'), amountCents: Math.round(Number(body.amountCents ?? 0)), note: String(body.note ?? '') })
+    return back(ctx, 'Logged.')
+  })
+
+  router.get('/admin/funnels', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'funnels', 'Funnels', pages.funnelsPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/funnels', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const number = (key: string) => (body[key] === undefined || body[key] === '' ? undefined : Number(body[key]))
+    upsertFunnel(db(), current.store.id, {
+      ...(body.id ? { id: String(body.id) } : {}),
+      name: String(body.name ?? 'Funnel'),
+      productId: String(body.productId ?? ''),
+      advertorialPageId: String(body.advertorialPageId ?? ''),
+      offerPageId: String(body.offerPageId ?? ''),
+      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: true },
+      upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') },
+      downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') },
+    })
+    return back(ctx, 'Funnel saved.')
+  })
+
+  router.post('/admin/funnels/:id/delete', (ctx) => {
+    const current = session(ctx)
+    deleteFunnel(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, 'Funnel deleted.')
+  })
+
+  router.post('/admin/questions/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    if (body.hide === 'true') hideQuestion(db(), current.store.id, ctx.params.id as string)
+    else answerQuestion(db(), current.store.id, ctx.params.id as string, String(body.answer ?? ''))
+    return back(ctx, body.hide === 'true' ? 'Hidden.' : 'Answered; it is on the product page.')
+  })
+
+  router.post('/admin/reviews/import', async (ctx) => {
+    const current = session(ctx)
+    const files = await ctx.files()
+    const body = await ctx.body()
+    if (!files.csv) return back(ctx, '!Choose a CSV first.')
+    const result = importReviews(db(), current.store.id, files.csv.data.toString('utf8'), { ...(body.productId ? { productId: String(body.productId) } : {}) })
+    return back(ctx, `Imported ${result.imported} reviews across ${result.products} products; ${result.skipped} rows skipped.`)
+  })
+
+  router.post('/admin/stock-alerts/notify', async (ctx) => {
+    const current = session(ctx)
+    const alerts = pendingStockAlerts(db(), current.store.id)
+    const sent: string[] = []
+    for (const alert of alerts) {
+      const variant = getVariant(db(), current.store.id, alert.variant_id)
+      if (!variant || (variant.inventory <= 0 && !variant.allowBackorder)) continue
+      await sendEmail(db(), current.store.id, { template: 'welcome', to: alert.email, context: { storeUrl: ctx.url.origin + storeUrl(ctx, current.store), heading: 'It is back in stock' } })
+      sent.push(alert.id)
+    }
+    markStockAlertsNotified(db(), sent)
+    return back(ctx, `Emailed ${sent.length} of ${alerts.length}; the rest are still out of stock.`)
+  })
+
   router.get('/admin/switch', (ctx) => {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
@@ -589,9 +731,6 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      if (!planBySlug(current.store.planSlug).customDomain) {
-        throw new PlanLimitError('A custom domain', planBySlug(current.store.planSlug), PLANS.find((plan) => plan.customDomain))
-      }
       addDomain(db(), current.store.id, String(body.hostname ?? ''))
       return back(ctx, 'Add the two DNS records below, then verify.')
     } catch (error) {
@@ -616,9 +755,6 @@ export function adminRouter(): Router {
     requireRole(db(), current.user.id, current.store.id, 'owner')
     const body = await ctx.body()
     try {
-      if (!planBySlug(current.store.planSlug).prioritySupport) {
-        throw new PlanLimitError('Inviting teammates', planBySlug(current.store.planSlug), PLANS.find((plan) => plan.prioritySupport))
-      }
       const result = inviteTeammate(db(), current.store.id, String(body.email ?? ''), String(body.role ?? 'member') as 'member')
       return back(ctx, result.joined ? 'They already had an account and now have access.' : 'Invite created.')
     } catch (error) {

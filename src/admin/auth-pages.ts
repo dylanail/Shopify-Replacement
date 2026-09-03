@@ -1,6 +1,4 @@
 import { escapeHtml } from '../lib/http.ts'
-import { PLANS } from '../control/plans.ts'
-import { format } from '../lib/money.ts'
 
 const EXAMPLES = [
   'A hand-stitched boxing gear store called Ironjaw & Co, 1920s heritage leather atelier in Mexico City',
@@ -78,12 +76,6 @@ export function onboardingPage(name: string, error: string | null, hasStores = f
       <div class="field"><label for="siteUrl">Your existing site (optional)</label>
         <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
-      <div class="field" style="margin-bottom:.3rem"><label>Plan</label></div>
-      <div class="plans">${PLANS.filter((plan) => plan.monthlyPriceCents >= 0)
-        .map((plan) => `<label class="plan"><input type="radio" name="planSlug" value="${plan.slug}" ${plan.slug === 'free' ? 'checked' : ''}>
-          <strong>${escapeHtml(plan.name)}</strong> — ${plan.monthlyPriceCents ? `${format(plan.monthlyPriceCents, 'USD')}/mo` : 'free'}<br>
-          <span class="muted">${escapeHtml(plan.tagline)}</span></label>`)
-        .join('')}</div>
       <button type="submit">Build my store</button>
     </form>
     <div class="steps">

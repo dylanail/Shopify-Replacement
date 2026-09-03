@@ -8,6 +8,10 @@ import { stripeFor, verifyWebhookSignature } from '../payments/stripe.ts'
 import { upsertCustomer } from '../domain/customers.ts'
 import { logger } from '../lib/log.ts'
 import type { LineItem } from '../domain/types.ts'
+import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
+import { funnelForProducts, resolveBump, resolveOffer } from '../domain/funnels.ts'
+import { recordDownsell } from '../domain/orders.ts'
+import { pickPdpVersion } from '../pages/versions.ts'
 import { getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
 import { findArticle, listBlogs } from '../domain/content.ts'
 import { CheckoutError, completeCart, getOrder } from '../domain/orders.ts'
@@ -105,7 +109,10 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product || product.status !== 'published') throw notFound('No such product')
-    record(ctx, current, 'view.product', { productId: product.id })
+    const sessionKey = current.preview ? '' : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? '') })
+    const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, sessionKey)
+    record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
+    if (version && version.productId === product.id) return html(view.blockPage(current, version))
     const stats = statsFor(current.db, current.store.id, product.id)
     const reviews = listReviews(current.db, current.store.id, { productId: product.id, status: 'approved', limit: 12 })
     const companions = companionsFor(current.db, current.store.id, product.id, 2)
@@ -127,6 +134,39 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     })
     record(ctx, current, 'review.submit', { productId: product.id })
     return redirect(`${current.base}/products/${product.handle}#review`)
+  })
+
+  router.post('/products/:handle/questions', async (ctx) => {
+    const current = open(ctx)
+    const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
+    if (!product) throw notFound('No such product')
+    const body = await ctx.body()
+    if (String(body.question ?? '').trim().length < 4) return redirect(`${current.base}/products/${product.handle}`)
+    askQuestion(current.db, current.store.id, { productId: product.id, question: String(body.question), asker: String(body.asker ?? ''), email: String(body.email ?? '') })
+    return html(view.simplePage(current, 'Thanks for asking', '<p>We answer every question. If you left an email, the answer goes there too, and it appears on the page for the next person.</p>'))
+  })
+
+  router.post('/products/:handle/notify', async (ctx) => {
+    const current = open(ctx)
+    const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
+    if (!product) throw notFound('No such product')
+    const body = await ctx.body()
+    const email = String(body.email ?? '')
+    if (email.includes('@')) requestStockAlert(current.db, current.store.id, String(body.variantId ?? product.variants[0]?.id ?? ''), email)
+    return html(view.simplePage(current, 'You are on the list', '<p>One email when it is back. Nothing else.</p>'))
+  })
+
+  router.get('/track', (ctx) => {
+    const current = withTotals(open(ctx))
+    const number = ctx.query.get('order')?.replace('#', '').trim() ?? ''
+    const email = ctx.query.get('email')?.trim().toLowerCase() ?? ''
+    const related = listProducts(current.db, current.store.id, { status: 'published', limit: 3 })
+    if (!number) return html(view.trackPage(current, { related }))
+    const order = getOrder(current.db, current.store.id, number)
+    if (!order || (email && order.email !== email) || (!email && !current.preview)) {
+      return html(view.trackPage(current, { error: 'No order matches that number and email.', related }))
+    }
+    return html(view.trackPage(current, { tracking: trackingFor(current.db, current.store.id, order), related }))
   })
 
   router.post('/cart/add', async (ctx) => {
@@ -158,7 +198,16 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   })
 
   router.get('/cart', (ctx) => {
-    const current = withTotals(open(ctx))
+    const resumed = ctx.query.get('resume')
+    let current = open(ctx)
+    if (resumed) {
+      const cart = getCart(current.db, current.store.id, resumed)
+      if (cart && !cart.orderId) {
+        setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
+        current = { ...current, cart }
+      }
+    }
+    current = withTotals(current)
     ensureCart(ctx, current)
     return html(view.cartPage(current, current.totals!))
   })
@@ -168,7 +217,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!current.cart?.items.length) return redirect(`${current.base}/cart`)
     record(ctx, current, 'checkout.start', { amountCents: current.totals?.totalCents ?? 0 })
     const stripe = stripeFor(current.db, current.store.id)
-    return html(view.checkoutPage(current, { totals: current.totals!, region: regionOf(current), stripe: stripe ? { publishableKey: stripe.config.publishableKey } : null }))
+    const funnel = funnelForProducts(current.db, current.store.id, current.cart.items.map((item) => item.productId))
+    return html(view.checkoutPage(current, { totals: current.totals!, region: regionOf(current), stripe: stripe ? { publishableKey: stripe.config.publishableKey } : null, bump: resolveBump(current.db, current.store.id, funnel) }))
   })
 
   /** The no-provider path: the same form, a demo order, then the offer. */
@@ -179,6 +229,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const draft = readCheckoutForm(body)
     if (body.shippingOptionId) setShipping(current.db, current.store.id, cart.id, String(body.shippingOptionId))
+    if (body.bumpVariantId && !cart.items.some((item) => item.variantId === body.bumpVariantId)) addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump')
     try {
       const order = completeCart(current.db, current.store.id, cart.id, {
         email: draft.email ?? '',
@@ -203,7 +254,9 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const order = getOrder(current.db, current.store.id, ctx.params.id as string)
     if (!order) throw notFound('No such order')
-    return html(view.orderPage(current, order))
+    const inOrder = new Set(order.items.map((item) => item.productId))
+    const related = listProducts(current.db, current.store.id, { status: 'published', limit: 6 }).filter((product) => !inOrder.has(product.id)).slice(0, 3)
+    return html(view.orderPage(current, order, related))
   })
 
   router.post('/subscribe', async (ctx) => {
@@ -297,6 +350,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const line = getCart(current.db, current.store.id, cart.id)?.items[0]
     record(ctx, current, 'cart.add', { ...(line ? { productId: line.productId } : {}), amountCents: (line?.unitCents ?? 0) * (line?.quantity ?? 1) })
     return redirect(`${current.base}/checkout`)
+  })
+
+  /** The order bump: one checkbox, one line in the cart. */
+  router.post('/checkout/bump', async (ctx) => {
+    const current = open(ctx)
+    const cart = ensureCart(ctx, current)
+    const body = await ctx.body()
+    const variantId = String(body.variantId ?? '')
+    const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump') : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
+    const amounts = totals(current.db, current.store.id, updated)
+    return { ...amounts, totalsHtml: view.totalsBlock({ ...current, cart: updated, totals: amounts }, amounts) }
   })
 
   router.post('/checkout/shipping', async (ctx) => {
@@ -400,15 +464,52 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     return { received: true, matched: Boolean(order) }
   })
 
-  /** The one-click offer after payment. Shown once; declined or accepted, never again. */
+  /** The one-click offer after payment. Shown once; declined or accepted, never again. Declined → the downsell, once. */
   router.get('/orders/:id/offer', (ctx) => {
     const current = withTotals(open(ctx))
     const order = getOrder(current.db, current.store.id, ctx.params.id as string)
     if (!order) throw notFound('No such order')
-    if (order.upsell.offered) return redirect(`${current.base}/orders/${order.id}`)
-    const offer = pickOffer(current, order)
+    if (order.upsell.offered) return redirect(`${current.base}/orders/${order.id}${order.upsell.accepted || order.downsell.offered ? '' : '/downsell'}`)
+    const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
+    const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
     if (!offer) return redirect(`${current.base}/orders/${order.id}`)
-    return html(view.upsellPage(current, order, offer))
+    return html(view.offerPage(current, order, offer, 'upsell'))
+  })
+
+  router.get('/orders/:id/downsell', (ctx) => {
+    const current = withTotals(open(ctx))
+    const order = getOrder(current.db, current.store.id, ctx.params.id as string)
+    if (!order) throw notFound('No such order')
+    if (order.downsell.offered || order.upsell.accepted) return redirect(`${current.base}/orders/${order.id}`)
+    const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
+    if (!funnel?.downsell || (!funnel.downsell.variantId && !funnel.downsell.discountPercent)) return redirect(`${current.base}/orders/${order.id}`)
+    const offer = resolveOffer(current.db, current.store.id, funnel.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
+    if (!offer) return redirect(`${current.base}/orders/${order.id}`)
+    return html(view.offerPage(current, order, offer, 'downsell'))
+  })
+
+  router.post('/orders/:id/downsell', async (ctx) => {
+    const current = open(ctx)
+    const order = getOrder(current.db, current.store.id, ctx.params.id as string)
+    if (!order) throw notFound('No such order')
+    if (order.downsell.offered) return redirect(`${current.base}/orders/${order.id}`)
+    const body = await ctx.body()
+    const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
+    const offer = resolveOffer(current.db, current.store.id, funnel?.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
+    if (body.accept !== 'yes' || !offer) {
+      recordDownsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
+      return redirect(`${current.base}/orders/${order.id}`)
+    }
+    const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+    const paid = await chargeSaved(current, order, price, { downsell: 'true' })
+    if (!paid.ok) {
+      recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}?offer=failed`)
+    }
+    const variant = offer.product.variants.find((entry) => entry.id === offer.variantId)!
+    recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line: { variantId: variant.id, productId: offer.product.id, title: offer.product.title, variantTitle: variant.title, image: variant.image || offer.product.heroImage, unitCents: price, quantity: 1, source: 'downsell' }, amountCents: price })
+    record(ctx, current, 'checkout.complete', { productId: offer.product.id, amountCents: price, meta: { downsell: true } })
+    return redirect(`${current.base}/orders/${order.id}`)
   })
 
   router.post('/orders/:id/offer', async (ctx) => {
@@ -417,29 +518,19 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!order) throw notFound('No such order')
     if (order.upsell.offered) return redirect(`${current.base}/orders/${order.id}`)
     const body = await ctx.body()
-    const offer = pickOffer(current, order)
+    const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
+    const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
     if (body.accept !== 'yes' || !offer) {
       recordUpsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
-      return redirect(`${current.base}/orders/${order.id}`)
+      return redirect(`${current.base}/orders/${order.id}/downsell`)
     }
     const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
-    let paymentIntentId = ''
-    if (order.paymentProvider === 'stripe') {
-      const stripe = stripeFor(current.db, current.store.id)
-      if (!stripe || !order.paymentCustomerId || !order.paymentMethodId) {
-        recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
-        return redirect(`${current.base}/orders/${order.id}`)
-      }
-      try {
-        const intent = await stripe.client.paymentIntents.chargeOffSession({ amountCents: price, currency: order.currency, customerId: order.paymentCustomerId, paymentMethodId: order.paymentMethodId, metadata: { storeId: current.store.id, orderId: order.id, upsell: 'true' } })
-        if (intent.status !== 'succeeded' && intent.status !== 'processing') throw new Error(`Payment ${intent.status}`)
-        paymentIntentId = intent.id
-      } catch (error) {
-        log.warn(`upsell charge failed: ${error instanceof Error ? error.message : String(error)}`)
-        recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
-        return redirect(`${current.base}/orders/${order.id}?offer=failed`)
-      }
+    const paid = await chargeSaved(current, order, price, { upsell: 'true' })
+    if (!paid.ok) {
+      recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}?offer=failed`)
     }
+    const paymentIntentId = paid.intentId
     const variant = offer.product.variants.find((entry) => entry.id === offer.variantId)!
     const line: LineItem = { variantId: variant.id, productId: offer.product.id, title: offer.product.title, variantTitle: variant.title, image: variant.image || offer.product.heroImage, unitCents: price, quantity: 1, source: 'post-purchase' }
     recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line, amountCents: price, ...(paymentIntentId ? { paymentIntentId } : {}) })
@@ -505,6 +596,21 @@ function afterOrder(ctx: Ctx, current: StoreView, order: ReturnType<typeof compl
   // The receipt is not allowed to fail the checkout: the order is already
   // written and paid for by the time this runs.
   void sendEmail(current.db, current.store.id, { template: 'order_confirmation', to: order.email, context: orderContext(order, `${ctx.url.origin}${current.base}`) }).catch(() => undefined)
+}
+
+/** Charges a saved card off-session on Stripe orders; demo orders just say yes. */
+async function chargeSaved(current: StoreView, order: ReturnType<typeof completeCart>, amountCents: number, metadata: Record<string, string>): Promise<{ ok: boolean; intentId: string }> {
+  if (order.paymentProvider !== 'stripe') return { ok: true, intentId: '' }
+  const stripe = stripeFor(current.db, current.store.id)
+  if (!stripe || !order.paymentCustomerId || !order.paymentMethodId) return { ok: false, intentId: '' }
+  try {
+    const intent = await stripe.client.paymentIntents.chargeOffSession({ amountCents, currency: order.currency, customerId: order.paymentCustomerId, paymentMethodId: order.paymentMethodId, metadata: { storeId: current.store.id, orderId: order.id, ...metadata } })
+    if (intent.status !== 'succeeded' && intent.status !== 'processing') throw new Error(`Payment ${intent.status}`)
+    return { ok: true, intentId: intent.id }
+  } catch (error) {
+    log.warn(`off-session charge failed: ${error instanceof Error ? error.message : String(error)}`)
+    return { ok: false, intentId: '' }
+  }
 }
 
 /**

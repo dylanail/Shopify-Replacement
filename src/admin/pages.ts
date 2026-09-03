@@ -23,6 +23,10 @@ import { latestResearch } from '../agent/research.ts'
 import { listPages, type Page } from '../pages/store.ts'
 import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
+import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
+import { listFunnels } from '../domain/funnels.ts'
+import { versionStats, versionsFor } from '../pages/versions.ts'
+import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
@@ -103,6 +107,11 @@ export function productsPage(ctx: Ctx, status: string, search: string): string {
     <p class="muted" style="margin:.25rem 0 0">${products.length} shown</p></div>
     <form method="get" class="row"><input name="search" value="${escapeHtml(search)}" placeholder="Search" style="width:200px">
       <input type="hidden" name="status" value="${escapeHtml(status)}"><button class="btn" type="submit">Search</button></form></div>
+  <form method="post" action="/admin/products/import" class="card row" style="align-items:flex-end">
+    <div class="field" style="flex:2;margin:0"><label>Import a product from a URL — any Shopify store's product page, or a supplier page with Open Graph tags</label><input name="url" type="url" required placeholder="https://some-store.com/products/the-thing"></div>
+    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="2.5"></div>
+    <label class="row" style="font-size:12px;margin:0 .5rem .6rem"><input type="checkbox" name="asSupplier" value="true" checked> Their price is my cost</label>
+    <button class="btn primary" type="submit">Import</button></form>
   <div class="tabs">${['all', 'published', 'draft', 'archived']
     .map((option) => `<a class="${option === status ? 'on' : ''}" href="/admin/products?status=${option}">${option[0]?.toUpperCase()}${option.slice(1)}</a>`)
     .join('')}</div>
@@ -175,7 +184,54 @@ export function productDetail(ctx: Ctx, productId: string): string {
     <div class="card"><h2>SEO</h2>
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.title ?? product.title)}</p>
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.description ?? '')}</p></div>
-  </div></div>`
+  </div></div>
+  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${versionsCard(ctx, product)}</div>`
+}
+
+function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
+  const supplier = product.supplier
+  const price = Math.min(...product.variants.map((variant) => variant.priceCents))
+  const margin = marginFor(price, supplier)
+  const currency = ctx.store.currency
+  return `<div class="card"><h2>Supplier &amp; margin</h2>
+    <form method="post" action="/admin/products/${escapeHtml(product.id)}/supplier">
+      <div class="row"><div class="field" style="flex:1"><label>Supplier</label><input name="name" value="${escapeHtml(supplier.name ?? '')}" placeholder="AliExpress / CJ / Zendrop"></div>
+        <div class="field" style="flex:2"><label>Supplier URL</label><input name="url" value="${escapeHtml(supplier.url ?? '')}" placeholder="https://"></div></div>
+      <div class="row"><div class="field" style="flex:1"><label>Cost (minor units)</label><input name="costCents" value="${supplier.costCents ?? ''}"></div>
+        <div class="field" style="flex:1"><label>Supplier shipping</label><input name="shippingCents" value="${supplier.shippingCents ?? ''}"></div>
+        <div class="field" style="flex:1"><label>Supplier SKU</label><input name="sku" value="${escapeHtml(supplier.sku ?? '')}"></div></div>
+      <div class="row"><div class="field" style="flex:1"><label>Processing days</label><input name="processingDays" value="${supplier.processingDays ?? ''}"></div>
+        <div class="field" style="flex:1"><label>Ship days min</label><input name="shippingDaysMin" value="${supplier.shippingDaysMin ?? ''}"></div>
+        <div class="field" style="flex:1"><label>Ship days max</label><input name="shippingDaysMax" value="${supplier.shippingDaysMax ?? ''}"></div></div>
+      <div class="field"><label>Size chart (first line header, cells with |) — shown on the page</label><textarea name="sizeChart" rows="2">${escapeHtml(product.metadata.sizeChart ?? '')}</textarea></div>
+      <button class="btn primary" type="submit">Save</button></form>
+    <table class="data" style="margin-top:.8rem"><tr><td>Price</td><td style="text-align:right">${format(margin.priceCents, currency)}</td></tr>
+      <tr><td>Cost</td><td style="text-align:right">−${format(margin.costCents, currency)}</td></tr><tr><td>Supplier shipping</td><td style="text-align:right">−${format(margin.shippingCents, currency)}</td></tr>
+      <tr><td>Card fees</td><td style="text-align:right">−${format(margin.feesCents, currency)}</td></tr>
+      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr></table>
+    <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
+}
+
+function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
+  const stats = versionStats(ctx.db, ctx.store.id, product.id)
+  const advertorials = versionsFor(ctx.db, ctx.store.id, product.id).filter((page) => page.role === 'advertorial')
+  const currency = ctx.store.currency
+  return `<div class="card"><h2>Versions &amp; split test</h2>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a visitor is assigned one by their session and sees it every time. Weight 0 keeps it out.</p>
+    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th></th></tr></thead><tbody>
+      ${stats.map((row) => `<tr><td><a href="/admin/pages/${escapeHtml(row.pageId)}/edit">${escapeHtml(row.title.replace(`${product.title} — `, ''))}</a><div class="muted" style="font-size:11px">${escapeHtml(row.format)} · ${row.status}</div></td>
+        <td><form method="post" action="/admin/versions/${escapeHtml(row.pageId)}/weight" class="row" style="gap:.3rem"><input name="weight" value="${row.weight}" style="width:52px"><button class="btn" type="submit">Set</button></form></td>
+        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td>${(row.conversion * 100).toFixed(1)}%</td>
+        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
+    ${advertorials.length ? `<p class="muted" style="font-size:12px;margin-top:.6rem">Advertorials: ${advertorials.map((page) => `<a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.format)}</a>`).join(' · ')}</p>` : ''}
+    <form method="post" action="/admin/products/${escapeHtml(product.id)}/versions" style="margin-top:1rem;border-top:1px solid var(--line);padding-top:.8rem">
+      <div class="eyebrow" style="margin-bottom:.5rem">Generate versions</div>
+      <div class="row"><div class="field" style="flex:1"><label>What</label><select name="kind"><option value="pdp">Product page versions</option><option value="advertorial">Advertorials</option></select></div>
+        <div class="field" style="flex:1"><label>How many (if no formats picked)</label><input name="count" value="3"></div></div>
+      <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${[...PDP_FORMATS.map((format) => ({ ...format, group: 'pdp' })), ...ADVERTORIAL_FORMATS.map((format) => ({ ...format, group: 'advertorial' }))].map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.group}:${format.id}"> ${escapeHtml(format.name)} <span class="muted">(${format.group})</span></label>`).join('')}</div></div>
+      <div class="field"><label>Direction — free-form. Tone words are read (urgent, premium, warm, clinical, playful, blunt); "quoted phrases" must appear; "for gift buyers" sets the audience; "focus on durability" sets the angle.</label><textarea name="direction" rows="2" placeholder="Premium and understated, for people who train seriously, focus on the repair guarantee"></textarea></div>
+      <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="publish" value="true"> Publish immediately</label>
+      <button class="btn primary" type="submit">Generate</button></form></div>`
 }
 
 /* --------------------------------------------------------------------- orders */
@@ -201,10 +257,19 @@ export function orderDetail(ctx: Ctx, orderId: string): string {
   return `${flash(ctx)}<div class="head"><div><div class="eyebrow"><a href="/admin/orders" style="text-decoration:none">Orders</a></div>
     <h1 class="serif">Order #${order.displayId}</h1></div>
     <div class="row">
-      <form method="post" action="/admin/orders/${escapeHtml(order.id)}/fulfill" class="row">
-        <input name="tracking" placeholder="Tracking number" style="width:170px"><button class="btn" type="submit">Fulfil</button></form>
       <form method="post" action="/admin/orders/${escapeHtml(order.id)}/refund"><button class="btn" type="submit">Refund</button></form>
+      ${order.fulfillmentStatus !== 'delivered' ? `<form method="post" action="/admin/orders/${escapeHtml(order.id)}/delivered"><button class="btn" type="submit">Mark delivered</button></form>` : ''}
     </div></div>
+  <div class="card"><h2>Fulfil via supplier</h2>
+    <form method="post" action="/admin/orders/${escapeHtml(order.id)}/supplier" class="row" style="align-items:flex-end">
+      <div class="field" style="flex:1;margin:0"><label>Supplier</label><input name="supplier" value="${escapeHtml(order.supplierOrder.supplier ?? '')}" placeholder="AliExpress / CJ"></div>
+      <div class="field" style="flex:1;margin:0"><label>Supplier order id</label><input name="orderId" value="${escapeHtml(order.supplierOrder.orderId ?? '')}"></div>
+      <div class="field" style="width:110px;margin:0"><label>Cost paid</label><input name="costCents" value="${order.supplierOrder.costCents ?? ''}" placeholder="cents"></div>
+      <div class="field" style="width:110px;margin:0"><label>Shipping paid</label><input name="shippingCents" value="${order.supplierOrder.shippingCents ?? ''}"></div>
+      <div class="field" style="flex:1;margin:0"><label>Tracking number</label><input name="tracking" placeholder="LP…, 1Z…, 94…"></div>
+      <div class="field" style="width:120px;margin:0"><label>Carrier (auto)</label><input name="carrier" placeholder="auto"></div>
+      <button class="btn primary" type="submit">Save</button></form>
+    <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Saving a tracking number marks the order shipped and emails the customer with a link; the carrier is detected from the number. The customer can follow it at ${escapeHtml(ctx.storeUrl)}/track.</p></div>
   <div class="grid2"><div class="card" style="padding:0"><table class="data"><thead><tr><th></th><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>
     ${order.items.map((item) => `<tr><td style="width:52px"><img src="${escapeHtml(item.image)}" alt=""></td>
       <td>${escapeHtml(item.title)}<div class="muted" style="font-size:11.5px">${escapeHtml(item.variantTitle)}</div></td>
@@ -299,7 +364,19 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
 export function reviewsPage(ctx: Ctx, status: string): string {
   const reviews = listReviews(ctx.db, ctx.store.id, { status, limit: 100 })
   const products = new Map(listProducts(ctx.db, ctx.store.id, { limit: 300 }).map((product) => [product.id, product.title]))
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Reviews</h1></div>
+  const questions = listQuestions(ctx.db, ctx.store.id, { status: 'pending' })
+  const alerts = pendingStockAlerts(ctx.db, ctx.store.id)
+  return `${flash(ctx)}<div class="head"><h1 class="serif">Reviews, questions &amp; alerts</h1></div>
+  <div class="grid2" style="margin-bottom:1rem">
+    <form method="post" action="/admin/reviews/import" enctype="multipart/form-data" class="card"><h2>Import reviews (CSV)</h2>
+      <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Loox, Judge.me and AliExpress exports: rating, body/review, author, photo URLs, product handle. Imported reviews are never marked verified.</p>
+      <div class="row"><div class="field" style="flex:1"><label>CSV file</label><input type="file" name="csv" accept=".csv,text/csv" required></div>
+        <div class="field" style="flex:1"><label>Attach all to</label><select name="productId"><option value="">— match by product column —</option>${[...products.entries()].map(([id, title]) => `<option value="${escapeHtml(id)}">${escapeHtml(title)}</option>`).join('')}</select></div></div>
+      <button class="btn primary" type="submit">Import</button></form>
+    <div><div class="card"><h2>Questions waiting (${questions.length})</h2>${questions.slice(0, 8).map((entry) => `<form method="post" action="/admin/questions/${escapeHtml(entry.id)}" style="border-top:1px solid var(--line);padding:.6rem 0">
+      <div style="font-size:13px"><strong>${escapeHtml(entry.question)}</strong> <span class="muted">— ${escapeHtml(products.get(entry.productId) ?? '')}${entry.asker ? `, ${escapeHtml(entry.asker)}` : ''}</span></div>
+      <div class="row" style="margin-top:.4rem"><input name="answer" placeholder="Answer" style="flex:1" required><button class="btn primary" type="submit">Answer</button><button class="btn" type="submit" name="hide" value="true">Hide</button></div></form>`).join('') || '<p class="muted" style="font-size:12px">None.</p>'}</div>
+    <div class="card"><h2>Back-in-stock requests (${alerts.length})</h2>${alerts.slice(0, 8).map((alert) => `<div class="muted" style="font-size:12px;border-top:1px solid var(--line);padding:.35rem 0">${escapeHtml(alert.email)} · ${escapeHtml(alert.variant_id)} · ${alert.created_at.slice(0, 10)}</div>`).join('') || '<p class="muted" style="font-size:12px">None.</p>'}${alerts.length ? `<form method="post" action="/admin/stock-alerts/notify" style="margin-top:.6rem"><button class="btn" type="submit">Email everyone whose variant is back in stock</button></form>` : ''}</div></div></div>
   <div class="tabs">${['pending', 'approved', 'rejected', 'all'].map((option) => `<a class="${option === status ? 'on' : ''}" href="/admin/reviews?status=${option}">${option}</a>`).join('')}</div>
   <div class="grid3">${reviews.length ? reviews.map((review) => `<div class="card">
     <div class="row" style="justify-content:space-between"><strong>${'★'.repeat(review.rating)}${'☆'.repeat(5 - review.rating)}</strong>
@@ -467,19 +544,63 @@ export function settingsPage(ctx: Ctx): string {
         || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
   </div>
   <div>
-    <div class="card"><h2>Plan</h2>
-      <p style="margin:.3rem 0"><strong>${escapeHtml(plan.name)}</strong> — ${plan.monthlyPriceCents < 0 ? 'custom' : format(plan.monthlyPriceCents, 'USD')}/mo,
-        ${plan.platformFeePercent}% platform fee, ${(plan.cardRate * 100).toFixed(1)}% + 30c cards.</p>
-      <p class="muted" style="font-size:12px">${plan.displayFeatures.join(' · ')}</p>
-      <form method="post" action="/admin/plan" class="row" style="margin-top:.6rem">
-        <select name="planSlug" style="flex:1">${PLANS.map((option) => `<option value="${option.slug}" ${option.slug === plan.slug ? 'selected' : ''}>${escapeHtml(option.name)}${option.monthlyPriceCents > 0 ? ` — ${format(option.monthlyPriceCents, 'USD')}/mo, save ${yearlySavingsPercent(option)}% yearly` : ''}</option>`).join('')}</select>
-        <button class="btn">Switch</button></form></div>
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
   </div></div>`
+}
+
+/* --------------------------------------------------------------- profit */
+
+export function profitPage(ctx: Ctx, days: number): string {
+  const report = profitReport(ctx.db, ctx.store.id, days)
+  const spend = listAdSpend(ctx.db, ctx.store.id, days)
+  const currency = ctx.store.currency
+  const peak = Math.max(1, ...report.perDay.map((day) => Math.abs(day.profit)))
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Profit</h1><p class="muted" style="margin:.25rem 0 0">Revenue less refunds, supplier cost, supplier shipping, card fees and the ad spend you log. Nothing estimated.</p></div>
+    <form method="get"><select name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
+  <div class="kpis"><div class="kpi"><div class="label">Revenue</div><div class="value">${format(report.revenueCents, currency)}</div><div class="delta">${report.orders} orders</div></div>
+    <div class="kpi"><div class="label">COGS + supplier shipping</div><div class="value">−${format(report.cogsCents + report.supplierShippingCents, currency)}</div></div>
+    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
+    <div class="kpi"><div class="label">Fees + refunds</div><div class="value">−${format(report.feesCents + report.refundsCents, currency)}</div></div>
+    <div class="kpi"><div class="label">Net profit</div><div class="value" style="color:${report.profitCents >= 0 ? 'var(--ok)' : 'var(--bad)'}">${format(report.profitCents, currency)}</div><div class="delta ${report.profitCents < 0 ? 'neg' : ''}">${report.revenueCents ? Math.round((report.profitCents / report.revenueCents) * 100) : 0}% margin</div></div></div>
+  <div class="grid2"><div class="card"><h2>Profit by day</h2><div class="spark" style="margin-top:.7rem;height:64px">${report.perDay.map((day) => `<i style="height:${Math.max(2, (Math.abs(day.profit) / peak) * 64)}px;background:${day.profit >= 0 ? 'var(--ok)' : 'var(--bad)'}" title="${day.day}: ${format(day.profit, currency)} (rev ${format(day.revenue, currency)}, spend ${format(day.spend, currency)})"></i>`).join('') || '<span class="muted">No orders in the window.</span>'}</div></div>
+  <div><form method="post" action="/admin/profit/spend" class="card"><h2>Log ad spend</h2>
+    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div></div>
+    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div><button class="btn primary" type="submit">Log</button></form>
+    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
+}
+
+/* --------------------------------------------------------------- funnels */
+
+export function funnelsPage(ctx: Ctx): string {
+  const funnels = listFunnels(ctx.db, ctx.store.id)
+  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const pages = listPages(ctx.db, ctx.store.id)
+  const variantOptions = (selected?: string) => `<option value="">— pick automatically —</option>` + products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === selected ? 'selected' : ''}>${escapeHtml(product.title)} — ${escapeHtml(variant.title)} (${format(variant.priceCents, ctx.store.currency)})</option>`)).join('')
+  const pageOptions = (role: string, selected?: string) => `<option value="">— none —</option>` + pages.filter((page) => page.role === role || page.kind === role || role === 'any').map((page) => `<option value="${escapeHtml(page.id)}" ${page.id === selected ? 'selected' : ''}>${escapeHtml(page.title)}</option>`).join('')
+  const form = (funnel?: ReturnType<typeof listFunnels>[number]) => `<form method="post" action="/admin/funnels" class="card">
+    ${funnel ? `<input type="hidden" name="id" value="${escapeHtml(funnel.id)}">` : ''}
+    <h2>${funnel ? escapeHtml(funnel.name) : 'New funnel'}</h2>
+    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Name</label><input name="name" value="${escapeHtml(funnel?.name ?? '')}" required></div>
+      <div class="field" style="flex:1"><label>Product (the checkout finds the funnel through it)</label><select name="productId"><option value="">any</option>${products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === funnel?.productId ? 'selected' : ''}>${escapeHtml(product.title)}</option>`).join('')}</select></div></div>
+    <div class="row"><div class="field" style="flex:1"><label>1 · Advertorial page</label><select name="advertorialPageId">${pageOptions('advertorial', funnel?.advertorialPageId)}</select></div>
+      <div class="field" style="flex:1"><label>2 · Offer page</label><select name="offerPageId">${pageOptions('any', funnel?.offerPageId)}</select></div></div>
+    <div class="eyebrow" style="margin:.4rem 0">3 · Checkout order bump</div>
+    <div class="row"><div class="field" style="flex:2"><label>Bump product (default: shipping protection)</label><select name="bumpVariantId">${variantOptions(funnel?.bump.variantId)}</select></div>
+      <div class="field" style="flex:1"><label>Label</label><input name="bumpLabel" value="${escapeHtml(funnel?.bump.label ?? '')}" placeholder="Protect my order"></div><div class="field" style="width:110px"><label>Price</label><input name="bumpPriceCents" value="${funnel?.bump.priceCents ?? ''}" placeholder="299"></div></div>
+    <div class="eyebrow" style="margin:.4rem 0">4 · One-click upsell</div>
+    <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="upsellVariantId">${variantOptions(funnel?.upsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="upsellDiscount" value="${funnel?.upsell.discountPercent ?? 20}"></div></div>
+    <div class="field"><label>Headline</label><input name="upsellHeadline" value="${escapeHtml(funnel?.upsell.headline ?? '')}" placeholder="Add a second pair for 20% off?"></div>
+    <div class="eyebrow" style="margin:.4rem 0">5 · Downsell (only if the upsell is declined)</div>
+    <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
+    <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
+    <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
+    ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
+  <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}</div></div>`
 }
 
 /* ------------------------------------------------------------ pages hub */

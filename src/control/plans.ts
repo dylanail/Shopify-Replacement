@@ -131,7 +131,35 @@ export const PLANS: Plan[] = [
   },
 ]
 
+/**
+ * Personal mode. This deployment is one person's, so every store is on the
+ * owner plan — every limit off, no fee, nothing gated. The tiers above stay
+ * defined so pricing can return as configuration later; nothing else in the
+ * platform tests a plan name.
+ */
+export const OWNER: Plan = {
+  slug: 'owner',
+  name: 'Owner',
+  tagline: 'Your platform. Everything on.',
+  monthlyPriceCents: 0,
+  yearlyPriceCents: 0,
+  platformFeePercent: 0,
+  cardRate: 0.029,
+  maxStores: Number.MAX_SAFE_INTEGER,
+  maxTeamMembers: Number.MAX_SAFE_INTEGER,
+  baseCreditsPerMonth: null,
+  customDomain: true,
+  advancedAnalytics: true,
+  prioritySupport: true,
+  agenticCro: 'autonomous',
+  multiRegion: true,
+  isPopular: false,
+  ctaLabel: '',
+  displayFeatures: ['Everything, no limits, no platform fee'],
+}
+
 export function planBySlug(slug: string): Plan {
+  if (slug === 'owner' || process.env.AMBORAS_PERSONAL !== 'false') return OWNER
   return PLANS.find((plan) => plan.slug === slug) ?? (PLANS[0] as Plan)
 }
 

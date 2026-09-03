@@ -32,6 +32,9 @@ export function rowToOrder(row: Row): Order {
     paymentMethodId: (row.payment_method_id as string) ?? '',
     shippingOptionId: (row.shipping_option_id as string) ?? '',
     upsell: json(row.upsell, {}),
+    downsell: json(row.downsell, {}),
+    supplierOrder: json(row.supplier_order, {}),
+    deliveredAt: (row.delivered_at as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -181,14 +184,47 @@ export function recordUpsell(
   return getOrder(db, storeId, order.id) as Order
 }
 
-export function fulfillOrder(db: Db, storeId: string, orderId: string, input: { provider?: string; tracking?: string } = {}): Order {
+export function recordDownsell(db: Db, storeId: string, orderId: string, outcome: { offered: string; accepted: boolean; line?: LineItem; amountCents?: number }): Order {
+  const order = getOrder(db, storeId, orderId)
+  if (!order) throw new Error('No order')
+  const extra = outcome.accepted ? (outcome.amountCents ?? 0) : 0
+  db.tx(() => {
+    if (outcome.accepted && outcome.line) reserveInventory(db, outcome.line.variantId, outcome.line.quantity)
+    db.update('orders', order.id, {
+      items: outcome.accepted && outcome.line ? [...order.items, outcome.line] : order.items,
+      subtotal_cents: order.subtotalCents + extra,
+      total_cents: order.totalCents + extra,
+      downsell: { offered: outcome.offered, accepted: outcome.accepted, ...(outcome.line ? { variantId: outcome.line.variantId } : {}), amountCents: extra },
+      updated_at: now(),
+    })
+  })
+  return getOrder(db, storeId, order.id) as Order
+}
+
+/** The supplier side of an order: placed with whom, for how much, and how it moves. */
+export function recordSupplierOrder(db: Db, storeId: string, orderId: string, input: { supplier?: string; orderId?: string; costCents?: number; shippingCents?: number; carrier?: string; tracking?: string }): Order {
+  const order = getOrder(db, storeId, orderId)
+  if (!order) throw new Error('No order')
+  const supplierOrder = { ...order.supplierOrder, ...input, placedAt: order.supplierOrder.placedAt ?? now() }
+  delete (supplierOrder as { tracking?: string }).tracking
+  db.update('orders', order.id, { supplier_order: supplierOrder, updated_at: now() })
+  if (input.tracking) return fulfillOrder(db, storeId, order.id, { provider: input.supplier ?? 'supplier', tracking: input.tracking, ...(input.carrier ? { carrier: input.carrier } : {}) })
+  return getOrder(db, storeId, order.id) as Order
+}
+
+export function markDelivered(db: Db, storeId: string, orderId: string): Order {
+  db.run("UPDATE orders SET fulfillment_status = 'delivered', delivered_at = ?, updated_at = ? WHERE id = ? AND store_id = ?", now(), now(), orderId, storeId)
+  return getOrder(db, storeId, orderId) as Order
+}
+
+export function fulfillOrder(db: Db, storeId: string, orderId: string, input: { provider?: string; tracking?: string; carrier?: string } = {}): Order {
   const order = getOrder(db, storeId, orderId)
   if (!order) throw new Error('No order')
   const fulfillments = [
     ...order.fulfillments,
-    { id: id('ful'), provider: input.provider ?? 'manual', tracking: input.tracking ?? '', createdAt: now() },
+    { id: id('ful'), provider: input.provider ?? 'manual', tracking: input.tracking ?? '', ...(input.carrier ? { carrier: input.carrier } : {}), createdAt: now() },
   ]
-  db.update('orders', order.id, { fulfillments, fulfillment_status: 'fulfilled', updated_at: now() })
+  db.update('orders', order.id, { fulfillments, fulfillment_status: input.tracking ? 'shipped' : 'fulfilled', updated_at: now() })
   return getOrder(db, storeId, order.id) as Order
 }
 

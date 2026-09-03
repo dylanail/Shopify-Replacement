@@ -38,6 +38,10 @@ npm run reset     # throw the database away and re-seed
 | **Research** | who buys, what stops them, competitors, price anchor, keywords and proof points — per category rules offline, a model when configured, and it reads a pasted site either way |
 | **Product pages** | benefits answering the triggers, a comparison table against the named competitor, specs, FAQ from the objections, guarantee and shipping strip, sticky mobile buy bar — written from the research, never from thin air |
 | **Imagery** | a merchant photo is staged into six scenes (white seamless, lifestyle, dark luxury, flat lay, golden hour, studio) around the *actual* product; with an image model configured it is re-shot rather than staged |
+| **Funnels** | ad → advertorial → offer → checkout with an order bump (shipping protection by default, a real hidden product) → one-click upsell → downsell only if the upsell is declined → thank-you page with tracking and related products |
+| **Versions & direction** | product-page versions and advertorials in named formats (listicle, first-person story, problem-agitate-solve, expert take, "we tested five", mistakes; benefit-, story-, UGC-, comparison-, offer-, urgency-led, premium minimal) with free-form direction read into tone, audience, angle and must-say phrases; pdp versions split-tested by session with per-version views, carts, sales and conversion |
+| **Dropshipping ops** | import a product from any Shopify store URL (`/products/x.json`) or an Open Graph page with a markup; supplier and cost per product with a margin calculator; fulfil via supplier with carrier detection from the tracking number; a branded `/track` page; delivery estimates from lead times; ad-spend log; a profit report that subtracts COGS, supplier shipping, fees, refunds and ads |
+| **Conversion widgets** | recent-sales popups and live-viewer counts from real orders and sessions, stock scarcity from real inventory, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, product Q&A, back-in-stock capture, announcement rotator, compare-at badges, abandoned-cart email on a schedule, purchase and add-to-cart events for GA4, Meta and TikTok |
 | **Commerce core** | products, options, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping rates |
 | **Agent** | 74 tools with per-tool schemas, an executor that validates and refuses, durable resumable runs with parallel branches, a model planner and a rules planner |
 | **Storefront** | server-rendered per brand: home, collections, PDP, cart, checkout, order, blog, pages, sitemap, robots, JSON-LD, `llms.txt` |
@@ -106,6 +110,18 @@ With `OPENAI_API_KEY` set, the image model *edits* that photo into the scene
 (`images/edits`, not `generations`), so the product in the output is the one
 you sell and not a plausible stranger.
 
+**Social proof is never invented.** The recent-sales popup reads real orders
+(first name and city), the viewer count reads real sessions, scarcity reads
+real inventory, customer photos come from real reviews. Each widget renders
+nothing at all when it has nothing honest to say, and an imported review is
+never marked verified.
+
+**A direction is read, not pasted.** "Premium, for people who train
+seriously, focus on the repair guarantee" becomes a tone, an audience and an
+angle that drive which sections lead and what the headline pattern is; with
+a model configured the same decisions become the prompt, so a format means
+the same thing either way.
+
 **Draft and live are separate environments.** The assistant only ever edits the
 draft. Publishing copies it over live and bumps a version; rollback goes the
 other way. `publishState` is what the admin's publish button reads, so the
@@ -129,6 +145,13 @@ product keeps its picture across restarts — and serves it from
 `/_media/render.svg` with an immutable cache header and no database round trip.
 
 ---
+
+## Personal mode
+
+This deployment is one person's. Every store is on the owner plan (no
+limits, no platform fee, nothing gated), there is no pricing page, and `/`
+is the admin. The plan tiers still exist as configuration for the day that
+changes; set `AMBORAS_PERSONAL=false` to bring the gates back.
 
 ## Configuration
 

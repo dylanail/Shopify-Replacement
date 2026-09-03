@@ -39,6 +39,19 @@ export type ProductContent = {
   trust?: string[]
 }
 
+/** Where it comes from and what it costs. Every profit number derives from this. */
+export type Supplier = {
+  name?: string
+  url?: string
+  sku?: string
+  costCents?: number
+  shippingCents?: number
+  processingDays?: number
+  shippingDaysMin?: number
+  shippingDaysMax?: number
+  notes?: string
+}
+
 export type Product = {
   id: string
   storeId: string
@@ -55,6 +68,7 @@ export type Product = {
   tags: string[]
   subscription: { cadences?: string[]; discountPercent?: number; trialDays?: number }
   content: ProductContent
+  supplier: Supplier
   position: number
   createdAt: string
   updatedAt: string
@@ -115,7 +129,7 @@ export type Order = {
   paymentStatus: 'awaiting' | 'captured' | 'refunded' | 'partially_refunded'
   fulfillmentStatus: 'unfulfilled' | 'fulfilled' | 'shipped' | 'delivered' | 'returned'
   address: Address
-  fulfillments: Array<{ id: string; provider: string; tracking: string; createdAt: string }>
+  fulfillments: Array<{ id: string; provider: string; tracking: string; carrier?: string; createdAt: string }>
   refunds: Array<{ id: string; amountCents: Cents; reason: string; createdAt: string }>
   paymentProvider: 'demo' | 'stripe'
   paymentIntentId: string
@@ -123,6 +137,9 @@ export type Order = {
   paymentMethodId: string
   shippingOptionId: string
   upsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents; paymentIntentId?: string }
+  downsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents }
+  supplierOrder: { supplier?: string; orderId?: string; costCents?: Cents; shippingCents?: Cents; placedAt?: string; carrier?: string }
+  deliveredAt: string | null
   createdAt: string
   updatedAt: string
 }

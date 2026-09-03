@@ -392,6 +392,51 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE carts ADD COLUMN checkout TEXT NOT NULL DEFAULT '{}';
     `,
   },
+  {
+    name: '006_dropshipping_and_funnels',
+    sql: `
+    -- Where a product comes from and what it costs: the numbers a dropshipper
+    -- actually runs the business on.
+    ALTER TABLE products ADD COLUMN supplier TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE orders ADD COLUMN supplier_order TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE orders ADD COLUMN delivered_at TEXT;
+    ALTER TABLE orders ADD COLUMN downsell TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE carts ADD COLUMN abandon_emailed_at TEXT;
+
+    -- A page can be one version of a product's page, weighted for a split test.
+    ALTER TABLE pages ADD COLUMN product_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE pages ADD COLUMN role TEXT NOT NULL DEFAULT 'page';
+    ALTER TABLE pages ADD COLUMN weight INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE pages ADD COLUMN format TEXT NOT NULL DEFAULT '';
+    ALTER TABLE pages ADD COLUMN direction TEXT NOT NULL DEFAULT '';
+
+    CREATE TABLE funnels (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, product_id TEXT NOT NULL DEFAULT '',
+      advertorial_page_id TEXT NOT NULL DEFAULT '', offer_page_id TEXT NOT NULL DEFAULT '',
+      bump TEXT NOT NULL DEFAULT '{}', upsell TEXT NOT NULL DEFAULT '{}', downsell TEXT NOT NULL DEFAULT '{}',
+      thankyou TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+
+    CREATE TABLE questions (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL, question TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '',
+      asker TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL);
+    CREATE INDEX questions_product ON questions(product_id, status);
+
+    CREATE TABLE stock_alerts (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      variant_id TEXT NOT NULL, email TEXT NOT NULL, notified_at TEXT, created_at TEXT NOT NULL,
+      UNIQUE (store_id, variant_id, email));
+
+    CREATE TABLE ad_spend (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      day TEXT NOT NULL, platform TEXT NOT NULL, amount_cents INTEGER NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+    CREATE INDEX ad_spend_store ON ad_spend(store_id, day);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

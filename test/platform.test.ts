@@ -126,7 +126,8 @@ test('an invite only activates when it is accepted', () => {
   assert.equal(acceptInvite(db, newcomer.id, invite), false, 'an invite cannot be redeemed twice')
 })
 
-test('plan limits name the upgrade instead of just refusing', () => {
+test('plan limits name the upgrade instead of just refusing (when not in personal mode)', () => {
+  process.env.AMBORAS_PERSONAL = 'false'
   assert.doesNotThrow(() => requirePlan('launch', 'customDomain', 'A custom domain'))
   try {
     requirePlan('free', 'customDomain', 'A custom domain')
@@ -137,6 +138,7 @@ test('plan limits name the upgrade instead of just refusing', () => {
     assert.match(error.message, /Basic includes it/)
   }
   assert.equal(planBySlug('nonsense').slug, 'free')
+  delete process.env.AMBORAS_PERSONAL
 })
 
 /* -------------------------------------------------------------------- plugins */

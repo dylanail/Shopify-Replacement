@@ -3,6 +3,7 @@ import { handle as toHandle, id } from '../lib/ids.ts'
 import { bundleFor, renderBundleWidget } from '../domain/bundles.ts'
 import { listProducts } from '../domain/catalog.ts'
 import { listReviews } from '../domain/reviews.ts'
+import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '../domain/ops.ts'
 import type { Store } from '../control/stores.ts'
 import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockInstance } from './blocks.ts'
 
@@ -20,6 +21,13 @@ export type Page = {
   status: 'draft' | 'published'
   sourceUrl: string
   isHome: boolean
+  /** A version of a product's page (role 'pdp') or an advertorial for it. */
+  productId: string
+  role: 'page' | 'pdp' | 'advertorial' | 'offer'
+  /** Split-test weight among a product's pdp versions; 0 = not in the test. */
+  weight: number
+  format: string
+  direction: string
   createdAt: string
   updatedAt: string
 }
@@ -39,6 +47,11 @@ function rowToPage(row: Row): Page {
     status: row.status as Page['status'],
     sourceUrl: row.source_url as string,
     isHome: bool(row.is_home),
+    productId: (row.product_id as string) ?? '',
+    role: ((row.role as string) || 'page') as Page['role'],
+    weight: (row.weight as number) ?? 0,
+    format: (row.format as string) ?? '',
+    direction: (row.direction as string) ?? '',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -74,7 +87,7 @@ export function newBlock(type: string, settings: Record<string, unknown> = {}): 
 export function createPage(
   db: Db,
   storeId: string,
-  input: { title: string; kind?: Page['kind']; mode?: Page['mode']; blocks?: BlockInstance[]; rawHtml?: string; headHtml?: string; seo?: Page['seo']; status?: Page['status']; sourceUrl?: string; handle?: string },
+  input: { title: string; kind?: Page['kind']; mode?: Page['mode']; blocks?: BlockInstance[]; rawHtml?: string; headHtml?: string; seo?: Page['seo']; status?: Page['status']; sourceUrl?: string; handle?: string; productId?: string; role?: Page['role']; weight?: number; format?: string; direction?: string },
 ): Page {
   const pageId = id('page')
   const timestamp = now()
@@ -92,6 +105,11 @@ export function createPage(
     status: input.status ?? 'draft',
     source_url: input.sourceUrl ?? '',
     is_home: false,
+    product_id: input.productId ?? '',
+    role: input.role ?? 'page',
+    weight: input.weight ?? 0,
+    format: input.format ?? '',
+    direction: input.direction ?? '',
     created_at: timestamp,
     updated_at: timestamp,
   })
@@ -115,6 +133,11 @@ export function updatePage(db: Db, storeId: string, pageId: string, patch: Parti
     if (patch.isHome) db.run('UPDATE pages SET is_home = 0 WHERE store_id = ?', storeId)
     values.is_home = patch.isHome
   }
+  if (patch.productId !== undefined) values.product_id = patch.productId
+  if (patch.role !== undefined) values.role = patch.role
+  if (patch.weight !== undefined) values.weight = patch.weight
+  if (patch.format !== undefined) values.format = patch.format
+  if (patch.direction !== undefined) values.direction = patch.direction
   db.update('pages', page.id, values)
   return getPage(db, storeId, page.id) as Page
 }
@@ -135,6 +158,10 @@ export function duplicatePage(db: Db, storeId: string, pageId: string): Page {
     headHtml: page.headHtml,
     seo: page.seo,
     sourceUrl: page.sourceUrl,
+    productId: page.productId,
+    role: page.role,
+    format: page.format,
+    direction: page.direction,
   })
 }
 
@@ -212,7 +239,15 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
       variants: product.variants.map((variant) => ({ id: variant.id, title: variant.title, priceCents: variant.priceCents })),
       options: product.options,
     })),
-    reviews: listReviews(db, store.id, { status: 'approved', limit: 60 }).map((review) => ({ productId: review.productId, rating: review.rating, title: review.title, body: review.body, author: review.author, verified: review.verified })),
+    reviews: listReviews(db, store.id, { status: 'approved', limit: 60 }).map((review) => ({ productId: review.productId, rating: review.rating, title: review.title, body: review.body, author: review.author, verified: review.verified, media: review.media })),
+    live: {
+      purchases: recentPurchases(db, store.id, 10),
+      viewers: Object.fromEntries(products.map((product) => [product.id, viewersNow(db, store.id, product.id)])),
+      stock: Object.fromEntries(products.map((product) => [product.id, product.variants.reduce((sum, variant) => sum + Math.max(0, variant.inventory), 0)])),
+      estimates: Object.fromEntries(products.map((product) => { const estimate = deliveryEstimate(product.supplier); return [product.id, { from: estimate.from, to: estimate.to }] })),
+      questions: listQuestions(db, store.id, { status: 'answered' }).map((entry) => ({ productId: entry.productId, question: entry.question, answer: entry.answer, asker: entry.asker })),
+      sizeCharts: Object.fromEntries(products.filter((product) => product.metadata.sizeChart).map((product) => [product.id, product.metadata.sizeChart as string])),
+    },
     bundles: products
       .map((product) => {
         const bundle = bundleFor(db, store.id, product.id)
@@ -291,6 +326,17 @@ blockquote.pull cite{display:block;font:400 .9rem var(--body);color:var(--muted)
 .share{display:flex;gap:1rem;align-items:center}.share a{font-size:.86rem;text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:.35rem .8rem}
 .signup{display:flex;gap:.6rem;max-width:28rem;margin-inline:auto;margin-top:1rem}
 .contact .two{margin-bottom:0}
-@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:repeat(2,1fr)}}
+.announce--rotate span{display:inline-block}
+.salespop{position:fixed;bottom:1rem;left:1rem;z-index:60;display:flex;gap:.7rem;align-items:center;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius);padding:.6rem .8rem;box-shadow:0 10px 30px rgba(0,0,0,.14);max-width:320px;font-size:.85rem}
+.salespop--bottom-right{left:auto;right:1rem}.salespop img{width:44px;height:44px;object-fit:cover;border-radius:var(--radius)}.salespop b{display:block}.salespop small{color:var(--muted);display:block;font-size:.72rem}
+.viewers{display:inline-flex;gap:.5rem;align-items:center;font-size:.86rem;color:var(--muted)}.viewers i{width:8px;height:8px;border-radius:999px;background:#2f7a4f;box-shadow:0 0 0 4px rgba(47,122,79,.18)}
+.scarcity .meta{font-size:.86rem;margin-bottom:.35rem}.scarcity .track{height:8px;background:var(--line);border-radius:999px;overflow:hidden}.scarcity .fill{height:100%;background:#b3261e}
+.edd{display:flex;gap:.7rem;align-items:center;font-size:.9rem;border:1px solid var(--line);border-radius:var(--radius);padding:.7rem .9rem;background:var(--raise)}.edd .ico{font-size:1.2rem}
+.shipbar{background:var(--ink);color:var(--paper);font-size:.8rem;text-align:center;padding:.5rem 1rem}.shipbar .track{display:block;height:3px;background:rgba(255,255,255,.2);margin-top:.35rem;border-radius:999px;overflow:hidden}.shipbar .fill{display:block;height:100%;background:var(--primary)}
+.payicons{display:flex;flex-wrap:wrap;gap:.4rem;justify-content:center}.payicons i{font:600 10px/1 var(--body);letter-spacing:.06em;border:1px solid var(--line);border-radius:4px;padding:.4rem .5rem;background:#fff;color:#1a1a1a;font-style:normal}
+.sizechart summary{cursor:pointer;font-weight:500;padding:.6rem 0;border-bottom:1px solid var(--line)}
+.ugc{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}.ugc figure{margin:0}.ugc img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius)}.ugc figcaption{font-size:.75rem;color:var(--muted);margin-top:.25rem}
+.qa-form{display:grid;gap:.5rem;margin-top:1rem}
+@media (max-width:820px){.iwt,.buybox-blk{grid-template-columns:1fr}.iwt--right figure{order:0}.cols{grid-template-columns:repeat(2,1fr)}.salespop{max-width:calc(100vw - 2rem)}}
 @media (max-width:520px){.cols{grid-template-columns:1fr}}
 `

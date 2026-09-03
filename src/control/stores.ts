@@ -71,7 +71,7 @@ export function createStore(
       owner_id: ownerId,
       name: input.name,
       slug: storeSlug(input.name),
-      plan_slug: input.planSlug ?? 'free',
+      plan_slug: input.planSlug ?? 'owner',
       currency: (input.currency ?? 'USD').toUpperCase(),
       brand: {},
       status: 'draft',

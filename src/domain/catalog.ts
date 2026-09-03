@@ -1,6 +1,6 @@
 import { bool, json, now, type Db, type Row } from '../lib/db.ts'
 import { handle as toHandle, id } from '../lib/ids.ts'
-import type { Media, Product, ProductContent, ProductOption, Variant } from './types.ts'
+import type { Media, Product, ProductContent, ProductOption, Supplier, Variant } from './types.ts'
 
 export function rowToVariant(row: Row): Variant {
   return {
@@ -35,6 +35,7 @@ export function rowToProduct(row: Row, variants: Variant[]): Product {
     tags: json(row.tags, [] as string[]),
     subscription: json(row.subscription, {}),
     content: json(row.content, {} as ProductContent),
+    supplier: json(row.supplier, {} as Supplier),
     position: row.position as number,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -60,10 +61,13 @@ function attach(db: Db, rows: Row[]): Product[] {
 export function listProducts(
   db: Db,
   storeId: string,
-  opts: { status?: string; search?: string; limit?: number; collectionId?: string } = {},
+  opts: { status?: string; search?: string; limit?: number; collectionId?: string; includeHidden?: boolean } = {},
 ): Product[] {
   const where: string[] = ['p.store_id = ?']
   const params: unknown[] = [storeId]
+  // Order bumps and shipping protection are products, so the cart and the
+  // order can carry them, but they are not catalog: nothing lists them.
+  if (!opts.includeHidden) where.push("json_extract(p.metadata, '$.hidden') IS NULL")
   if (opts.status && opts.status !== 'all') {
     where.push('p.status = ?')
     params.push(opts.status)
@@ -100,6 +104,7 @@ export type ProductInput = {
   tags?: string[]
   subscription?: Product['subscription']
   content?: ProductContent
+  supplier?: Supplier
   variants?: Array<Partial<Variant> & { title: string; priceCents: number }>
 }
 
@@ -127,6 +132,7 @@ export function createProduct(db: Db, storeId: string, input: ProductInput): Pro
       tags: input.tags ?? [],
       subscription: input.subscription ?? {},
       content: input.content ?? {},
+      supplier: input.supplier ?? {},
       position: count,
       created_at: timestamp,
       updated_at: timestamp,
@@ -168,6 +174,7 @@ export function updateProduct(db: Db, storeId: string, productId: string, patch:
   if (patch.tags !== undefined) values.tags = patch.tags
   if (patch.subscription !== undefined) values.subscription = patch.subscription
   if (patch.content !== undefined) values.content = { ...existing.content, ...patch.content }
+  if (patch.supplier !== undefined) values.supplier = { ...existing.supplier, ...patch.supplier }
   db.update('products', existing.id, values)
   return getProduct(db, storeId, existing.id) as Product
 }

@@ -33,9 +33,18 @@ export type BlockContext = {
     variants: Array<{ id: string; title: string; priceCents: number }>
     options: Array<{ title: string; values: Array<{ value: string; swatch?: string }> }>
   }>
-  reviews: Array<{ productId: string; rating: number; title: string; body: string; author: string; verified: boolean }>
+  reviews: Array<{ productId: string; rating: number; title: string; body: string; author: string; verified: boolean; media?: string[] }>
   bundles: Array<{ productId: string; html: string }>
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
+  /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
+  live?: {
+    purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
+    viewers: Record<string, number>
+    stock: Record<string, number>
+    estimates: Record<string, { from: string; to: string }>
+    questions: Array<{ productId: string; question: string; answer: string; asker: string }>
+    sizeCharts: Record<string, string>
+  }
 }
 
 export type BlockDefinition = {
@@ -104,8 +113,12 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Layout',
     icon: '▬',
     description: 'One line across the top: shipping promise, offer, deadline.',
-    schema: { text: { type: 'string', label: 'Text', required: true, default: 'FREE SHIPPING OVER $200 · 30-DAY RETURNS' }, ...COMMON },
-    render: (settings, _context, block) => `<div class="announce" data-block="${e(block.id)}">${e(settings.text)}</div>`,
+    schema: { text: { type: 'string', label: 'Lines (one per line rotate)', multiline: true, required: true, default: 'FREE SHIPPING OVER $200 · 30-DAY RETURNS' }, ...COMMON },
+    render: (settings, _context, block) => {
+      const items = list(settings.text)
+      if (items.length <= 1) return `<div class="announce" data-block="${e(block.id)}">${e(items[0] ?? settings.text)}</div>`
+      return `<div class="announce announce--rotate" data-block="${e(block.id)}" data-rotate>${items.map((line, index) => `<span ${index ? 'hidden' : ''}>${e(line)}</span>`).join('')}</div>`
+    },
   },
   {
     type: 'header',
@@ -537,6 +550,121 @@ export const BLOCKS: BlockDefinition[] = [
     render: (settings, context, block) => wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<form method="post" action="${context.base}/contact" class="contact"><div class="two"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Email</label><input name="email" type="email" required></div></div><div class="field"><label>Message</label><textarea name="message" rows="4" required></textarea></div><button class="btn" type="submit">Send</button></form>`),
   },
 
+  /* Dropshipping conversion set */
+  {
+    type: 'recent-sales',
+    name: 'Recent sales popups',
+    group: 'Conversion',
+    icon: '◉',
+    description: '"Marisol from Mexico City bought…" — from real orders only. Shows nothing until there are some.',
+    schema: { delaySeconds: { type: 'number', integer: true, min: 3, max: 120, default: 8 }, everySeconds: { type: 'number', integer: true, min: 5, max: 300, default: 25 }, position: { type: 'string', enum: ['bottom-left', 'bottom-right'], default: 'bottom-left' } },
+    render: (settings, context, block) => {
+      const purchases = context.live?.purchases ?? []
+      if (!purchases.length) return `<!-- data-block="${e(block.id)}" recent-sales: no orders yet -->`
+      return `<div class="salespop salespop--${e(settings.position)}" data-block="${e(block.id)}" data-delay="${Number(settings.delaySeconds)}" data-every="${Number(settings.everySeconds)}" data-items='${e(JSON.stringify(purchases.slice(0, 10)))}' hidden><img alt=""><div><b></b><span></span><small></small></div></div>`
+    },
+  },
+  {
+    type: 'live-viewers',
+    name: 'Live viewers',
+    group: 'Conversion',
+    icon: '👁',
+    description: '"14 people are looking at this right now" — real sessions in the last 30 minutes.',
+    schema: { productId: { type: 'string', label: 'Product', required: true, default: '' }, minimum: { type: 'number', label: 'Hide below', integer: true, min: 1, default: 3 }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'none' } as never },
+    render: (settings, context, block) => {
+      const product = productFor(context, settings.productId)
+      const count = product ? (context.live?.viewers[product.id] ?? 0) : 0
+      if (count < Number(settings.minimum)) return `<!-- data-block="${e(block.id)}" live-viewers: ${count} -->`
+      return wrap(settings, block, `<div class="viewers"><i></i> ${count} people are looking at this right now</div>`)
+    },
+  },
+  {
+    type: 'stock-scarcity',
+    name: 'Stock scarcity',
+    group: 'Conversion',
+    icon: '▮',
+    description: '"Only 7 left" with a bar — from real inventory.',
+    schema: { productId: { type: 'string', label: 'Product', required: true, default: '' }, threshold: { type: 'number', label: 'Show when at or below', integer: true, min: 1, default: 15 }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'none' } as never },
+    render: (settings, context, block) => {
+      const product = productFor(context, settings.productId)
+      const stock = product ? (context.live?.stock[product.id] ?? 0) : 0
+      if (!product || stock <= 0 || stock > Number(settings.threshold)) return `<!-- data-block="${e(block.id)}" stock-scarcity: ${stock} -->`
+      const percent = Math.max(6, Math.round((stock / Number(settings.threshold)) * 100))
+      return wrap(settings, block, `<div class="scarcity"><div class="meta">Only <b>${stock}</b> left in this batch</div><div class="track"><div class="fill" style="width:${percent}%"></div></div></div>`)
+    },
+  },
+  {
+    type: 'delivery-estimate',
+    name: 'Delivery estimate',
+    group: 'Conversion',
+    icon: '🚚',
+    description: '"Order in the next 3h to have it by Sep 12–16" — from the supplier lead times.',
+    schema: { productId: { type: 'string', label: 'Product', required: true, default: '' }, cutoffHour: { type: 'number', label: 'Cut-off hour (24h)', integer: true, min: 0, max: 23, default: 15 }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'none' } as never },
+    render: (settings, context, block) => {
+      const product = productFor(context, settings.productId)
+      const estimate = product ? context.live?.estimates[product.id] : null
+      if (!estimate) return `<!-- data-block="${e(block.id)}" delivery-estimate -->`
+      return wrap(settings, block, `<div class="edd" data-cutoff="${Number(settings.cutoffHour)}"><span class="ico">🚚</span><div>Order <b data-cutoff-text>today</b> for delivery by <b>${e(estimate.from)} – ${e(estimate.to)}</b></div></div>`)
+    },
+  },
+  {
+    type: 'free-shipping-bar',
+    name: 'Free shipping bar',
+    group: 'Conversion',
+    icon: '▬',
+    description: 'How far the cart is from free shipping. Sits at the top like an announcement.',
+    schema: { thresholdCents: { type: 'number', label: 'Threshold (minor units)', integer: true, min: 0, default: 20000 }, text: { type: 'string', default: 'Free shipping on orders over {threshold}' } },
+    render: (settings, context, block) => `<div class="shipbar" data-block="${e(block.id)}" data-threshold="${Number(settings.thresholdCents)}" data-currency="${e(context.currency)}"><span data-text>${e(String(settings.text).replace('{threshold}', format(Number(settings.thresholdCents), context.currency)))}</span><i class="track"><i class="fill" style="width:0"></i></i></div>`,
+  },
+  {
+    type: 'payment-icons',
+    name: 'Payment icons',
+    group: 'Social proof',
+    icon: '💳',
+    description: 'The row of card and wallet marks that says "this is a real shop".',
+    schema: { methods: { type: 'string', label: 'Methods (one per line)', multiline: true, default: 'VISA\nMastercard\nAMEX\nApple Pay\nGoogle Pay\nPayPal\nKlarna' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
+    render: (settings, _context, block) => wrap(settings, block, `<div class="payicons">${list(settings.methods).map((method) => `<i>${e(method)}</i>`).join('')}</div>`),
+  },
+  {
+    type: 'size-chart',
+    name: 'Size chart',
+    group: 'Commerce',
+    icon: '📏',
+    description: 'A measurements table, in a collapsible so it does not eat the page.',
+    schema: { title: { type: 'string', default: 'Size guide' }, rows: { type: 'string', label: 'Rows (first line is the header; cells separated by |)', multiline: true, required: true, default: 'Size|Chest|Waist\nS|86–91|71–76\nM|91–97|76–81\nL|97–102|81–86\nXL|102–107|86–91' }, note: { type: 'string', default: 'Measurements in cm. Between sizes? Size up.' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, _context, block) => {
+      const [header = '', ...body] = list(settings.rows)
+      return wrap(settings, block, `<details class="sizechart"><summary>${e(settings.title)}</summary><div class="tablewrap"><table class="compare"><thead><tr>${header.split('|').map((cell) => `<th>${e(cell.trim())}</th>`).join('')}</tr></thead><tbody>${body.map((row) => `<tr>${row.split('|').map((cell, index) => index === 0 ? `<th>${e(cell.trim())}</th>` : `<td>${e(cell.trim())}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${settings.note ? `<p class="micro">${e(settings.note)}</p>` : ''}</details>`)
+    },
+  },
+  {
+    type: 'ugc-gallery',
+    name: 'Customer photos',
+    group: 'Social proof',
+    icon: '▦',
+    description: 'A grid of photos from reviews. Real ones; nothing until there are some.',
+    schema: { productId: { type: 'string', label: 'Product (empty for all)', default: '' }, headline: { type: 'string', default: 'From customers' }, count: { type: 'number', integer: true, min: 2, max: 24, default: 8 }, ...COMMON },
+    render: (settings, context, block) => {
+      const photos = context.reviews.filter((review) => (!settings.productId || review.productId === settings.productId) && review.media?.length).flatMap((review) => (review.media ?? []).map((url) => ({ url, author: review.author, body: review.body }))).slice(0, Number(settings.count))
+      if (!photos.length) return `<!-- data-block="${e(block.id)}" ugc-gallery: no photos yet -->`
+      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}<div class="ugc">${photos.map((photo) => `<figure><img src="${e(photo.url)}" alt="${e(photo.body.slice(0, 80))}" loading="lazy"><figcaption>${e(photo.author)}</figcaption></figure>`).join('')}</div>`)
+    },
+  },
+  {
+    type: 'product-qa',
+    name: 'Questions & answers',
+    group: 'Social proof',
+    icon: '?',
+    description: 'Answered customer questions, and a form to ask one.',
+    schema: { productId: { type: 'string', label: 'Product', required: true, default: '' }, headline: { type: 'string', default: 'Questions people asked' }, ...COMMON, width: { ...(COMMON.width as object), default: 'narrow' } as never },
+    render: (settings, context, block) => {
+      const product = productFor(context, settings.productId)
+      const questions = (context.live?.questions ?? []).filter((entry) => product && entry.productId === product.id && entry.answer)
+      return wrap(settings, block, `${settings.headline ? `<h2 class="head">${e(settings.headline)}</h2>` : ''}${questions.map((entry) => `<details class="faq"><summary>${e(entry.question)}</summary><p>${e(entry.answer)}${entry.asker ? ` <span class="micro">— asked by ${e(entry.asker)}</span>` : ''}</p></details>`).join('') || '<p class="micro">No questions yet — ask the first.</p>'}
+        ${product ? `<form method="post" action="${context.base}/products/${e(product.handle)}/questions" class="qa-form"><div class="two"><input name="asker" placeholder="Your name"><input name="email" type="email" placeholder="Email (for the answer)"></div><textarea name="question" rows="2" required placeholder="Ask a question about ${e(product.title)}"></textarea><button class="btn btn--ghost" type="submit">Ask</button></form>` : ''}`)
+    },
+  },
+
   /* Advanced */
   {
     type: 'custom-html',
@@ -620,5 +748,11 @@ if(bar&&first&&'IntersectionObserver' in window){new IntersectionObserver(functi
 document.querySelectorAll('[data-share]').forEach(function(a){a.addEventListener('click',function(ev){ev.preventDefault();var u=location.href,t=a.dataset.share;
   if(t==='copy'){navigator.clipboard&&navigator.clipboard.writeText(u);a.textContent='Copied';return}
   window.open(t==='x'?'https://twitter.com/intent/tweet?url='+encodeURIComponent(u):'https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(u),'_blank','noopener')})});
+document.querySelectorAll('[data-rotate]').forEach(function(bar){var i=0,items=bar.querySelectorAll('span');if(items.length<2)return;setInterval(function(){items[i].hidden=true;i=(i+1)%items.length;items[i].hidden=false},4000)});
+document.querySelectorAll('.salespop').forEach(function(pop){var items=[];try{items=JSON.parse(pop.dataset.items||'[]')}catch(e){}if(!items.length)return;var i=0;
+  function show(){var it=items[i%items.length];i++;pop.querySelector('img').src=it.image||'';pop.querySelector('b').textContent=it.name+(it.city?' from '+it.city:'');pop.querySelector('span').textContent='bought '+it.product;pop.querySelector('small').textContent='verified purchase';pop.hidden=false;setTimeout(function(){pop.hidden=true},6000)}
+  setTimeout(function(){show();setInterval(show,Number(pop.dataset.every||25)*1000)},Number(pop.dataset.delay||8)*1000)});
+document.querySelectorAll('.edd').forEach(function(el){var cutoff=Number(el.dataset.cutoff||15),now=new Date(),h=cutoff-now.getHours()-1,m=60-now.getMinutes();var t=el.querySelector('[data-cutoff-text]');if(h>=0)t.textContent='in the next '+(h?h+'h ':'')+m+'m';else t.textContent='today'});
+document.querySelectorAll('.shipbar').forEach(function(bar){var thr=Number(bar.dataset.threshold||0);var sub=Number((document.body.dataset.cartSubtotal)||0);if(!thr)return;var fill=bar.querySelector('.fill');var pct=Math.min(100,Math.round(sub/thr*100));fill.style.width=pct+'%';if(sub>=thr){bar.querySelector('[data-text]').textContent='You have free shipping'}else if(sub>0){var cur=bar.dataset.currency||'USD';try{bar.querySelector('[data-text]').textContent=new Intl.NumberFormat('en-US',{style:'currency',currency:cur}).format((thr-sub)/100)+' away from free shipping'}catch(e){}}});
 document.querySelectorAll('.buyform').forEach(function(form){var total=form.querySelector('[data-total]');function sync(){var t=form.querySelector('input[name=quantity]:checked');if(t&&total&&t.dataset.total)total.textContent=t.dataset.total}form.addEventListener('change',sync);sync()});
 })();`

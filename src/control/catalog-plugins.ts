@@ -141,6 +141,7 @@ export const FIRST_PARTY: Plugin[] = [
               `<script async src="https://www.googletagmanager.com/gtag/js?id=${escapeHtml(settings.measurementId)}"></script>` +
               `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${escapeHtml(settings.measurementId)}')</script>`,
           },
+          { id: 'Ga4Purchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.gtag&&gtag('event','purchase',{transaction_id:'${escapeHtml(context.orderId ?? '')}',value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
       disableInPreview: true,
@@ -176,9 +177,38 @@ export const FIRST_PARTY: Plugin[] = [
             render: ({ settings }) =>
               `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[]}(window,document);fbq('init','${escapeHtml(settings.pixelId)}');fbq('track','PageView')</script>`,
           },
+          { id: 'MetaPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.fbq&&fbq('track','Purchase',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'},{eventID:'${escapeHtml(context.orderId ?? '')}'})</script>` },
+          { id: 'MetaAddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.fbq&&fbq('track','AddToCart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
       capabilities: [{ id: 'meta', type: 'analytics_sink', label: 'Meta Conversions API' }],
+      disableInPreview: true,
+    },
+  },
+  {
+    id: 'tiktok-pixel',
+    name: 'TikTok Pixel',
+    version: '1.0.0',
+    npmPackage: '@amboras/tiktok-ads',
+    category: 'Marketing & Email',
+    source: 'first-party',
+    regions: [],
+    description: 'Page views, add-to-cart and purchases to TikTok Ads.',
+    manifest: {
+      kind: 'ux_module',
+      admin: {
+        hasSettings: true,
+        settingsRoute: '/plugins/tiktok-pixel/settings',
+        settingsSchema: { pixelId: { type: 'string', label: 'Pixel ID', pattern: '^[A-Z0-9]{10,30}$', required: true } },
+        aiTools: [{ name: 'connect_tiktok_pixel', description: 'Install the TikTok pixel.', schema: { pixelId: { type: 'string', required: true } }, example: "connect_tiktok_pixel({ pixelId: 'CABC123…' })" }],
+      },
+      storefront: {
+        components: [
+          { id: 'TikTokPixel', slot: 'headEnd', placement: 'fixed', render: ({ settings }) => `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]=n||{};var o=document.createElement("script");o.type="text/javascript";o.async=!0;o.src=i+"?sdkid="+e+"&lib="+t;var a=document.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load('${escapeHtml(settings.pixelId)}');ttq.page();}(window,document,'ttq');</script>` },
+          { id: 'TikTokPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('CompletePayment',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}',content_id:'${escapeHtml(context.orderId ?? '')}'})</script>` },
+          { id: 'TikTokAddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('AddToCart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
+        ],
+      },
       disableInPreview: true,
     },
   },
