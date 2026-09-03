@@ -7,6 +7,12 @@ import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { createPromotion } from '../src/domain/promotions.ts'
 import { addToCart, applyCode, createCart, totals } from '../src/domain/cart.ts'
 import { cancelOrder, CheckoutError, completeCart, refundOrder } from '../src/domain/orders.ts'
+import { upsertBundle } from '../src/domain/bundles.ts'
+import { getOrder, recordUpsell, returnOrder } from '../src/domain/orders.ts'
+import { install } from '../src/control/plugins.ts'
+import { useStripeTransport } from '../src/payments/stripe.ts'
+import { listTools } from '../src/agent/registry.ts'
+import '../src/agent/tools/index.ts'
 
 function shop() {
   const { db, user } = fresh()
@@ -138,4 +144,86 @@ test('handles stay unique inside a store', () => {
   createProduct(db, store.id, { title: 'The Glove', variants: [{ title: 'a', priceCents: 1 }] })
   const handles = listProducts(db, store.id, {}).map((product) => product.handle)
   assert.equal(new Set(handles).size, handles.length)
+})
+
+test('a product that is also a bundle gift can still be bought', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Gifts', prompt: 'gifts' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const glove = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 5000, inventory: 50 }] })
+  const wraps = createProduct(db, store.id, { title: 'Wraps', status: 'published', variants: [{ title: 'One', priceCents: 1200, inventory: 50 }] })
+  const wrapVariant = wraps.variants[0]!
+  upsertBundle(db, store.id, {
+    productId: glove.id,
+    tiers: [{ quantity: 2, discountPercent: 0, label: 'Two', giftVariantId: wrapVariant.id, giftLabel: 'Free wraps' }],
+  })
+
+  let cart = addToCart(db, store.id, createCart(db, store.id).id, glove.variants[0]!.id, 2)
+  assert.ok(cart.items.some((item) => item.giftOf), 'the tier earned the gift')
+
+  cart = addToCart(db, store.id, cart.id, wrapVariant.id, 3)
+  const paid = cart.items.find((item) => item.variantId === wrapVariant.id && !item.giftOf)
+  assert.ok(paid, 'adding the same product as a paid line is not swallowed by the gift line')
+  assert.equal(paid.quantity, 3)
+  assert.equal(paid.unitCents, 1200)
+  assert.equal(cart.items.filter((item) => item.giftOf).length, 1, 'and the gift is still exactly one')
+  assert.equal(totals(db, store.id, cart).subtotalCents, 2 * 5000 + 3 * 1200)
+})
+
+test('an order bump is charged at the price the checkout printed, not the catalog price', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bumps', prompt: 'bumps' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const wraps = createProduct(db, store.id, { title: 'Wraps', status: 'published', variants: [{ title: 'One', priceCents: 2400, inventory: 50 }] })
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, wraps.variants[0]!.id, 1, 'order-bump', 999)
+  assert.equal(cart.items[0]?.unitCents, 999, 'the funnel sets the bump price')
+  assert.equal(totals(db, store.id, cart).subtotalCents, 999)
+})
+
+test('a refund moves money wherever it is asked for, and a full refund covers the upsell charge too', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Refunds', prompt: 'refunds' })
+  seedDefaultRegion(db, store.id, 'USD')
+  install(db, store.id, 'stripe', { publishableKey: 'pk_test_abc', secretKey: 'sk_test_xyz' })
+  const calls: Array<Record<string, string>> = []
+  useStripeTransport(async (path, init) => {
+    if (path === '/v1/refunds') calls.push(Object.fromEntries(new URLSearchParams(init.body ?? '')))
+    return { ok: true, status: 200, json: async () => ({ id: 're_1', status: 'succeeded' }) }
+  })
+
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 10_000, inventory: 10 }] })
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, product.variants[0]!.id, 1)
+  let order = completeCart(db, store.id, cart.id, { email: 'b@example.com', payment: { provider: 'stripe', status: 'captured', intentId: 'pi_original' } })
+  const extra = createProduct(db, store.id, { title: 'Wraps', status: 'published', variants: [{ title: 'One', priceCents: 4_000, inventory: 10 }] })
+  const line = { variantId: extra.variants[0]!.id, productId: extra.id, title: 'Wraps', variantTitle: 'One', image: '', unitCents: 4_000, quantity: 1, source: 'upsell' }
+  order = recordUpsell(db, store.id, order.id, { offered: 'Wraps', accepted: true, line, amountCents: 4_000, paymentIntentId: 'pi_upsell' })
+  assert.equal(order.totalCents, 14_900, 'goods, shipping, and the upsell charged after the fact')
+
+  const tool = listTools().find((entry) => entry.name === 'refund_order')!
+  const result = await tool.handler({ orderId: order.id }, { db, storeId: store.id, userId: user.id } as never)
+  assert.match(result.summary, /through Stripe/, 'the assistant no longer says it refunded without doing it')
+
+  assert.deepEqual(
+    calls.map((call) => [call.payment_intent, call.amount]),
+    [['pi_original', '10900'], ['pi_upsell', '4000']],
+    'the upsell is charged on its own intent, so a full refund has to give both back',
+  )
+  assert.equal(getOrder(db, store.id, order.id)?.paymentStatus, 'refunded')
+  useStripeTransport(null)
+})
+
+test('accepting the same return twice does not put the stock back twice', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Returns', prompt: 'returns' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: '16oz', priceCents: 5_000, inventory: 10 }] })
+  const variantId = product.variants[0]!.id
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, variantId, 3)
+  const order = completeCart(db, store.id, cart.id, { email: 'b@example.com' })
+  assert.equal(getVariant(db, store.id, variantId)?.inventory, 7)
+
+  returnOrder(db, store.id, order.id, 'changed mind')
+  assert.equal(getVariant(db, store.id, variantId)?.inventory, 10)
+  returnOrder(db, store.id, order.id, 'chased it again')
+  assert.equal(getVariant(db, store.id, variantId)?.inventory, 10, 'a second return is a no-op, not three more in stock')
 })

@@ -25,7 +25,7 @@ import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.t
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
-import { stripeFor } from '../payments/stripe.ts'
+import { refundThroughProvider, stripeFor } from '../payments/stripe.ts'
 import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.ts'
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
 import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
@@ -694,15 +694,8 @@ export function adminRouter(): Router {
     requireRole(db(), current.user.id, current.store.id, 'admin')
     const existing = getOrder(db(), current.store.id, ctx.params.id as string)
     if (!existing) throw notFound('No such order')
-    if (existing.paymentProvider === 'stripe' && existing.paymentIntentId) {
-      const stripe = stripeFor(db(), current.store.id)
-      if (!stripe) return back(ctx, '!This order was paid through Stripe, which is no longer connected.')
-      try {
-        await stripe.client.refunds.create({ paymentIntentId: existing.paymentIntentId, reason: 'requested_by_customer' })
-      } catch (error) {
-        return back(ctx, `!Stripe refused the refund: ${error instanceof Error ? error.message : 'unknown error'}`)
-      }
-    }
+    const moved = await refundThroughProvider(db(), current.store.id, existing)
+    if (!moved.ok) return back(ctx, `!${moved.message}`)
     const order = refundOrder(db(), current.store.id, existing.id, { reason: 'Refunded from the admin' })
     return back(ctx, `Refunded${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}. Payment is now ${order.paymentStatus}.`)
   })

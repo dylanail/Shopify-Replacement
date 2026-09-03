@@ -4,6 +4,7 @@ import { cancelOrder, fulfillOrder, getOrder, listOrders, refundOrder, returnOrd
 import { createPromotion, listPromotions, setPromotionStatus } from '../../domain/promotions.ts'
 import { getStore } from '../../control/stores.ts'
 import { format } from '../../lib/money.ts'
+import { refundThroughProvider } from '../../payments/stripe.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 export const commerceTools: Tool[] = defineTools([
@@ -220,13 +221,23 @@ export const commerceTools: Tool[] = defineTools([
       amountCents: { type: 'number', integer: true, min: 1, help: 'Leave empty to refund the remaining balance.' },
       reason: { type: 'string' },
     },
-    handler(args, ctx) {
-      const order = refundOrder(ctx.db, ctx.storeId, args.orderId as string, {
+    async handler(args, ctx) {
+      const existing = getOrder(ctx.db, ctx.storeId, args.orderId as string)
+      if (!existing) throw new Error('No order with that id or number')
+      // "This moves money" was only true from the admin's own button: this
+      // tool used to write the refund row and say so without ever calling the
+      // provider, leaving the customer's card untouched.
+      const moved = await refundThroughProvider(ctx.db, ctx.storeId, existing, args.amountCents as number | undefined)
+      if (!moved.ok) throw new Error(moved.message)
+      const order = refundOrder(ctx.db, ctx.storeId, existing.id, {
         ...(args.amountCents ? { amountCents: args.amountCents as number } : {}),
         ...(args.reason ? { reason: args.reason as string } : {}),
       })
       const refunded = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
-      return { summary: `Refunded ${format(refunded, order.currency)} on order #${order.displayId}.`, data: { paymentStatus: order.paymentStatus } }
+      return {
+        summary: `Refunded ${format(refunded, order.currency)} on order #${order.displayId}${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}.`,
+        data: { paymentStatus: order.paymentStatus },
+      }
     },
   },
   {
@@ -259,9 +270,14 @@ export const commerceTools: Tool[] = defineTools([
     description: 'Accept a return: restock the items and refund the order.',
     risk: 'confirm',
     schema: { orderId: { type: 'string', required: true }, reason: { type: 'string' } },
-    handler(args, ctx) {
-      const order = returnOrder(ctx.db, ctx.storeId, args.orderId as string, (args.reason as string) ?? '')
-      return { summary: `Return accepted on #${order.displayId}; stock is back and the refund is issued.` }
+    async handler(args, ctx) {
+      const existing = getOrder(ctx.db, ctx.storeId, args.orderId as string)
+      if (!existing) throw new Error('No order with that id or number')
+      if (existing.fulfillmentStatus === 'returned') return { summary: `#${existing.displayId} was already returned; nothing was restocked or refunded twice.` }
+      const moved = await refundThroughProvider(ctx.db, ctx.storeId, existing)
+      if (!moved.ok) throw new Error(moved.message)
+      const order = returnOrder(ctx.db, ctx.storeId, existing.id, (args.reason as string) ?? '')
+      return { summary: `Return accepted on #${order.displayId}; stock is back and ${format(order.totalCents, order.currency)} is refunded.` }
     },
   },
   {

@@ -63,7 +63,13 @@ export function createCart(db: Db, storeId: string): Cart {
   return getCart(db, storeId, cartId) as Cart
 }
 
-export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string): Cart {
+/**
+ * `unitCents` overrides the catalog price for this line. It exists for the
+ * order bump, whose whole point is a price the funnel sets rather than the
+ * one on the product, and it is only ever passed from a record on the server
+ * — never from a request.
+ */
+export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string, unitCents?: number): Cart {
   const cart = getCart(db, storeId, cartId) ?? createCart(db, storeId)
   const variant = getVariant(db, storeId, variantId)
   if (!variant) throw new Error(`No variant ${variantId}`)
@@ -71,7 +77,12 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
   if (!product || product.status !== 'published') throw new Error('That product is not available')
 
   const items = [...cart.items]
-  const existing = items.find((item) => item.variantId === variantId)
+  // A gift line for the same variant is not the line being added to: it is
+  // derived, priced at zero, and rebuilt by reconcileGifts on every change,
+  // so incrementing it drops the paid units on the floor and the customer
+  // cannot buy the product at all. setQuantity has always made this
+  // distinction; adding did not.
+  const existing = items.find((item) => item.variantId === variantId && !item.giftOf)
   if (existing) existing.quantity += quantity
   else {
     items.push({
@@ -80,7 +91,7 @@ export function addToCart(db: Db, storeId: string, cartId: string, variantId: st
       title: product.title,
       variantTitle: variant.title,
       image: variant.image || product.heroImage,
-      unitCents: variant.priceCents,
+      unitCents: unitCents ?? variant.priceCents,
       quantity,
       ...(source ? { source } : {}),
     })

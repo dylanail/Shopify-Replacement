@@ -221,15 +221,34 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     return html(renderCheckout(current, checkoutInputFor(current)))
   })
 
-  /** The no-provider path: the same form, a demo order, then the offer. */
+  /**
+   * The no-provider path: the same form, a demo order, then the offer.
+   *
+   * It is refused outright once Stripe is connected. This route writes an
+   * order with payment `captured` and never speaks to a payment provider, so
+   * on a store that takes real money it is a way to get the goods for free —
+   * by posting the form directly, or simply by having js.stripe.com blocked,
+   * which makes the pay button fall back to a native form submit.
+   */
   router.post('/checkout', async (ctx) => {
     const current = withTotals(open(ctx))
     const cart = current.cart
     if (!cart) return redirect(`${current.base}/cart`)
+    if (stripeFor(current.db, current.store.id)) {
+      log.warn('demo checkout refused: this store takes real payments')
+      return html(
+        renderCheckout(current, checkoutInputFor(current, { error: 'Payment could not start. Reload the page and try again — nothing has been charged.' })),
+        409,
+      )
+    }
     const body = await ctx.body()
     const draft = readCheckoutForm(body)
     if (body.shippingOptionId) setShipping(current.db, current.store.id, cart.id, String(body.shippingOptionId))
-    if (body.bumpVariantId && !cart.items.some((item) => item.variantId === body.bumpVariantId)) addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump')
+    if (body.bumpVariantId && !cart.items.some((item) => item.variantId === body.bumpVariantId)) {
+      const bump = checkoutInputFor(current).bump
+      const priced = bump && bump.variantId === String(body.bumpVariantId) ? bump.priceCents : undefined
+      addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump', priced)
+    }
     try {
       const order = completeCart(current.db, current.store.id, cart.id, {
         email: draft.email ?? '',
@@ -317,8 +336,13 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (built && (built.status === 'published' || current.preview)) {
       record(ctx, current, 'view.page')
       if (built.role === 'checkout' && built.mode === 'blocks') {
-        // The checkout page at its own address: the visitor's cart if there is one, a sample line otherwise, so the editor preview is never blank.
+        // The checkout page at its own address. A sample line keeps the editor
+        // preview from being blank; on the live storefront it put a fabricated
+        // order, a real Pay now button and the words "Sample order — the
+        // editor preview" in front of a customer, so out there an empty cart
+        // goes where the built-in checkout sends it.
         const sample = !current.cart?.items.length
+        if (sample && !current.preview) return redirect(`${current.base}/cart`)
         const shown = sample ? withSampleCart(current) : current
         return html(view.checkoutBlockPage(shown, built, checkoutInputFor(shown), { sample }))
       }
@@ -394,7 +418,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const cart = ensureCart(ctx, current)
     const body = await ctx.body()
     const variantId = String(body.variantId ?? '')
-    const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump') : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
+    // The bump's price comes from the funnel, and it is the number the
+    // checkout printed next to the tick box. Pricing the line from the catalog
+    // instead charged whatever the product happened to cost.
+    const bump = resolveBump(current.db, current.store.id, funnelForProducts(current.db, current.store.id, cart.items.map((item) => item.productId)))
+    const priced = bump && bump.variantId === variantId ? bump.priceCents : undefined
+    const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump', priced) : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
     const amounts = totals(current.db, current.store.id, updated)
     return { ...amounts, totalsHtml: view.totalsBlock({ ...current, cart: updated, totals: amounts }, amounts) }
   })

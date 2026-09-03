@@ -258,6 +258,10 @@ export function cancelOrder(db: Db, storeId: string, orderId: string): Order {
 export function returnOrder(db: Db, storeId: string, orderId: string, reason = ''): Order {
   const order = getOrder(db, storeId, orderId)
   if (!order) throw new Error('No order')
+  // Idempotent, the way cancelOrder is. Without this a second call put every
+  // line back into inventory again and only then hit "Nothing left to refund",
+  // so the stock was already wrong by the time anything complained.
+  if (order.fulfillmentStatus === 'returned') return order
   db.tx(() => {
     for (const item of order.items) releaseInventory(db, item.variantId, item.quantity)
     db.update('orders', order.id, { fulfillment_status: 'returned', updated_at: now() })
