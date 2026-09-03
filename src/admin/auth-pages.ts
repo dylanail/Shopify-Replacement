@@ -78,7 +78,7 @@ export function onboardingPage(name: string, error: string | null, storeCount = 
         <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
       <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">How will you build it?</legend>
-        ${MODES.map((mode, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${index === 2 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
+        ${MODES.map((mode) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${mode.id === 'own-product' ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
       <button type="submit">Build my store</button>
     </form>
     <div class="steps">

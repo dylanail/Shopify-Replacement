@@ -5,6 +5,8 @@ import { fresh } from './helpers.ts'
 import { createStore, environment, setTheme } from '../src/control/stores.ts'
 import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
+import { listTodos, refreshTodos, seedTodos } from '../src/control/todos.ts'
+import { adminRouter } from '../src/admin/routes.ts'
 import { answersForPrompt, buildProgress, buildState, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, setSiteShape, SHAPES, skipStep } from '../src/control/build.ts'
 import { knowledge, calendarMonth, TOPIC_NAMES } from '../src/agent/knowledge.ts'
 import { authorResearch, runResearch, rulesResearch } from '../src/agent/research.ts'
@@ -715,4 +717,27 @@ test('the planner can drive the build, the market and the creative queue through
   assert.match(health.summary, /Site score/)
   assert.ok(listAvatars(db, store.id).length >= 0)
   assert.ok(S.obj({}))
+})
+
+test('every next-step link the rail renders is a page this admin actually serves', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Links', prompt: 'links' })
+  seedTodos(db, store.id)
+  const router = adminRouter()
+  for (const todo of listTodos(db, store.id)) {
+    const [path = ''] = `/admin${todo.href}`.split('#')
+    assert.ok(router.match('GET', path), `the rail links /admin${todo.href}, which no route answers`)
+  }
+})
+
+test('the shipping row is read from the world like the rest of the punch list', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Ship', prompt: 'ship' })
+  seedTodos(db, store.id)
+  refreshTodos(db, store.id)
+  const status = (key: string) => listTodos(db, store.id).find((todo) => todo.key === key)?.status
+  assert.equal(status('shipping'), 'waiting', 'a store with no region cannot price delivery')
+  seedDefaultRegion(db, store.id, 'USD')
+  refreshTodos(db, store.id)
+  assert.equal(status('shipping'), 'done')
 })
