@@ -111,10 +111,12 @@ export class Raw {
   readonly body: Buffer | string
   readonly contentType: string
   readonly headers: Record<string, string>
-  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}) {
+  readonly status: number
+  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}, status = 200) {
     this.body = body
     this.contentType = contentType
     this.headers = headers
+    this.status = status
   }
 }
 
@@ -290,7 +292,7 @@ export async function send(res: ServerResponse, result: unknown, req?: IncomingM
   }
   if (result instanceof Raw) {
     const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, 'utf8')
-    writeBody(req, res, 200, body, { 'Content-Type': result.contentType, ...result.headers })
+    writeBody(req, res, result.status, body, { 'Content-Type': result.contentType, ...result.headers })
     return
   }
   if (result === undefined) {

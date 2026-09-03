@@ -51,6 +51,22 @@ function resolveStorefront(ctx: Ctx): { store: Store; preview: boolean; rest: st
   return store ? { store, preview: false, rest: path } : null
 }
 
+/** What a visitor gets at the address of a store that is not open. */
+function closedStorefront(store: Store): Raw {
+  const paused = store.status === 'paused'
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>${paused ? 'Temporarily closed' : 'Not open yet'}</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#faf7f3;color:#1c1a17;
+font:15px/1.6 ui-sans-serif,system-ui,sans-serif;padding:2rem;text-align:center}
+p{color:#7d746a;max-width:34rem}a{color:#7a4a2b}</style></head><body><div>
+<h1 style="font-weight:500">${paused ? 'Temporarily closed' : 'Not open yet'}</h1>
+<p>${paused ? 'This shop is paused. It will be back.' : 'This shop has not opened yet.'}</p>
+<p style="font-size:13px">If this is your store, it is waiting to be published — open it from <a href="/admin">your admin</a>, or look at the draft at <code>/preview/${store.slug}</code>.</p>
+</div></body></html>`
+  return new Raw(body, 'text/html; charset=utf-8', { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' }, 503)
+}
+
 const admin = adminRouter()
 const storefront = storefrontRouter((ctx) => {
   const resolved = (ctx as Ctx & { storefront?: { store: Store; preview: boolean } }).storefront
@@ -90,6 +106,16 @@ const server = createServer(async (req, res) => {
     }
 
     const store = resolveStorefront(ctx)
+    // A storefront is open when it has been published, and not before. The
+    // resolver used to serve any store by slug and quietly fall back to the
+    // draft environment, so a store that had never been published was already
+    // public, crawlable and buyable at its live address — publishing changed
+    // nothing, and pausing was impossible. The merchant's own view of unopened
+    // work is /preview/:slug, which is what this points them at.
+    if (store && !store.preview && store.store.status !== 'live') {
+      await send(res, closedStorefront(store.store), req)
+      return
+    }
     if (store) {
       const moved = redirectFor(store.store, store.rest)
       if (moved) {

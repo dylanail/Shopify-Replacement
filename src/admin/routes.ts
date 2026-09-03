@@ -230,6 +230,28 @@ export function adminRouter(): Router {
     )
   })
 
+  /**
+   * Taking a shop down and putting it back up. `paused` was a status the type
+   * declared and nothing ever wrote, so a published store could never be
+   * closed: the only lever was publish, and it only went one way.
+   */
+  router.post('/admin/stores/:id/status', async (ctx) => {
+    const user = requireUser(db(), ctx)
+    const storeId = ctx.params.id as string
+    requireRole(db(), user.id, storeId, 'admin')
+    const body = await ctx.body()
+    const wanted = String(body.status ?? '')
+    if (wanted !== 'live' && wanted !== 'paused') return badRequest('A shop is either open or paused.')
+    const store = getStore(db(), storeId)
+    if (!store) return notFound('No such store')
+    if (wanted === 'live' && !environment(db(), storeId, 'live').publishedAt) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent('!That store has never been published — open it and publish it first.')}`)
+    }
+    updateStore(db(), storeId, { status: wanted })
+    recordAudit(db(), { storeId, actorType: 'user', actorId: user.id, action: wanted === 'paused' ? 'pause_store' : 'reopen_store' })
+    return redirect(`/admin/stores?flash=${encodeURIComponent(wanted === 'paused' ? `${store.name} is paused — its address shows a closed sign.` : `${store.name} is open again.`)}`)
+  })
+
   router.get('/admin/research', (ctx) => {
     const current = session(ctx)
     return page(ctx, current, 'research', 'Customer research', pages.researchPage(ctxFor(current, ctx)))

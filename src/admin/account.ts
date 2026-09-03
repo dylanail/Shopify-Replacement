@@ -61,6 +61,11 @@ function addressOf(db: Db, store: Store, origin: string): string {
   return `${origin}/s/${store.slug}`
 }
 
+/** The merchant's own view of work that is not open yet. */
+function previewOf(store: Store, origin: string): string {
+  return `${origin}/preview/${store.slug}`
+}
+
 /**
  * Every store on the account, with the numbers that say whether it is a
  * business yet, and one button to start another.
@@ -92,8 +97,14 @@ export function storesHub(input: { db: Db; stores: Store[]; userName: string; or
       const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
       const sales = salesSummary(db, store.id, 30)
       const published = environment(db, store.id, 'live').publishedAt
+      const open = store.status === 'live'
       const address = addressOf(db, store, input.origin)
-      const state = store.status === 'live' ? 'ok' : store.status === 'paused' ? 'bad' : 'warn'
+      const preview = previewOf(store, input.origin)
+      // Only a published store answers at its public address; anything else
+      // shows the visitor a closed sign, so the link that belongs on the card
+      // is the draft.
+      const visit = open ? address : preview
+      const state = open ? 'ok' : store.status === 'paused' ? 'bad' : 'warn'
       return `<div class="card storecard">
       <div class="row top-row">
         <div class="row" style="flex-wrap:nowrap;min-width:0">
@@ -103,18 +114,30 @@ export function storesHub(input: { db: Db; stores: Store[]; userName: string; or
         </div>
         <span class="tag ${state}">${escapeHtml(store.status)}</span>
       </div>
-      <a class="addr muted" href="${escapeHtml(address)}" target="_blank" rel="noopener">${escapeHtml(address.replace(/^https?:\/\//, ''))} ↗</a>
+      <a class="addr muted" href="${escapeHtml(visit)}" target="_blank" rel="noopener">${escapeHtml(visit.replace(/^https?:\/\//, ''))} ↗</a>
       <div class="nums">
         <div><b>${products}</b><span class="muted">products</span></div>
         <div><b>${sales.orders}</b><span class="muted">orders&nbsp;/&nbsp;30d</span></div>
         <div><b>${escapeHtml(format(sales.revenueCents, store.currency))}</b><span class="muted">sales&nbsp;/&nbsp;30d</span></div>
       </div>
-      <div class="muted" style="font-size:11.5px">${published ? `Published ${escapeHtml(published.slice(0, 10))}` : 'Never published — the storefront is draft only'}</div>
+      <div class="muted" style="font-size:11.5px">${
+        store.status === 'paused'
+          ? `Paused — visitors see a closed sign at ${escapeHtml(address.replace(/^https?:\/\//, ''))}`
+          : open
+            ? `Open since ${escapeHtml((published ?? store.createdAt).slice(0, 10))} at ${escapeHtml(address.replace(/^https?:\/\//, ''))}`
+            : 'Not published, so the public address is closed — this link is the draft'
+      }</div>
       <div class="row actions">
         <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">Open</a>
         <a class="btn" href="/admin/switch?storeId=${escapeHtml(store.id)}&amp;to=${encodeURIComponent('/admin/build')}">Build</a>
-        <a class="btn" href="${escapeHtml(address)}" target="_blank" rel="noopener">Storefront ↗</a>
+        <a class="btn" href="${escapeHtml(visit)}" target="_blank" rel="noopener">${open ? 'Storefront ↗' : 'Draft ↗'}</a>
       </div>
+      ${store.status === 'draft'
+        ? ''
+        : `<form method="post" action="/admin/stores/${escapeHtml(store.id)}/status" style="margin:0">
+            <input type="hidden" name="status" value="${open ? 'paused' : 'live'}">
+            <button class="btn" type="submit" style="width:100%">${open ? 'Pause the shop' : 'Reopen the shop'}</button>
+          </form>`}
     </div>`
     })
     .join('')}</div>`

@@ -90,6 +90,35 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.match(dashboard.text, /Ironjaw/)
   slug = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
   assert.ok(slug, 'the dashboard links a live preview')
+
+  // The public address is closed until the store is published — that is the
+  // whole of what publishing does, and it used to do nothing at all.
+  const closed = await call(`/s/${slug}`)
+  assert.equal(closed.status, 503, 'an unpublished store does not answer at its public address')
+  assert.match(closed.text, /Not open yet/)
+  assert.match(closed.text, /noindex/, 'and it is not offered to a crawler')
+  assert.match((await call(`/preview/${slug}`)).text, /Ironjaw/i, 'the draft is where the merchant looks until then')
+
+  const opened = await call('/admin/publish', { form: {} })
+  assert.match(opened.location.replace(/\+/g, ' '), /Published v\d/)
+  assert.equal((await call(`/s/${slug}`)).status, 200, 'and now it is open')
+})
+
+test('a shop can be taken down and put back up', async () => {
+  const hub = await call('/admin/stores')
+  const card = hub.text.split('class="card storecard"').find((chunk) => chunk.includes(`/s/${slug}`)) ?? ''
+  const storeId = /storeId=(store_[a-z0-9]+)/.exec(card)?.[1] ?? ''
+  assert.ok(storeId)
+
+  const paused = await call(`/admin/stores/${storeId}/status`, { form: { status: 'paused' } })
+  assert.match(decodeURIComponent(paused.location.replace(/\+/g, ' ')), /is paused/)
+  const down = await call(`/s/${slug}`)
+  assert.equal(down.status, 503)
+  assert.match(down.text, /Temporarily closed/)
+  assert.match((await call('/admin/stores')).text, /Paused/, 'and the hub says so')
+
+  await call(`/admin/stores/${storeId}/status`, { form: { status: 'live' } })
+  assert.equal((await call(`/s/${slug}`)).status, 200)
 })
 
 test('every admin page renders', async () => {
@@ -229,10 +258,13 @@ test('a checkout laid out from blocks becomes the store\'s checkout once publish
   assert.match(suggested.location, /\/admin\/pages\/page_[a-z0-9]+\/edit/, 'the layout suggester knows the checkout as a goal')
 })
 
-test('publishing takes the draft live', async () => {
-  const published = await call('/admin/publish', { form: {} })
-  assert.equal(published.status, 302)
-  assert.match(published.location.replace(/\+/g, ' '), /Published v\d/)
+test('publishing a store with nothing new to publish is refused, not a version bump for nothing', async () => {
+  // The version bump itself is asserted where it belongs: the first test
+  // publishes this store and watches its public address open.
+  const again = await call('/admin/publish', { form: {} })
+  assert.equal(again.status, 302)
+  assert.match(flashOf(again.location), /Live since/)
+  assert.equal((await call(`/s/${slug}`)).status, 200, 'and the shop stays open')
 })
 
 test('generated imagery is served and cached hard', async () => {
@@ -399,6 +431,8 @@ test('product images are re-shot from a direction, and a lane can be made the he
 test('the storefront product page carries the conversion sections and the sticky bar', async () => {
   const dashboard = await call('/admin')
   const slug2 = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
+  // This is a visitor's view of the current store, so it has to be open.
+  await call('/admin/publish', { form: {} })
   const collection = await call(`/s/${slug2}/collections/all`)
   const handle = /\/products\/([a-z0-9-]+)/.exec(collection.text)?.[1] ?? ''
   const pdp = await call(`/s/${slug2}/products/${handle}`)
