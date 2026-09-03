@@ -1,6 +1,12 @@
 import Link from "next/link";
+import { headers } from "next/headers";
+import { StoreUnavailable } from "@/components/layout/StoreUnavailable";
 
-export default function RootNotFound() {
+/** Root 404: reached for unknown store keys (the store layout calls notFound()) and for paths outside any store. */
+export default async function RootNotFound() {
+  const h = await headers();
+  const storeKey = h.get("x-kiln-store");
+  if (storeKey) return <StoreUnavailable storeKey={storeKey} status={404} message="Store not found" />;
   return (
     <main className="min-h-screen flex items-center justify-center p-8">
       <div className="max-w-md w-full text-center space-y-4">

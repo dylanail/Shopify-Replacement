@@ -16,17 +16,22 @@ export function brandLocation(description: string): string | null {
  */
 export function brandDescriptors(description: string, name = ""): string[] {
   if (!description) return [];
-  const sentences = description.split(/(?<=[.!?])\s+/);
-  const first = sentences[0] ?? description;
-  let body = first;
-  if (name) body = body.replace(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+(makes|crafts|builds|creates|is|are)\\s+`, "i"), "");
-  body = body.replace(/^(makes|crafts|builds)\s+[a-z-]+\s+(gear|goods|things|products|pieces)?\s*/i, "");
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Strip the brand name first — names like "Ironjaw & Co." would otherwise end the first sentence early.
+  let text = name ? description.replace(new RegExp(`^${esc(name)}\\s*`, "i"), "") : description;
+  const sentences = text.split(/(?<=[.!?])\s+(?=[A-Z])/);
+  let body = sentences[0] ?? text;
+  body = body.replace(/^(makes|crafts|builds|creates|designs|sells|is|are)\s+/i, "");
+  body = body.replace(/^(?:[a-z-]+\s+){0,2}(gear|goods|things|products|pieces|wear|ware|apparel|accessories|essentials)\s+/i, "");
   body = body.replace(/\bin\s+[A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2}\.?$/u, "");
-  const parts = body.split(/\s+and\s+|,\s*|\s+—\s+|\s+•\s+|\s+·\s+/).map(clean).filter((p) => p.length > 2 && p.length < 40);
-  const second = sentences[1]?.match(/every (?:piece|one|item|order) is ([^—.,]+)/i)?.[1];
-  const all = [...parts, ...(second ? [clean(second)] : [])].map((p) => p.replace(/^(a|an|the)\s+/i, ""));
-  // drop things that are the product noun itself ("boxing gear")
-  return [...new Set(all)].filter((p) => !/^(things|goods|gear|products)$/i.test(p)).slice(0, 5);
+  const craftLike = (x: string) => /-|\d|\bby\b|\bhand\b|ed\b/i.test(x);
+  // "makes mugs and bowls, glazed by hand" — the clause before the first comma names products, not qualities.
+  if (body.includes(",") && !craftLike(body.split(",")[0]!)) body = body.slice(body.indexOf(",") + 1);
+  const parts = body.split(/\s+and\s+|,\s*|\s+—\s+|\s+•\s+|\s+·\s+|\s+with\s+/).map(clean).filter((p) => p.length > 2 && p.length < 40);
+  const craft = sentences.slice(1).map((x) => x.match(/every (?:piece|one|item|order|pair|bag) is ([^—.,]+)/i)?.[1]).find(Boolean);
+  const craftParts = craft ? craft.split(/\s+and\s+/).map(clean) : [];
+  const all = [...craftParts, ...parts].map((p) => p.replace(/^(a|an|the)\s+/i, ""));
+  return [...new Set(all)].filter((p) => !/^(things|goods|gear|products)$/i.test(p) && !(name && p.toLowerCase() === clean(name).toLowerCase())).slice(0, 5);
 }
 
 /** "MEXICO CITY · HAND-STITCHED" style header line under the wordmark. */
@@ -36,16 +41,19 @@ export function brandTagline(brand: Pick<Brand, "description" | "slogan" | "name
   if (loc && d[0]) return `${loc} · ${d[0]}`.toUpperCase();
   if (loc) return loc.toUpperCase();
   if (d[0]) return d.slice(0, 2).join(" · ").toUpperCase();
-  const firstClause = (brand.description || brand.slogan).split(/[.,;—]/)[0] ?? "";
-  return clean(firstClause).slice(0, 48).toUpperCase();
+  if (brand.slogan) return clean(brand.slogan).slice(0, 48).toUpperCase();
+  const firstClause = clean(brand.description.split(/[.,;—]/)[0] ?? "");
+  const cut = firstClause.length > 40 ? firstClause.slice(0, 40).replace(/\s+\S*$/, "") : firstClause;
+  return cut.toUpperCase();
 }
 
 /** "◆ HAND-STITCHED · FULL-GRAIN LEATHER" eyebrow above the PDP title. */
 export function trustEyebrow(brand: Pick<Brand, "description" | "name" | "slogan">): string {
   const d = brandDescriptors(brand.description, brand.name);
-  const picks = d.slice(0, 2);
-  if (!picks.length) return clean(brand.slogan).toUpperCase();
-  return picks.join(" · ").toUpperCase();
+  const loc = brandLocation(brand.description);
+  if (!d.length) return clean(loc ? `Made in ${loc}` : brand.slogan).toUpperCase();
+  const first = loc && /^(hand|made|built|cut|sewn|stitched|forged|cast|thrown|woven|roasted|brewed)/i.test(d[0]!) ? `${d[0]} in ${loc}` : d[0]!;
+  return [first, d[1]].filter(Boolean).join(" · ").toUpperCase();
 }
 
 export function pdpMicrocopy(brand: Pick<Brand, "description" | "name">, metaMicrocopy?: unknown): string {

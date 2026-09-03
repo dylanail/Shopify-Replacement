@@ -20,8 +20,10 @@ export function middleware(req: NextRequest) {
 
   if (url.pathname === "/s" || url.pathname.startsWith("/s/")) {
     const rest = url.pathname.replace(/^\/s\/[^/]+/, "") || "/";
+    const slug = url.pathname.split("/")[2];
     reqHeaders.set("x-kiln-mode", "path");
     reqHeaders.set("x-kiln-path", rest);
+    if (slug) reqHeaders.set("x-kiln-store", decodeURIComponent(slug));
     return NextResponse.next({ request: { headers: reqHeaders } });
   }
 
