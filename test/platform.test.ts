@@ -4,7 +4,7 @@ import { fresh } from './helpers.ts'
 import { open, seal, verifyPassword, hashPassword, fingerprint } from '../src/lib/crypto.ts'
 import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
-import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, addDomain, verifyDomain } from '../src/control/stores.ts'
+import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, updateStore, addDomain, verifyDomain } from '../src/control/stores.ts'
 import { requireRole, register, inviteTeammate, acceptInvite, roleOn } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
 import { directoryEntries } from '../src/control/catalog-plugins.ts'
@@ -269,4 +269,52 @@ test('a member cannot take the storefront live, connect a domain or delete a pag
   assert.equal(requireRole(db, mate.id, owner.id), 'member', 'a member is a member of the store')
   assert.throws(() => requireRole(db, mate.id, owner.id, 'admin'), /needs admin access/, 'and not an admin of it')
   assert.equal(requireRole(db, user.id, owner.id, 'owner'), 'owner')
+})
+
+test('the brand belongs to the environment: an edit is on the draft until it is published', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Palette Co', prompt: 'palette' })
+  updateStore(db, store.id, { brand: { primary: '#111111', announcement: 'Free shipping over $50' } })
+  createProduct(db, store.id, { title: 'Thing', status: 'published', variants: [{ title: 'One', priceCents: 1000 }] })
+  publish(db, store.id)
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#111111', 'publishing copies the brand across')
+
+  // The assistant changes the palette and the announcement bar.
+  updateStore(db, store.id, { brand: { primary: '#ff0000', announcement: 'FLASH SALE' } })
+  assert.equal(getStore(db, store.id)!.brand.primary, '#ff0000', 'the working copy moves')
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#111111', 'the live storefront does not')
+  assert.equal(environment(db, store.id, 'live').brand.announcement, 'Free shipping over $50')
+  assert.equal(publishState(db, store.id).label, 'Publish changes', 'and the button says there is something to publish')
+
+  publish(db, store.id)
+  assert.equal(environment(db, store.id, 'live').brand.primary, '#ff0000')
+
+  rollback(db, store.id)
+  assert.equal(getStore(db, store.id)!.brand.primary, '#ff0000', 'rollback returns the working copy to what is live')
+})
+
+test('an installed first-party plugin draws something on the storefront', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Slots', prompt: 'slots' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 5000, inventory: 5 }] })
+
+  // Nothing installed: nothing rendered.
+  assert.equal(renderSlot(db, store.id, 'pdpBelowAddToCart', { productId: product.id }).trim(), '')
+
+  install(db, store.id, 'product-reviews')
+  install(db, store.id, 'engraving')
+  const pdp = renderSlot(db, store.id, 'pdpBelowAddToCart', {
+    productId: product.id,
+    base: `/s/${store.slug}`,
+    reviews: { average: 4.8, count: 12 },
+    reviewList: [{ rating: 5, title: 'Solid', body: 'Held up.', author: 'M.', verified: true }],
+  })
+  assert.match(pdp, /4\.8/, 'the review badge draws itself')
+  assert.match(pdp, /Held up\./, 'and so does the wall')
+  assert.match(pdp, /name="engraving"/, 'and the engraving field')
+  assert.ok(!/rendered by the theme/.test(pdp), 'no component is left as a comment waiting for a theme that never draws it')
+
+  install(db, store.id, 'contact-form')
+  assert.match(renderSlot(db, store.id, 'accountOverview', { base: `/s/${store.slug}` }), /action="\/s\/[a-z0-9-]+\/contact"/)
 })

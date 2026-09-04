@@ -8,7 +8,7 @@ import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } fr
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
 import { createStore, environment } from '../src/control/stores.ts'
 import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
-import { blockPage, productPage } from '../src/storefront/render.ts'
+import { blockPage, htmlPage, productPage } from '../src/storefront/render.ts'
 import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
@@ -439,4 +439,31 @@ test('a split-test version served at the product URL is that product, to a crawl
   })
   assert.ok(!/Coach Mara/.test(asProduct), 'at the product address the operator\'s internal name is not the title')
   assert.match(asProduct, new RegExp(`rel="canonical" href="[^"]*/products/${glove.handle}"`), 'and the canonical is the product, not a page nobody links to')
+})
+
+test('a cloned page carries its own meta, not the site it was copied from', () => {
+  const { db, store } = shop()
+  const source = `<!doctype html><html><head><title>Their Brand — Buy Now</title>
+    <meta name="description" content="Their words">
+    <link rel="canonical" href="https://competitor.example/offer">
+    <meta property="og:title" content="Their Brand"></head><body><h1>Offer</h1></body></html>`
+  const page = createPage(db, store.id, {
+    title: 'Our offer',
+    kind: 'landing',
+    mode: 'html',
+    rawHtml: source,
+    sourceUrl: 'https://competitor.example/offer',
+    seo: { title: 'Our offer — Bundle Co', description: 'What we actually sell' },
+    headHtml: '<meta name="robots" content="index">',
+    status: 'published',
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const out = htmlPage(view as never, getPage(db, store.id, page.id)!)
+
+  assert.match(out, /<title>Our offer — Bundle Co<\/title>/)
+  assert.ok(!/Their Brand — Buy Now/.test(out), 'the source title is gone, not sitting beside ours')
+  assert.match(out, /content="What we actually sell"/)
+  assert.ok(!/competitor\.example\/offer"/.test(out.match(/rel="canonical"[^>]*/)?.[0] ?? ''), 'the canonical is ours')
+  assert.match(out, new RegExp(`rel="canonical" href="[^"]*/pages/${page.handle}"`))
+  assert.match(out, /name="robots" content="index"/, 'and the extra head is emitted at all')
 })

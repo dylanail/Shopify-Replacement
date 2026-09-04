@@ -53,7 +53,7 @@ export const storefrontTools: Tool[] = defineTools([
       }
       updateStore(ctx.db, ctx.storeId, { name, brand })
       return {
-        summary: `Brand set: ${name}, "${brand.slogan}", ${brand.primary} on ${brand.paper}.`,
+        summary: `Brand set on the draft: ${name}, "${brand.slogan}", ${brand.primary} on ${brand.paper}. Publish to make it live.`,
         data: brand,
         artifacts: [{ type: 'image', urls: [brand.logoSvg ?? store.brand.logoSvg ?? ''].filter(Boolean), caption: `${name} mark` }],
       }
@@ -62,14 +62,14 @@ export const storefrontTools: Tool[] = defineTools([
   {
     name: 'generate_brand_logo',
     area: 'store',
-    description: 'Draw a new brand mark from the current palette.',
+    description: 'Draw a new brand mark from the current palette. Goes to the draft; publish makes it live.',
     schema: { note: { type: 'string', help: 'Optional steer for the mark.' } },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
       if (!store) throw new Error('No store')
       const logoSvg = await generate({ subject: `${store.name} ${(args.note as string) ?? ''} monogram`, kind: 'logo', label: store.name, palette: store.brand })
       updateStore(ctx.db, ctx.storeId, { brand: { logoSvg } })
-      return { summary: `New mark for ${store.name}.`, artifacts: [{ type: 'image', urls: [logoSvg], caption: `${store.name} mark` }] }
+      return { summary: `New mark for ${store.name}, on the draft. Publish to make it live.`, artifacts: [{ type: 'image', urls: [logoSvg], caption: `${store.name} mark` }] }
     },
   },
   {
@@ -150,11 +150,11 @@ export const storefrontTools: Tool[] = defineTools([
   {
     name: 'set_announcement',
     area: 'store',
-    description: 'Set the announcement bar text at the top of the storefront.',
+    description: 'Set the announcement bar text at the top of the storefront. Goes to the draft; publish makes it live.',
     schema: { text: { type: 'string', required: true, max: 120 } },
     handler(args, ctx) {
       updateStore(ctx.db, ctx.storeId, { brand: { announcement: args.text as string } })
-      return { summary: `Announcement bar now reads "${args.text}".` }
+      return { summary: `Announcement bar on the draft now reads "${args.text}". Publish to make it live.` }
     },
   },
   {

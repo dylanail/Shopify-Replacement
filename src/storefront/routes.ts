@@ -12,6 +12,7 @@ import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
 import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
 import { publicStoreUrl } from '../lib/urls.ts'
+import { renderSlot } from '../control/plugins.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
@@ -38,12 +39,18 @@ const log = logger('checkout')
 export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean } = {}): StoreView {
   const db = getDb()
   const env = environment(db, store.id, opts.preview ? 'draft' : store.status === 'live' ? 'live' : 'draft')
+  // The brand belongs to the environment being rendered. `stores.brand` is the
+  // working copy — the one the designer and the assistant's tools write — so
+  // reading it on the live path meant a colour change or a new announcement
+  // bar was live before anyone published it. A live environment with no brand
+  // of its own predates this and falls back rather than rendering unbranded.
+  const branded = env.kind === 'live' && Object.keys(env.brand).length ? { ...store, brand: env.brand } : store
   const cartId = ctx.cookies[`${CART_COOKIE}_${store.id}`]
   const cart = cartId ? getCart(db, store.id, cartId) : null
   const base = process.env.AMBORAS_STOREFRONT_HOST && !opts.preview ? '' : `${opts.preview ? '/preview' : '/s'}/${store.slug}`
   return {
     db,
-    store,
+    store: branded,
     env,
     base,
     preview: opts.preview ?? false,
@@ -201,7 +208,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const updated = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined)
     const line = updated.items.find((item) => item.variantId === variantId)
     record(ctx, current, 'cart.add', { productId: line?.productId, amountCents: (line?.unitCents ?? 0) * quantity })
-    return redirect(`${current.base}/cart`)
+    // The cart page fires the AddToCart pixel for exactly this line, once.
+    return redirect(`${current.base}/cart?added=${encodeURIComponent(variantId)}`)
   })
 
   router.post('/cart/update', async (ctx) => {
@@ -232,7 +240,9 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     }
     current = withTotals(current)
     ensureCart(ctx, current)
-    return html(view.cartPage(current, current.totals!))
+    const justAdded = ctx.query.get('added')
+    const line = justAdded ? current.cart?.items.find((item) => item.variantId === justAdded) : undefined
+    return html(view.cartPage(current, current.totals!, line ? { productId: line.productId, amountCents: line.unitCents * line.quantity } : null))
   })
 
   router.get('/checkout', (ctx) => {
@@ -374,9 +384,14 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       privacy: privacyHtml(current.db, current.store),
       terms: termsHtml(current.db, current.store),
       shipping: shippingHtml(current.db, current.store),
+      // The support surface. Merchant-choice components on the accountOverview
+      // slot — the contact form among them — are drawn here; before this, that
+      // slot was rendered nowhere at all, so the Contact Form plugin installed
+      // and could never appear.
+      contact: `<p>Tell us what you need and a person will read it.</p>${renderSlot(current.db, current.store.id, 'accountOverview', { base: current.base }, { preview: current.preview })}`,
     }
     if (!copy[slug]) throw notFound('No such page')
-    const titles: Record<string, string> = { about: 'About', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
+    const titles: Record<string, string> = { about: 'About', contact: 'Contact', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
     return html(view.simplePage(current, titles[slug] ?? slug, copy[slug]))
   })
 

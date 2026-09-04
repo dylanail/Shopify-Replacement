@@ -82,6 +82,7 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
   <div><div class="eyebrow" style="color:inherit;opacity:.6">Help</div>
     <a href="${view.base}/pages/shipping">Shipping &amp; returns</a>
     <a href="${view.base}/pages/about">About</a>
+    <a href="${view.base}/pages/contact">Contact</a>
     <a href="${view.base}/pages/privacy">Privacy</a>
     <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
@@ -124,9 +125,36 @@ export function blockPage(view: StoreView, page: Page, servedAs?: { title: strin
   })
 }
 
-/** A cloned or hand-written HTML page is served as-is, with only the draft banner added in preview. */
+/**
+ * A cloned or hand-written HTML page, served as its own document.
+ *
+ * Its own <head> is honoured — this is the whole point of HTML mode — but the
+ * page's SEO fields and extra head are written *over* what came with it. The
+ * cloner stores a title and description for exactly these pages and neither
+ * was ever emitted, so every cloned page went out carrying the source site's
+ * meta tags, its canonical, and its Open Graph card.
+ */
 export function htmlPage(view: StoreView, page: Page): string {
-  const html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
+  let html = page.rawHtml || '<!doctype html><title>Empty page</title><p>This page has no HTML yet.</p>'
+  const canonical = absolute(view, `${view.base}/pages/${page.handle}`)
+  const owned: string[] = []
+  if (page.seo.title) owned.push(`<title>${escapeHtml(page.seo.title)}</title>`)
+  if (page.seo.description) owned.push(`<meta name="description" content="${escapeHtml(page.seo.description.slice(0, 300))}">`)
+  owned.push(`<link rel="canonical" href="${escapeHtml(canonical)}">`)
+  owned.push(`<meta property="og:url" content="${escapeHtml(canonical)}">`)
+  if (page.seo.title) owned.push(`<meta property="og:title" content="${escapeHtml(page.seo.title)}">`)
+  if (page.seo.description) owned.push(`<meta property="og:description" content="${escapeHtml(page.seo.description.slice(0, 300))}">`)
+  if (page.seo.image) owned.push(`<meta property="og:image" content="${escapeHtml(absolute(view, page.seo.image))}">`)
+  if (page.headHtml) owned.push(page.headHtml)
+  // The source's own title, description and canonical are dropped first, or
+  // both would be in the document and the crawler would pick the wrong one.
+  if (owned.length) {
+    if (page.seo.title) html = html.replace(/<title>[\s\S]*?<\/title>/i, '')
+    if (page.seo.description) html = html.replace(/<meta[^>]+name=["']description["'][^>]*>/gi, '')
+    html = html.replace(/<link[^>]+rel=["']canonical["'][^>]*>/gi, '').replace(/<meta[^>]+property=["']og:(url|title|description|image)["'][^>]*>/gi, '')
+    const block = `\n${owned.join('\n')}\n`
+    html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (match) => `${match}${block}`) : block + html
+  }
   if (!view.preview) return html
   const banner = '<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a1a1a;color:#fff;font:500 11px/1 system-ui;letter-spacing:.18em;text-transform:uppercase;text-align:center;padding:.7rem">Draft preview — not what customers see</div>'
   return html.includes('<body') ? html.replace(/<body[^>]*>/i, (match) => `${match}${banner}`) : banner + html
@@ -294,7 +322,19 @@ export function productPage(
     ${content.guarantee ? `<div class="guarantee"><span class="badge">${promises.guaranteeDays}</span><div><strong>${promises.guaranteeDays}-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
     ${promises.payments.length ? `<div class="payicons small">${promises.payments.map((method) => `<i>${escapeHtml(method)}</i>`).join('')}</div>` : ''}
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
-    ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
+    ${renderSlot(
+      view.db,
+      view.store.id,
+      'pdpBelowAddToCart',
+      {
+        productId: product.id,
+        base: view.base,
+        reviews: { average: stats.average, count: stats.count },
+        reviewList: reviews.slice(0, 3).map((review) => ({ rating: review.rating, title: review.title, body: review.body, author: review.author, verified: review.verified })),
+        companions: companions.map((entry) => ({ handle: entry.handle, title: entry.title, image: entry.heroImage, price: money(Math.min(...entry.variants.map((variant) => variant.priceCents)), view) })),
+      },
+      { preview: view.preview },
+    )}
     ${companions.length ? upsellWidget(view, companions) : ''}
   </div>
 </div>
@@ -578,7 +618,13 @@ function reviewsSection(view: StoreView, product: Product, stats: ReviewStats, r
 
 /* ----------------------------------------------------------------------- cart */
 
-export function cartPage(view: StoreView, totals: Totals): string {
+/**
+ * `added` is the line the visitor just put in, when they arrived here from an
+ * add-to-cart. Meta's and TikTok's AddToCart components are declared on the
+ * `cartUpdate` slot, which nothing rendered — so the event both platforms
+ * optimise on before a store has purchase volume never fired.
+ */
+export function cartPage(view: StoreView, totals: Totals, added?: { productId: string; amountCents: number } | null): string {
   const cart = view.cart
   const items = cart?.items ?? []
   const gap = totals.freeShippingGapCents
@@ -611,7 +657,8 @@ export function cartPage(view: StoreView, totals: Totals): string {
         <button class="btn btn--ghost" type="submit">Apply</button></form>
       ${totalsBlock(view, totals)}
       <a class="btn btn--wide" style="margin-top:1rem" href="${view.base}/checkout">Checkout</a>
-      ${renderSlot(view.db, view.store.id, 'cartDrawer', {}, { preview: view.preview })}
+      ${renderSlot(view.db, view.store.id, 'cartDrawer', { base: view.base, companions: [] }, { preview: view.preview })}
+      ${added ? renderSlot(view.db, view.store.id, 'cartUpdate', { amount: added.amountCents, currency: totals.currency, productId: added.productId }, { preview: view.preview }) : ''}
     </div></div>`
       : `<p class="micro">Your cart is empty. <a href="${view.base}/collections/all">Have a look around</a>.</p>`}
   </section>`

@@ -578,6 +578,18 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE orders ADD COLUMN notes TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    name: '015_environment_brand',
+    sql: `
+    -- The draft/live split covered the theme and nothing else, so the brand —
+    -- name, slogan, palette, fonts, logo and the announcement bar — changed the
+    -- live storefront the moment the assistant touched it, while the composer
+    -- promised edits land on the draft. The live environment keeps its own
+    -- copy now; stores.brand is the draft, and publish copies it over.
+    ALTER TABLE store_environments ADD COLUMN brand TEXT NOT NULL DEFAULT '{}';
+    UPDATE store_environments SET brand = (SELECT brand FROM stores WHERE stores.id = store_environments.store_id);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

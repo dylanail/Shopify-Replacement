@@ -30,6 +30,7 @@ export function editorPage(input: { page: Page; storeSlug: string; products: Arr
     <a class="back" href="/admin/pages">← Pages</a>
     <input class="title" id="title" value="${escapeHtml(page.title)}" aria-label="Page title">
     <span class="mode"><button type="button" data-mode="blocks" class="${page.mode === 'blocks' ? 'on' : ''}">Blocks</button><button type="button" data-mode="html" class="${page.mode === 'html' ? 'on' : ''}">HTML</button></span>
+    <button type="button" class="btn" id="open-seo">SEO &amp; head</button>
     <span class="spacer"></span>
     <span class="status" id="status">Saved</span>
     <label class="pub"><input type="checkbox" id="published" ${page.status === 'published' ? 'checked' : ''}> Published</label>
@@ -43,11 +44,23 @@ export function editorPage(input: { page: Page; storeSlug: string; products: Arr
     <aside class="props"><div class="pane-title" id="props-title">Settings</div><div id="props"><p class="muted">Select a block to edit it.</p></div></aside>
   </div>
   <div class="ed-body html" id="html-mode" ${page.mode === 'html' ? '' : 'hidden'}>
-    <div class="code"><div class="pane-title">HTML <span class="muted">— the whole document, served as-is</span></div><textarea id="html" spellcheck="false">${escapeHtml(page.rawHtml)}</textarea></div>
-    <div class="code"><div class="pane-title">Extra &lt;head&gt; (both modes)</div><textarea id="head" spellcheck="false" style="min-height:120px">${escapeHtml(page.headHtml)}</textarea>
-      <div class="pane-title" style="margin-top:1rem">SEO</div>
-      <input id="seo-title" placeholder="Title tag" value="${escapeHtml(page.seo.title ?? '')}"><input id="seo-desc" placeholder="Meta description" value="${escapeHtml(page.seo.description ?? '')}"><input id="seo-image" placeholder="Share image URL" value="${escapeHtml(page.seo.image ?? '')}">
-      ${page.mode === 'html' ? `<p class="muted" style="font-size:12px;margin-top:1rem">Cloned from ${escapeHtml(page.sourceUrl || 'nowhere')}. <button type="button" class="link" id="to-blocks">Read this into blocks as a template</button></p>` : ''}</div>
+    <div class="code" style="grid-column:1/-1"><div class="pane-title">HTML <span class="muted">— the whole document, served as-is</span></div><textarea id="html" spellcheck="false">${escapeHtml(page.rawHtml)}</textarea>
+      ${page.mode === 'html' ? `<p class="muted" style="font-size:12px;margin-top:.6rem">Cloned from ${escapeHtml(page.sourceUrl || 'nowhere')}. <button type="button" class="link" id="to-blocks">Read this into blocks as a template</button></p>` : ''}</div>
+  </div>
+  <!--
+    The head and SEO fields used to live inside #html-mode, hidden for every
+    blocks page — so the only way to reach them was the HTML button, which
+    switched the page's mode and posted an empty rawHtml over it on save. They
+    are a drawer over whichever mode is open, and touching them changes no mode.
+  -->
+  <div class="drawer" id="seo-drawer" hidden>
+    <div class="drawer-card">
+      <div class="drawer-top"><div class="pane-title" style="border:0;padding:0">Page settings</div><button type="button" class="btn" id="close-seo">Done</button></div>
+      <label class="fld">Title tag<input id="seo-title" placeholder="${escapeHtml(page.title)}" value="${escapeHtml(page.seo.title ?? '')}"></label>
+      <label class="fld">Meta description<input id="seo-desc" placeholder="One sentence, under 155 characters" value="${escapeHtml(page.seo.description ?? '')}"></label>
+      <label class="fld">Share image URL<input id="seo-image" placeholder="https://" value="${escapeHtml(page.seo.image ?? '')}"></label>
+      <label class="fld">Extra &lt;head&gt; <span class="muted">— rendered in both modes</span><textarea id="head" spellcheck="false">${escapeHtml(page.headHtml)}</textarea></label>
+    </div>
   </div>
   <div class="preview"><div class="pane-title">Preview <span class="muted">— reloads on save</span> <span class="devices"><button type="button" data-w="100%" class="on">Desktop</button><button type="button" data-w="390px">Phone</button></span></div>
     <iframe id="preview" src="/preview/${escapeHtml(input.storeSlug)}/pages/${escapeHtml(page.handle)}" title="Preview"></iframe></div>
@@ -68,6 +81,12 @@ function css(): string {
 *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font:13px/1.5 'Inter',ui-sans-serif,system-ui,sans-serif;color:var(--ink);background:var(--paper)}
 .ed{display:grid;grid-template-rows:48px minmax(0,1fr) 44vh;height:100vh}
 .ed-top{display:flex;align-items:center;gap:.6rem;padding:0 .8rem;background:#fff;border-bottom:1px solid var(--line)}
+.drawer{position:fixed;inset:0;background:rgba(28,26,23,.35);display:grid;place-items:center;z-index:60;padding:2rem}
+.drawer-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.2rem 1.3rem;width:min(560px,100%);max-height:80vh;overflow:auto;display:flex;flex-direction:column;gap:.7rem}
+.drawer-top{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.fld{display:flex;flex-direction:column;gap:.3rem;font-size:11.5px;color:var(--muted)}
+.fld input,.fld textarea{font:inherit;font-size:13px;color:var(--ink);padding:.5rem .6rem;border:1px solid var(--line);border-radius:8px;background:#fff;width:100%}
+.fld textarea{min-height:130px;font-family:ui-monospace,monospace;font-size:12px;resize:vertical}
 .back{text-decoration:none;color:var(--muted);font-size:12px}.spacer{flex:1}
 .title{font:500 14px 'Inter',ui-sans-serif,system-ui,sans-serif;border:1px solid transparent;border-radius:6px;padding:.35rem .5rem;width:300px;background:transparent}.title:hover,.title:focus{border-color:var(--line);background:#fff}
 .mode button,.devices button{border:1px solid var(--line);background:#fff;padding:.3rem .7rem;font:inherit;font-size:12px;cursor:pointer}
@@ -208,6 +227,13 @@ function script(): string {
     $('blocks-mode').hidden = state.mode !== 'blocks'; $('html-mode').hidden = state.mode !== 'html'; setDirty(true);
   })});
   document.querySelectorAll('.devices button').forEach(function(btn){ btn.addEventListener('click', function(){ document.querySelectorAll('.devices button').forEach(function(b){ b.classList.toggle('on', b === btn) }); $('preview').style.width = btn.dataset.w }) });
+  var drawer = $('seo-drawer');
+  $('open-seo').addEventListener('click', function(){ drawer.hidden = false; $('seo-title').focus() });
+  $('close-seo').addEventListener('click', function(){ drawer.hidden = true });
+  drawer.addEventListener('click', function(ev){ if (ev.target === drawer) drawer.hidden = true });
+  document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape' && !drawer.hidden) drawer.hidden = true });
+  ['seo-title','seo-desc','seo-image','head'].forEach(function(id){ $(id).addEventListener('input', function(){ setDirty(true) }) });
+
   function payload(){ return { title: $('title').value, mode: state.mode, blocks: state.blocks, rawHtml: $('html').value, headHtml: $('head').value, status: $('published').checked ? 'published' : 'draft', isHome: $('ishome').checked, seo: { title: $('seo-title').value, description: $('seo-desc').value, image: $('seo-image').value } } }
   function save(){
     status.textContent = 'Saving…'; status.className = 'status';
