@@ -69,6 +69,21 @@ function session(ctx: Ctx): Session {
 
 class NoStores extends Error {}
 
+/**
+ * The same session, for the decisions a 'member' should not make on someone
+ * else's store: taking the storefront live or rolling it back, connecting or
+ * removing a domain, installing or removing an integration, choosing which
+ * models write, and deleting things.
+ *
+ * `requireRole` exists and three routes used it; every other write accepted
+ * the default 'member', so the role on an invite decided nothing at all.
+ */
+function adminSession(ctx: Ctx): Session {
+  const current = session(ctx)
+  requireRole(getDb(), current.user.id, current.store.id, 'admin')
+  return current
+}
+
 /** Someone who followed an invite link before they had an account joins on their first sign-in. */
 function redeemPendingInvite(ctx: Ctx, userId: string) {
   const pending = ctx.cookies[INVITE_COOKIE]
@@ -416,7 +431,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/blocks/:type/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteCustomBlock(db(), current.store.id, ctx.params.type as string)
     return back(ctx, 'Block removed. Pages that used it show a note where it was until you replace it.')
   })
@@ -457,7 +472,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/pages/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deletePage(db(), current.store.id, ctx.params.id as string)
     return redirect('/admin/pages?flash=Deleted.')
   })
@@ -503,7 +518,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/bundles/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     removeBundle(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Bundle removed and its promotions disabled.')
   })
@@ -622,7 +637,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/funnels/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteFunnel(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Funnel deleted.')
   })
@@ -805,7 +820,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/publish', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const state = publishState(db(), current.store.id)
     if (!state.ready) return back(ctx, `!${state.reason}`)
     const live = publish(db(), current.store.id)
@@ -815,7 +830,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/rollback', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     rollback(db(), current.store.id)
     return back(ctx, 'Draft reset to what is live.')
   })
@@ -838,7 +853,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/plugins/:id/settings', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       install(db(), current.store.id, ctx.params.id as string, body)
@@ -851,7 +866,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/plugins/:id/uninstall', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     requireRole(db(), current.user.id, current.store.id, 'admin')
     uninstall(db(), current.store.id, ctx.params.id as string)
     invalidateStorefrontConfig(current.store.id)
@@ -869,7 +884,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       const record = attachDomain(db(), current.store.id, { hostname: String(body.hostname ?? ''), mode: (body.mode === 'forward' ? 'forward' : 'host') as DomainMode, registrar: String(body.registrar ?? 'other') })
@@ -893,7 +908,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains/verify', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       verifyDomain(db(), current.store.id, String(body.hostname ?? ''))
@@ -905,7 +920,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains/remove', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     removeDomain(db(), current.store.id, String(body.hostname ?? ''))
     return back(ctx, 'Detached.')
@@ -982,7 +997,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/ads/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteAd(db(), current.store.id, ctx.params.id as string)
     return redirect(`/admin/ads?flash=${encodeURIComponent('Deleted.')}`)
   })
@@ -1119,7 +1134,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/market/docs/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteDoc(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Deleted.')
   })
@@ -1271,7 +1286,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/avatars/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteAvatar(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Avatar deleted.')
   })
@@ -1352,7 +1367,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/competitors/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteCompetitor(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Deleted.')
   })
@@ -1402,7 +1417,7 @@ export function adminRouter(): Router {
 
   /** Which model writes what, per store. Empty means the environment default. */
   router.post('/admin/settings/models', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     const models: Partial<Record<Task, string>> = {}
     for (const task of TASKS) {

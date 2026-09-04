@@ -5,7 +5,7 @@ import { open, seal, verifyPassword, hashPassword, fingerprint } from '../src/li
 import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
 import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, addDomain, verifyDomain } from '../src/control/stores.ts'
-import { requireRole, register, inviteTeammate, acceptInvite } from '../src/control/auth.ts'
+import { requireRole, register, inviteTeammate, acceptInvite, roleOn } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
 import { directoryEntries } from '../src/control/catalog-plugins.ts'
 import { createProduct } from '../src/domain/catalog.ts'
@@ -256,4 +256,17 @@ test('one visitor across many requests is one session', () => {
   const second = sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same' })
   assert.equal(first, second)
   assert.notEqual(first, sessionFor(db, store.id, { ip: '10.0.0.2', userAgent: 'same' }))
+})
+
+test('a member cannot take the storefront live, connect a domain or delete a page', async () => {
+  const { db, user } = fresh()
+  const owner = createStore(db, user.id, { name: 'Roles', prompt: 'roles' })
+  const mate = register(db, { email: 'mate@example.com', password: 'a-long-enough-password' })
+  const { invite } = inviteTeammate(db, owner.id, 'mate@example.com', 'member')
+  assert.ok(acceptInvite(db, mate.id, invite) || roleOn(db, mate.id, owner.id) === 'member')
+
+  assert.equal(roleOn(db, mate.id, owner.id), 'member')
+  assert.equal(requireRole(db, mate.id, owner.id), 'member', 'a member is a member of the store')
+  assert.throws(() => requireRole(db, mate.id, owner.id, 'admin'), /needs admin access/, 'and not an admin of it')
+  assert.equal(requireRole(db, user.id, owner.id, 'owner'), 'owner')
 })
