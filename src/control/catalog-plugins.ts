@@ -23,7 +23,7 @@ export const FIRST_PARTY: Plugin[] = [
     featured: true,
     description: 'Card, Apple Pay, Google Pay and Link, paid out directly to your account.',
     longDescription:
-      'Connect once and charges settle to your own Stripe account. Amboras never sits in the flow of funds — the platform fee is billed separately, so a chargeback or a payout hold is between you and Stripe.',
+      'Connect once and charges settle to your own Stripe account. Amboras never sits in the flow of funds and adds no platform fee, so a chargeback or a payout hold is between you and Stripe.',
     manifest: {
       kind: 'integration',
       api: { admin: ['POST /admin/plugins/stripe/connect', 'GET /admin/plugins/stripe/status'], store: ['POST /store/payments/stripe/intent'] },
@@ -142,6 +142,7 @@ export const FIRST_PARTY: Plugin[] = [
               `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${escapeHtml(settings.measurementId)}')</script>`,
           },
           { id: 'Ga4Purchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.gtag&&gtag('event','purchase',{transaction_id:'${escapeHtml(context.orderId ?? '')}',value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
+          { id: 'Ga4AddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.gtag&&gtag('event','add_to_cart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
       disableInPreview: true,
@@ -175,7 +176,7 @@ export const FIRST_PARTY: Plugin[] = [
             slot: 'headEnd',
             placement: 'fixed',
             render: ({ settings }) =>
-              `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[]}(window,document);fbq('init','${escapeHtml(settings.pixelId)}');fbq('track','PageView')</script>`,
+              `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${escapeHtml(settings.pixelId)}');fbq('track','PageView')</script><noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=${escapeHtml(settings.pixelId)}&ev=PageView&noscript=1" alt=""></noscript>`,
           },
           { id: 'MetaPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.fbq&&fbq('track','Purchase',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'},{eventID:'${escapeHtml(context.orderId ?? '')}'})</script>` },
           { id: 'MetaAddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.fbq&&fbq('track','AddToCart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },

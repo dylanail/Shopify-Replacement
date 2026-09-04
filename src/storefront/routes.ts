@@ -26,6 +26,7 @@ import { findRedirect, llmsTxt, robots, sitemap } from '../seo/schema.ts'
 import * as view from './render.ts'
 import type { CheckoutInput, StoreView } from './render.ts'
 import { atomFeed, rssFeed } from './feeds.ts'
+import { syncOrderTracking } from '../shipping/seventeen-track.ts'
 
 const CART_COOKIE = 'amboras_cart'
 const log = logger('checkout')
@@ -159,7 +160,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     return html(view.simplePage(current, 'You are on the list', '<p>One email when it is back. Nothing else.</p>'))
   })
 
-  router.get('/track', (ctx) => {
+  router.get('/track', async (ctx) => {
     const current = withTotals(open(ctx))
     const number = ctx.query.get('order')?.replace('#', '').trim() ?? ''
     const email = ctx.query.get('email')?.trim().toLowerCase() ?? ''
@@ -169,7 +170,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!order || (email && order.email !== email) || (!email && !current.preview)) {
       return html(view.trackPage(current, { error: 'No order matches that number and email.', related }))
     }
-    return html(view.trackPage(current, { tracking: trackingFor(current.db, current.store.id, order), related }))
+    const snapshot = await syncOrderTracking(current.db, current.store.id, order)
+    return html(view.trackPage(current, { tracking: trackingFor(current.db, current.store.id, order, snapshot), related }))
   })
 
   router.post('/cart/add', async (ctx) => {

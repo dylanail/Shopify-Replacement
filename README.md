@@ -24,7 +24,7 @@ npm start                          # http://localhost:4100
 ```
 
 ```
-npm test            # 146 tests, ~4s; the model path runs against a fake network
+npm test            # 150 tests, ~4s; model and service paths run against fake networks
 npm run typecheck
 npm run reset       # throw the database away and re-seed
 ```
@@ -67,11 +67,12 @@ says on every page and every record when it is looking at rules output.
 | **Products** | options, variants, swatches, media, SEO, supplier cost and margin, size chart, import from any Shopify `/products/x.json` or Open Graph page, structured page content, image re-shoots from a sentence with GPT Image 2 or Gemini 3 Pro Image |
 | **Pages & builder** | blocks the store defines for itself (a name, fields, an HTML template in a small language, css) when the catalog has nothing for a section, by the owner or by the assistant through `create_block`; they sit in the palette under Custom and render through the same validated path; the assistant can also drop a one-off `custom-html` section into a page, and the page writers may add a section a layout is missing; css and js wherever they are needed: a `custom-code` block for one page, a block's own css and script (run once per page that uses it), and store-wide css and js on the theme through the designer or `set_store_code`; 73 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz, the checkout's own pieces, and the parts the reference funnels run on: rating line, big numbers, results timeline, steps, value stack, expert quotes, founder letter, cost of the alternatives, video reviews, research citations, gallery, specs) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls a reference URL in with its styles and images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
 | **Templates** | offer page in the order that turned 1.18x into 3.59x, the long-form sales page, the Shopify-style product page, the science page, the story landing page, advertorial listicle, quiz funnel, product landing page, home page, and the checkout itself as blocks — published, it becomes the store's `/checkout` |
-| **Versions** | PDP versions and advertorials in named formats with free-form direction, split-tested by session with per-version views, carts, sales and conversion |
+| **Dashboard** | Shopify-style operator home with sales and profit, period-over-period KPIs, conversion funnel, live visitors, fulfillment load, experiments, recent orders, next steps, quick actions and a compact storefront preview |
+| **Versions & CRO** | PDP versions and advertorials in named formats with free-form direction; stable per-session assignment; Beta-Bernoulli probability-to-win; minimum-view and purchase guardrails; autonomous winner promotion; exact prior-weight rollback |
 | **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you; funnels in the same test group split traffic at `/go/<group>` by weight and are compared on revenue per session |
 | **Bundles** | Kaching-style tiers enforced by a promotion the cart reads |
 | **Checkout** | one page that re-sells the way the reference checkouts do (arrival date above the form, free shipping shown as a saving, the bump, the store's own guarantee and returns numbers under the button, reviews below the form), express row, buy-it-now, Stripe Payment Element with saved cards for the post-purchase offer, demo orders without keys; or laid out in the builder from the checkout blocks (form, summary, bump, steps) with a timer, the rating, the guarantee and proof around the same form |
-| **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, delivery estimates, ad-spend log, profit report with ROAS |
+| **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, live 17TRACK carrier status and event history cached in SQLite, delivery estimates, ad-spend log, profit report with ROAS |
 | **Ads** | drafts per product, platform and format; every field editable; revisable; exported for the ad manager; a swipe file fed by the Meta Ad Library, competitor links, pasted ads and hook patterns |
 | **Domains** | host here or forward from the registrar, with the records and menu path for Namecheap, GoDaddy, Cloudflare, Squarespace, Porkbun; real DNS and redirect checks; certificates issued on demand by the edge once a name verifies |
 | **Conversion widgets** | recent sales, live viewers, scarcity, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, Q&A, back-in-stock, announcements, compare-at badges, abandoned-cart email, GA4/Meta/TikTok events; each renders nothing when it has nothing honest to say |
@@ -79,7 +80,7 @@ says on every page and every record when it is looking at rules output.
 | **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog with scheduled publishing plus RSS and Atom feeds, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll; an email for a code, the deal itself, or the quiz; says how long the code is valid; never on the checkout); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
 | **Site health** | renders the pages as a visitor gets them and checks landmarks, alt text, labels, headings, button names, contrast, weight on the wire, scripts, fonts, lazy loading, and the template residue the reference pages shipped ("[confirm]" markers, dead links, placeholder images, counters at zero) |
 | **Plugins** | manifest schema, settings validation, sealed credentials, storefront slots, plugin-contributed tools; eleven first-party integrations installable, the rest a directory |
-| **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); ten transactional templates over Resend; meta, structured data, redirects, sitemap |
+| **Analytics, pixels, email, backup** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and behaviour reports; direct GA4, Meta and TikTok pixel setup with preview suppression; ten transactional templates over Resend; one-click store-scoped JSON backup without login sessions |
 
 `test/http.test.ts` walks the whole product over HTTP with no mocks,
 `test/models.test.ts` walks the model path against a fake network (research,
@@ -115,7 +116,7 @@ src/
   pages/        blocks, the builder's store, the cloner, versions
   storefront/   theme, render, routes
   admin/        shell, pages, growth pages, editor, routes
-  analytics/ email/ seo/ payments/ lib/
+  analytics/ shipping/ email/ seo/ payments/ lib/
 ```
 
 Five decisions carry the weight.
@@ -158,6 +159,7 @@ See `.env.example` for everything. The ones that decide what runs:
 | `AMBORAS_STOREFRONT_HOST`, `AMBORAS_ADMIN_HOST`, `AMBORAS_EDGE_HOST` | storefronts at `*.host`, the admin's hostname, what custom domains point at |
 | `META_AD_LIBRARY_TOKEN` | the Ads tab searches the Meta Ad Library |
 | `RESEND_API_KEY`, `AMBORAS_EMAIL_DOMAIN` | email actually sends |
+| `AMBORAS_17TRACK_API_KEY` | registers supplier tracking numbers and powers live carrier events on `/track` |
 
 On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
 `/preview/:slug` is the draft (untracked, pixels suppressed).
@@ -167,11 +169,9 @@ On localhost, `/s/:slug` is the live storefront (tracked, plugins firing) and
 - **Storefront export and the sandboxed build loop.** Stores render here;
   there is no per-store project to edit, build and screenshot. The block
   builder and the cloner are the page-building surface.
-- **Subscriptions, a Bayesian A/B engine, Search Console keyword tracking,
+- **Subscriptions, Search Console keyword tracking,
   GEO prompt tracking, newsletter flows, workflow automation, migration
-  importers beyond product import.** Listed in `ORIGINAL_INTENT.md` in
-  order. Split tests exist (page versions and funnel groups, decided on
-  revenue per session); the posterior maths does not.
+  importers beyond product import.** Listed in `ORIGINAL_INTENT.md` in order.
 - **Upsell and post-purchase pages of the reference funnels.** The fifteen
   reference pages and their click-throughs (checkouts, a collection, a home
   page, a bundle page) were read and are broken down in

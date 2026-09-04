@@ -4,6 +4,7 @@ import { createProduct, getProduct, listProducts } from './catalog.ts'
 import { createReview } from './reviews.ts'
 import { listOrders } from './orders.ts'
 import type { Order, Product, Supplier } from './types.ts'
+import type { TrackingEvent, TrackingSnapshot } from '../shipping/seventeen-track.ts'
 
 /**
  * The operations a dropshipper runs a store on: where products come from,
@@ -126,24 +127,32 @@ export type TrackingView = {
   steps: Array<{ key: string; label: string; at: string | null; done: boolean; detail?: string }>
   tracking: { number: string; carrier: string; url: string } | null
   estimate: { from: string; to: string } | null
+  live: { status: string; subStatus: string; syncedAt: string | null; events: TrackingEvent[] } | null
 }
 
-export function trackingFor(db: Db, storeId: string, order: Order): TrackingView {
+export function trackingFor(db: Db, storeId: string, order: Order, snapshot?: TrackingSnapshot | null): TrackingView {
   const shipment = order.fulfillments.find((entry) => entry.tracking)
-  const tracking = shipment ? (() => { const carrier = carrierFor(shipment.tracking, shipment.carrier); return { number: shipment.tracking, carrier: carrier.name, url: carrier.url } })() : null
+  const tracking = shipment ? (() => { const carrier = carrierFor(shipment.tracking, snapshot?.carrier || shipment.carrier); return { number: shipment.tracking, carrier: snapshot?.carrier || carrier.name, url: carrier.url } })() : null
   const first = order.items[0]
   const product = first ? getProduct(db, storeId, first.productId) : null
-  const estimate = product ? deliveryEstimate(product.supplier, order.createdAt) : null
+  const fallbackEstimate = product ? deliveryEstimate(product.supplier, order.createdAt) : null
+  const estimate = snapshot?.estimate.from || snapshot?.estimate.to
+    ? { from: snapshot.estimate.from ?? snapshot.estimate.to ?? '', to: snapshot.estimate.to ?? snapshot.estimate.from ?? '' }
+    : fallbackEstimate
   const shippedAt = shipment?.createdAt ?? null
+  const normalized = `${snapshot?.status ?? ''} ${snapshot?.subStatus ?? ''}`.toLowerCase()
+  const inTransit = /transit|pickup|delivered|exception/.test(normalized)
+  const delivered = Boolean(order.deliveredAt || /delivered/.test(normalized))
   return {
     order,
     tracking,
     estimate,
+    live: snapshot ? { status: snapshot.status, subStatus: snapshot.subStatus, syncedAt: snapshot.syncedAt, events: snapshot.events } : null,
     steps: [
       { key: 'placed', label: 'Order placed', at: order.createdAt, done: true },
       { key: 'processing', label: 'Being prepared', at: order.supplierOrder.placedAt ?? null, done: Boolean(order.supplierOrder.placedAt || shippedAt || order.deliveredAt), detail: product?.supplier.processingDays ? `Usually ${product.supplier.processingDays} days` : undefined },
-      { key: 'shipped', label: 'Shipped', at: shippedAt, done: Boolean(shippedAt || order.deliveredAt), detail: tracking ? `${tracking.carrier} ${tracking.number}` : undefined },
-      { key: 'delivered', label: 'Delivered', at: order.deliveredAt, done: Boolean(order.deliveredAt), detail: estimate && !order.deliveredAt ? `Estimated ${estimate.from} – ${estimate.to}` : undefined },
+      { key: 'shipped', label: 'Shipped', at: shippedAt, done: Boolean(shippedAt || inTransit || delivered), detail: tracking ? `${tracking.carrier} ${tracking.number}` : undefined },
+      { key: 'delivered', label: 'Delivered', at: order.deliveredAt ?? (delivered ? snapshot?.events[0]?.at ?? null : null), done: delivered, detail: estimate && !delivered ? `Estimated ${estimate.from} – ${estimate.to}` : undefined },
     ],
   }
 }

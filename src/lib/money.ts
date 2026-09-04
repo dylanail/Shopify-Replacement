@@ -22,7 +22,7 @@ export function percentOf(cents: Cents, percent: number): Cents {
   return Math.round((cents * percent) / 100)
 }
 
-/** Card fees follow the plan tier; the platform fee is charged separately. */
+/** Estimate Stripe-style card processing; personal mode adds no platform fee. */
 export function cardFee(cents: Cents, rate: number): Cents {
   return Math.round(cents * rate) + 30
 }

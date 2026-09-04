@@ -551,6 +551,22 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE custom_blocks ADD COLUMN js TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    name: '012_tracking_snapshots',
+    sql: `
+    -- 17TRACK is polled on demand and cached. This keeps the public tracking
+    -- page fast and avoids spending an API quota on every customer refresh.
+    CREATE TABLE tracking_snapshots (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      tracking TEXT NOT NULL, carrier TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '', sub_status TEXT NOT NULL DEFAULT '',
+      estimate TEXT NOT NULL DEFAULT '{}', events TEXT NOT NULL DEFAULT '[]',
+      registered_at TEXT, synced_at TEXT, error TEXT NOT NULL DEFAULT '',
+      UNIQUE (store_id, tracking));
+    CREATE INDEX tracking_order ON tracking_snapshots(store_id, order_id);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

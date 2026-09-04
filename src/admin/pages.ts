@@ -8,8 +8,7 @@ import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions } from '../domain/regions.ts'
 import { environment, type Store } from '../control/stores.ts'
-import { listTeam } from '../control/auth.ts'
-import { listAudit } from '../control/todos.ts'
+import { listAudit, listTodos } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
 import { listInstalled } from '../control/plugins.ts'
 import { catalog, resolvedModels } from '../agent/models.ts'
@@ -26,6 +25,7 @@ import { getInstalled, hasCredentials } from '../control/plugins.ts'
 import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
+import { listExperiments, type Experiment } from '../analytics/experiments.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
@@ -33,12 +33,17 @@ import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
 import { listCustomBlocks } from '../pages/custom-blocks.ts'
-import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
+import { seventeenTrackConfigured } from '../shipping/seventeen-track.ts'
+import { domainsFor } from '../control/domains.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
 
 const pct = (value: number) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+
+function textModelOptions(): string {
+  return `<option value="">Store default</option>${catalog().map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}`
+}
 
 function kpiRow(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d') {
   const stats = kpis(ctx.db, ctx.store.id, range)
@@ -65,42 +70,91 @@ function flash(ctx: Ctx): string {
 /* ------------------------------------------------------------------ dashboard */
 
 export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string {
-  const series = revenueSeries(ctx.db, ctx.store.id, 14)
-  const peak = Math.max(1, ...series.map((point) => point.revenue))
-  const orders = listOrders(ctx.db, ctx.store.id, { limit: 6 })
+  const days = range === '24h' ? 2 : range === '7d' ? 7 : range === '30d' ? 30 : 90
+  const series = revenueSeries(ctx.db, ctx.store.id, days)
+  const stats = kpis(ctx.db, ctx.store.id, range)
+  const profit = profitReport(ctx.db, ctx.store.id, days)
+  const stages = funnel(ctx.db, ctx.store.id, range)
+  const live = liveVisitors(ctx.db, ctx.store.id, 30) as Array<{ city: string; country: string; path: string }>
+  const orders = listOrders(ctx.db, ctx.store.id, { limit: 8 })
+  const allOrders = listOrders(ctx.db, ctx.store.id, { limit: 500 })
   const low = lowStock(ctx.db, ctx.store.id, 5) as Array<{ product_title: string; title: string; inventory: number }>
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 1000, includeHidden: true })
+  const runningExperiments = listExperiments(ctx.db, ctx.store.id).filter((entry) => ['running', 'ready', 'paused'].includes(entry.status))
+  const todos = listTodos(ctx.db, ctx.store.id).filter((entry) => entry.status !== 'done').slice(0, 4)
+  const pendingOrders = allOrders.filter((order) => order.status !== 'cancelled' && order.fulfillmentStatus === 'unfulfilled').length
+  const tiles: Array<[string, string, number, string]> = [
+    ['Total sales', format(stats.revenueCents, ctx.store.currency), stats.deltas.revenueCents ?? 0, '↗'],
+    ['Orders', String(stats.orders), stats.deltas.orders ?? 0, '▤'],
+    ['Visitors', String(stats.sessions), stats.deltas.sessions ?? 0, '◎'],
+    ['Conversion rate', `${(stats.conversionRate * 100).toFixed(2)}%`, stats.deltas.conversionRate ?? 0, '◒'],
+    ['Average order', format(stats.aovCents, ctx.store.currency), stats.deltas.aovCents ?? 0, '$'],
+  ]
   return `${flash(ctx)}
-  <div class="head">
-    <div><h1 class="serif">Hello ${escapeHtml(ctx.userName)}, <em>welcome back.</em></h1>
-      <p class="muted" style="margin:.3rem 0 0">${escapeHtml(ctx.store.brand.slogan ?? ctx.store.name)}</p></div>
-    <form method="get" class="row"><select name="range" onchange="this.form.submit()">
+  <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? 'Store is live' : 'Draft storefront'}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
+      <p class="muted">${escapeHtml(ctx.store.name)} · ${products.filter((product) => product.status === 'published').length} published products</p></div>
+    <div class="dash-actions"><a class="btn" href="/admin/store">Customize store</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View store ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
       ${(['24h', '7d', '30d', '90d'] as const).map((option) => `<option value="${option}" ${option === range ? 'selected' : ''}>Last ${option}</option>`).join('')}
-    </select></form>
-  </div>
-  ${kpiRow(ctx, range)}
-  <div class="grid2">
-    <div>
-      <div class="preview">
-        <div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div>
-        <iframe src="${escapeHtml(ctx.storeUrl)}" title="Live storefront preview" loading="lazy"></iframe>
-      </div>
-    </div>
-    <div>
-      <div class="card"><h2>Revenue, 14 days</h2>
-        <div class="spark" style="margin-top:.7rem">${series.map((point) => `<i style="height:${Math.max(2, (point.revenue / peak) * 44)}px" title="${point.day}: ${format(point.revenue, ctx.store.currency)}"></i>`).join('')}</div>
-        <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">${series[0]?.day} → ${series.at(-1)?.day}</p>
-      </div>
-      <div class="card"><h2>Recent orders</h2>
-        <table class="data" style="margin-top:.5rem">${orders.length ? orders
-          .map((order) => `<tr><td><a href="/admin/orders/${escapeHtml(order.id)}">#${order.displayId}</a></td>
-            <td class="muted">${escapeHtml(order.email)}</td><td>${format(order.totalCents, order.currency)}</td>
-            <td><span class="tag ${order.fulfillmentStatus === 'unfulfilled' ? 'warn' : 'ok'}">${order.fulfillmentStatus}</span></td></tr>`)
-          .join('') : '<tr><td class="muted">No orders yet.</td></tr>'}</table>
-      </div>
-      ${low.length ? `<div class="card"><h2>Running low</h2>
-        <table class="data" style="margin-top:.5rem">${low.slice(0, 5).map((row) => `<tr><td>${escapeHtml(row.product_title)}</td><td class="muted">${escapeHtml(row.title)}</td><td>${row.inventory}</td></tr>`).join('')}</table></div>` : ''}
-    </div>
-  </div>`
+    </select></form></div></div>
+  <div class="commerce-kpis">${tiles.map(([label, value, delta, glyph]) => `<div class="metric-card"><div class="label"><span>${label}</span><span>${glyph}</span></div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
+  <div class="dashboard-grid"><div class="card dash-card"><div class="dash-card-head"><div><h2>Total sales</h2><div class="dash-total">${format(stats.revenueCents, ctx.store.currency)}</div><div class="muted" style="font-size:11px">${stats.orders} orders · net profit ${format(profit.profitCents, ctx.store.currency)}</div></div><a class="btn" href="/admin/analytics">View report</a></div>${salesChart(series)}<div class="chart-labels"><span>${series[0]?.day ?? ''}</span><span>${series[Math.floor(series.length / 2)]?.day ?? ''}</span><span>${series.at(-1)?.day ?? ''}</span></div></div>
+    <div class="card dash-card pulse-card"><div class="eyebrow" style="color:#a9c9b3">Store pulse</div><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:.75rem"><div><div class="pulse-number">${live.length}</div><div class="muted">visitors right now</div></div><span style="font-size:1.4rem">◉</span></div><div class="pulse-list"><a href="/admin/orders"><span>Orders to fulfill</span><strong>${pendingOrders}</strong></a><a href="/admin/cro"><span>Active experiments</span><strong>${runningExperiments.length}</strong></a><a href="/admin/products"><span>Low-stock variants</span><strong>${low.length}</strong></a></div></div></div>
+  <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><div><h2>Conversion funnel</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">From first visit through purchase</p></div><a class="btn" href="/admin/cro">Run an experiment</a></div><div class="funnel-compact">${stages.map((stage) => `<div class="funnel-line"><span>${escapeHtml(stage.stage)}</span><div class="track"><i style="width:${Math.max(stage.count ? 2 : 0, stage.share * 100)}%"></i></div><strong>${stage.count}</strong></div>`).join('')}</div></div>
+    <div class="card dash-card"><div class="dash-card-head"><h2>Next things to do</h2><a href="/admin/build" class="muted" style="font-size:11px">See plan</a></div><div class="pulse-list" style="margin-top:.55rem">${todos.length ? todos.map((todo) => `<a href="/admin${escapeHtml(todo.href)}" style="background:#fafbf9;color:var(--ink);border-color:var(--line)"><span>${escapeHtml(todo.label)}</span><strong>→</strong></a>`).join('') : '<div class="dash-empty">Setup is clear. Keep an eye on orders and experiments.</div>'}</div></div></div>
+  <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><h2>Recent orders</h2><a class="btn" href="/admin/orders">View all</a></div><div class="order-list">${orders.length ? orders.slice(0, 6).map((order) => `<a class="order-item" href="/admin/orders/${escapeHtml(order.id)}"><span class="order-badge">#${order.displayId}</span><span><strong>${escapeHtml(order.email)}</strong><small>${order.items.length} item${order.items.length === 1 ? '' : 's'} · ${order.createdAt.slice(0, 10)}</small></span><span style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong><small>${escapeHtml(order.fulfillmentStatus)}</small></span></a>`).join('') : '<div class="dash-empty">No orders yet. Your first one will appear here.</div>'}</div></div>
+    <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products"><span>＋</span><strong>Add product</strong></a><a href="/admin/pages"><span>▤</span><strong>Build page</strong></a><a href="/admin/ads"><span>◭</span><strong>Draft ads</strong></a><a href="/admin/cro"><span>◒</span><strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
+  <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>Storefront preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} storefront.</p></div><a class="btn" href="/admin/store">Open designer</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="Storefront preview" loading="lazy"></iframe></div></div>`
+}
+
+function salesChart(series: Array<{ day: string; revenue: number; orders: number }>): string {
+  const width = 760
+  const height = 170
+  const pad = 8
+  const peak = Math.max(1, ...series.map((point) => point.revenue))
+  const points = series.map((point, index) => {
+    const x = pad + (index / Math.max(1, series.length - 1)) * (width - pad * 2)
+    const y = height - pad - (point.revenue / peak) * (height - pad * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  const firstX = points[0]?.split(',')[0] ?? String(pad)
+  const lastX = points.at(-1)?.split(',')[0] ?? String(width - pad)
+  return `<svg class="sales-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Sales over time"><defs><linearGradient id="sales-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4c9b72" stop-opacity=".28"/><stop offset="1" stop-color="#4c9b72" stop-opacity="0"/></linearGradient></defs>${[32, 72, 112, 152].map((y) => `<line class="gridline" x1="0" y1="${y}" x2="${width}" y2="${y}"/>`).join('')}<path class="area" d="M ${firstX} ${height} L ${points.join(' L ')} L ${lastX} ${height} Z"/><polyline class="line" points="${points.join(' ')}"/></svg>`
+}
+
+/* --------------------------------------------------------------- experiments */
+
+export function experimentsPage(ctx: Ctx): string {
+  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const experiments = listExperiments(ctx.db, ctx.store.id)
+  const productById = new Map(products.map((product) => [product.id, product]))
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">Autonomous CRO</div><h1 class="serif">Experiments</h1>
+    <p class="muted" style="margin:.25rem 0 0;max-width:720px">Stable visitor assignment, Bayesian decisions, and guardrails against small-sample winners. A winner can promote itself; every promotion keeps the exact previous traffic split for rollback.</p></div></div>
+  <div class="grid2"><div>
+    ${experiments.length ? experiments.map((experiment) => experimentCard(ctx, experiment, productById.get(experiment.surface.slice(4))?.handle)).join('') : `<div class="card cro-empty"><div class="cro-orb">◒</div><h2>No experiments running</h2><p class="muted">Generate a few product-page angles below. Traffic stays on the same version for each visitor, and Amboras waits for enough purchases before choosing.</p></div>`}
+  </div><div>
+    <form method="post" action="/admin/cro/generate" class="card cro-launch"><div class="eyebrow">New experiment</div><h2>Generate and test page angles</h2>
+      <div class="field" style="margin-top:.8rem"><label>Product</label><select name="productId" required><option value="">Choose a product</option>${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')}</select></div>
+      <div class="field"><label>Hypothesis</label><textarea name="hypothesis" rows="3" placeholder="A benefit-led page will convert better than a story-led page."></textarea></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
+      <div class="row"><div class="field" style="flex:1"><label>Versions</label><select name="count"><option value="2">2 versions</option><option value="3" selected>3 versions</option><option value="4">4 versions</option></select></div>
+        <div class="field" style="flex:1"><label>Minimum views / version</label><input type="number" name="minViews" value="75" min="25" step="25"></div></div>
+      <label class="row cro-check"><input type="checkbox" name="autoPromote" value="true" checked><span><strong>Auto-promote a winner</strong><small>Only after ≥95% probability to win, the minimum traffic, and enough purchases.</small></span></label>
+      <button class="btn primary" type="submit" ${products.length ? '' : 'disabled'}>Generate versions &amp; start test</button>
+      ${products.length ? '' : '<p class="muted" style="font-size:12px">Publish a product first.</p>'}</form>
+    <div class="card"><h2>How decisions work</h2><div class="cro-rule"><b>1</b><span><strong>Split</strong><small>Visitors are deterministically assigned, so they never bounce between page angles.</small></span></div><div class="cro-rule"><b>2</b><span><strong>Learn</strong><small>Each purchase updates a Beta-Bernoulli posterior instead of trusting a noisy point estimate.</small></span></div><div class="cro-rule"><b>3</b><span><strong>Promote or roll back</strong><small>The winner gets 100% traffic. One click restores the exact prior weights.</small></span></div></div>
+  </div></div>`
+}
+
+function experimentCard(ctx: Ctx, experiment: Experiment, productHandle?: string): string {
+  const rows = experiment.results.variants ?? []
+  const winner = rows.find((entry) => entry.pageId === experiment.results.winnerId)
+  const statusClass = experiment.status === 'promoted' ? 'ok' : experiment.status === 'ready' ? 'warn' : experiment.status === 'rolled_back' ? '' : 'live'
+  return `<div class="card cro-card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><span class="tag ${statusClass}">${experiment.status.replace('_', ' ')}</span><h2 style="margin-top:.5rem">${escapeHtml(experiment.name)}</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">${escapeHtml(experiment.hypothesis)}</p></div><div class="cro-actions">
+    ${['running', 'ready', 'paused'].includes(experiment.status) ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/evaluate"><button class="btn" type="submit">Recalculate</button></form><form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/pause"><button class="btn" type="submit">${experiment.status === 'paused' ? 'Resume' : 'Pause'}</button></form>` : ''}
+    ${experiment.status === 'ready' && winner ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/promote"><button class="btn primary" type="submit">Promote winner</button></form>` : ''}
+    ${experiment.status === 'promoted' ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/rollback"><button class="btn" type="submit">Roll back</button></form>` : ''}</div></div>
+    ${rows.length ? `<div class="cro-variants">${rows.map((row) => `<div class="cro-variant ${row.pageId === experiment.results.winnerId ? 'leader' : ''}"><div class="row" style="justify-content:space-between"><strong>${escapeHtml(row.title.replace(/^[^—]+—\s*/, ''))}</strong><span>${(row.probabilityBest * 100).toFixed(1)}% to win</span></div><div class="prob"><i style="width:${Math.max(1, row.probabilityBest * 100)}%"></i></div><div class="cro-metrics"><span><b>${row.views}</b> visits</span><span><b>${row.purchases}</b> orders</span><span><b>${(row.conversion * 100).toFixed(1)}%</b> CVR</span><span class="${row.upliftVsControl >= 0 ? 'up' : 'down'}"><b>${pct(row.upliftVsControl)}</b> vs control</span></div>${productHandle ? `<a href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(productHandle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">Preview ↗</a>` : ''}</div>`).join('')}</div>` : `<p class="muted" style="font-size:12px;margin-top:.8rem">No observations yet. Recalculate after traffic arrives.</p>`}
+    <div class="cro-foot"><span>${escapeHtml(experiment.results.reason ?? `Waiting for ${experiment.results.minViews} views per version.`)}</span>${winner ? `<strong>Leader: ${escapeHtml(winner.title.replace(/^[^—]+—\s*/, ''))}</strong>` : ''}</div></div>`
 }
 
 /* ------------------------------------------------------------------- products */
@@ -235,6 +289,7 @@ function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
         <div class="field" style="flex:1"><label>How many (if no formats picked)</label><input name="count" value="3"></div></div>
       <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${[...PDP_FORMATS.map((format) => ({ ...format, group: 'pdp' })), ...ADVERTORIAL_FORMATS.map((format) => ({ ...format, group: 'advertorial' }))].map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.group}:${format.id}"> ${escapeHtml(format.name)} <span class="muted">(${format.group})</span></label>`).join('')}</div></div>
       <div class="field"><label>Avatar — fills audience, angle and tone the direction leaves blank</label><select name="avatarId">${avatarOptions(ctx)}</select></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
       <div class="field"><label>Direction — free-form. Tone words are read (urgent, premium, warm, clinical, playful, blunt); "quoted phrases" must appear; "for gift buyers" sets the audience; "focus on durability" sets the angle.</label><textarea name="direction" rows="2" placeholder="Premium and understated, for people who train seriously, focus on the repair guarantee"></textarea></div>
       <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="publish" value="true"> Publish immediately</label>
       <button class="btn primary" type="submit">Generate</button></form></div>`
@@ -528,35 +583,38 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
 
 export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
-  const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
+  const domains = domainsFor(ctx.db, ctx.store.id)
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     ${modelsCard(ctx)}
-    <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
-      ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
-        || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
+    ${pixelsCard(ctx)}
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h2>Tracking &amp; backup</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Customer tracking pages use cached 17TRACK carrier events. Export a complete store backup whenever you want.</p></div><span class="tag ${seventeenTrackConfigured() ? 'ok' : 'warn'}">17TRACK ${seventeenTrackConfigured() ? 'connected' : 'needs key'}</span></div>
+      <div class="row" style="margin-top:.8rem"><a class="btn primary" href="/admin/settings/export">Download JSON backup</a><span class="muted" style="font-size:11.5px">Products, orders, pages, analytics, experiments and settings; login sessions excluded.</span></div>
+      ${seventeenTrackConfigured() ? '' : '<p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Set AMBORAS_17TRACK_API_KEY on the server. Carrier links and estimated delivery still work without it.</p>'}</div>
     <div class="card"><h2>Regions and shipping</h2>
       ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
         <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
         ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency)}` : ''}</div>`).join('')}
       </div>`).join('')}</div>
-    <div class="card"><h2>Team</h2>
-      <form method="post" action="/admin/team" class="row" style="margin:.6rem 0">
-        <input name="email" type="email" placeholder="teammate@example.com" style="flex:1">
-        <select name="role" style="width:110px"><option>member</option><option>admin</option></select>
-        <button class="btn primary">Invite</button></form>
-      ${team.map((member) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.4rem 0">
-        <span>${escapeHtml(member.email)}</span><span class="tag">${escapeHtml(member.role)} · ${escapeHtml(member.status)}</span></div>`).join('')
-        || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
   </div>
   <div>
+    ${domains.length ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Existing domains</h2><a class="btn" href="/admin/domains">Manage</a></div>${domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span></div>`).join('')}</div>` : ''}
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
   </div></div>`
+}
+
+function pixelsCard(ctx: Ctx): string {
+  const pixels = [
+    { id: 'ga4', name: 'Google Analytics 4', key: 'measurementId', label: 'Measurement ID', placeholder: 'G-ABC123', current: getInstalled(ctx.db, ctx.store.id, 'ga4')?.settings.measurementId },
+    { id: 'meta-pixel', name: 'Meta Pixel', key: 'pixelId', label: 'Pixel ID', placeholder: '123456789012345', current: getInstalled(ctx.db, ctx.store.id, 'meta-pixel')?.settings.pixelId },
+    { id: 'tiktok-pixel', name: 'TikTok Pixel', key: 'pixelId', label: 'Pixel ID', placeholder: 'CABC123456789', current: getInstalled(ctx.db, ctx.store.id, 'tiktok-pixel')?.settings.pixelId },
+  ]
+  return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Customer event pixels</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Page views, add-to-cart and purchases. Pixels never fire in your admin preview.</p></div><span class="tag">${pixels.filter((pixel) => pixel.current).length}/3 connected</span></div>${pixels.map((pixel) => `<form method="post" action="/admin/settings/pixels/${pixel.id}" class="row" style="border-top:1px solid var(--line);padding:.6rem 0;align-items:flex-end"><div style="width:150px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current ? 'ok' : ''}" style="margin-top:.25rem">${pixel.current ? 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div><button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></form>`).join('')}</div>`
 }
 
 /** Which model writes what for this store. */
@@ -718,7 +776,7 @@ export function paymentsPage(ctx: Ctx): string {
   const connected = Boolean(stripe && hasCredentials(ctx.db, ctx.store.id, 'stripe'))
   const webhookUrl = `${ctx.storeUrl.startsWith('http') ? ctx.storeUrl : '{your store address}'}/webhooks/stripe`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Payments</h1>
-    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes to your Stripe account; the platform fee is billed separately.</p></div>
+    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes directly to your Stripe account; Amboras adds no platform fee.</p></div>
     <span class="tag ${connected ? 'ok' : 'warn'}">${connected ? 'Stripe connected' : 'Demo mode — orders place without a charge'}</span></div>
   <div class="grid2"><form method="post" action="/admin/plugins/stripe/settings" class="card"><h2>Stripe keys</h2>
     <div class="field" style="margin-top:.6rem"><label>Publishable key</label><input name="publishableKey" value="${escapeHtml(String(stripe?.settings.publishableKey ?? ''))}" placeholder="pk_live_…" required></div>
@@ -818,12 +876,13 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Assistant</h1>
     <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated against its schema and audited; it edits the draft, and publishing is yours.</p></div></div>
   <div class="grid2"><div>
+    <form class="card" method="post" action="/admin/ask"><div class="eyebrow">Ask Amboras</div><input type="hidden" name="page" value="ai"><textarea name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">It can operate the store, not just explain it.</span><button class="btn primary" type="submit">Send →</button></div></form>
     <div class="card" style="max-height:56vh;overflow:auto">
       ${messages.length ? messages.map((message) => `<div style="margin-bottom:1rem">
         <div class="eyebrow">${message.role === 'user' ? 'You' : 'Assistant'}${message.page ? ` · ${escapeHtml(message.page)}` : ''}</div>
         <div style="margin-top:.3rem;white-space:pre-wrap">${escapeHtml(message.content)}</div>
         ${message.artifacts.map(renderArtifact).join('')}</div>`).join('')
-        : '<p class="muted">Nothing yet. The panel on the right is the same conversation.</p>'}</div>
+        : '<p class="muted">Nothing yet. Start with a plain-English request above.</p>'}${messages.length >= 60 ? `<a class="btn" href="/admin/ai?before=${encodeURIComponent(messages[0]?.createdAt ?? '')}">Load older messages</a>` : ''}</div>
     <div class="card"><h2>Prompt library</h2>
       <div class="row" style="margin-top:.5rem">${PROMPT_LIBRARY.map((prompt) => `<button class="btn" type="button" onclick="askThis(${escapeHtml(JSON.stringify(prompt))})">${escapeHtml(prompt)}</button>`).join('')}</div></div>
   </div>

@@ -11,6 +11,7 @@ import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
 import { storeForHost, type Store } from './control/stores.ts'
 import { tlsAllowed } from './control/domains.ts'
+import { evaluateRunningExperiments } from './analytics/experiments.ts'
 
 const log = logger('server')
 const PORT = Number(process.env.PORT ?? 4100)
@@ -134,6 +135,9 @@ recoverRuns(db)
 // window the review-app crowd settled on.
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
 setInterval(() => void sweepAbandonedCarts(db, { hours: 4, origin }).catch(() => undefined), 10 * 60_000).unref()
+// Experiment decisions are cheap, local reads. Running them beside abandoned
+// carts keeps CRO autonomous without adding another process to a personal tool.
+setInterval(() => evaluateRunningExperiments(db), 10 * 60_000).unref()
 server.listen(PORT, () => {
   log.info(`amboras on http://localhost:${PORT}`)
   log.info(ROOT_DOMAIN ? `storefronts on *.${ROOT_DOMAIN}` : 'storefronts on /preview/:slug (set AMBORAS_STOREFRONT_HOST for subdomains)')

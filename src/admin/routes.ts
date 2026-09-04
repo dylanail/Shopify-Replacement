@@ -1,5 +1,5 @@
 import { getDb } from '../lib/db.ts'
-import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
+import { badRequest, forbidden, html, notFound, Raw, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
 import { endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
 import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
@@ -30,6 +30,7 @@ import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.t
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
 import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
 import { generateVersions, setVersionWeight } from '../pages/versions.ts'
+import { analyzeExperiment, pauseExperiment, promoteExperiment, rollbackExperiment, startPdpExperiment } from '../analytics/experiments.ts'
 import { sendEmail, orderContext } from '../email/send.ts'
 import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
@@ -48,6 +49,8 @@ import { customCatalog, customDefinitions, deleteCustomBlock, upsertCustomBlock 
 import type { CustomField } from '../pages/blocks.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
+import { registerOrderTracking } from '../shipping/seventeen-track.ts'
+import { exportStore } from '../control/export.ts'
 
 const STORE_COOKIE = 'amboras_store'
 
@@ -204,6 +207,79 @@ export function adminRouter(): Router {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
     return page(ctx, current, 'dashboard', 'Dashboard', pages.dashboard(ctxFor(current, ctx), range(ctx)))
+  })
+
+  router.get('/admin/cro', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'cro', 'Experiments', pages.experimentsPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/cro/generate', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const count = Math.min(4, Math.max(2, Number(body.count ?? 3) || 3))
+      const generated = await generateVersions(db(), current.store, {
+        productId: String(body.productId ?? ''),
+        kind: 'pdp',
+        count,
+        publish: true,
+        ...(body.model ? { model: String(body.model) } : {}),
+      })
+      const experiment = startPdpExperiment(db(), current.store.id, {
+        productId: String(body.productId ?? ''),
+        pageIds: generated.map((entry) => entry.id),
+        hypothesis: String(body.hypothesis ?? ''),
+        autoPromote: body.autoPromote === 'true',
+        minViews: Number(body.minViews ?? 75),
+      })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'start_experiment', target: experiment.id, diff: { productId: body.productId, pages: generated.map((entry) => entry.id), autoPromote: experiment.results.autoPromote } })
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`Test started across ${generated.length} page angles. Amboras will wait for real evidence before choosing.`)}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not start the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/evaluate', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = analyzeExperiment(db(), current.store.id, ctx.params.id as string)
+      return redirect(`/admin/cro?flash=${encodeURIComponent(experiment.status === 'promoted' ? 'The evidence threshold was met, so the winner was promoted.' : experiment.results.reason ?? 'Evidence recalculated.')}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not evaluate the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/pause', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = pauseExperiment(db(), current.store.id, ctx.params.id as string)
+      return redirect(`/admin/cro?flash=${encodeURIComponent(experiment.status === 'paused' ? 'Automatic decisions paused; the traffic split stays in place.' : 'Automatic decisions resumed.')}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not change the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/promote', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = promoteExperiment(db(), current.store.id, ctx.params.id as string)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'promote_experiment', target: experiment.id, diff: { winnerId: experiment.results.winnerId } })
+      return redirect('/admin/cro?flash=' + encodeURIComponent('Winner promoted to 100% of traffic. The prior split is saved for rollback.'))
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not promote the winner'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/rollback', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = rollbackExperiment(db(), current.store.id, ctx.params.id as string)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'rollback_experiment', target: experiment.id, diff: { restored: experiment.results.previousWeights } })
+      return redirect('/admin/cro?flash=' + encodeURIComponent('Previous traffic weights restored exactly.'))
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not roll back'}`)}`)
+    }
   })
 
   router.get('/admin/stores', (ctx) => {
@@ -471,7 +547,7 @@ export function adminRouter(): Router {
     const kind = body.kind === 'advertorial' ? 'advertorial' : 'pdp'
     const formats = picked.filter((entry) => entry.startsWith(`${kind}:`)).map((entry) => entry.split(':')[1] as string)
     try {
-      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true' })
+      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true', ...(body.model ? { model: String(body.model) } : {}) })
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'generate_versions', target: ctx.params.id as string, diff: { kind, formats, direction: body.direction, pages: pages.map((page) => page.id) } })
       return back(ctx, `Generated ${pages.length} ${kind === 'pdp' ? 'product page version' : 'advertorial'}${pages.length === 1 ? '' : 's'}: ${pages.map((page) => page.format).join(', ')}.`)
     } catch (error) {
@@ -493,6 +569,7 @@ export function adminRouter(): Router {
     const order = recordSupplierOrder(db(), current.store.id, ctx.params.id as string, { supplier: String(body.supplier ?? ''), orderId: String(body.orderId ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), ...(body.tracking ? { tracking: String(body.tracking) } : {}), ...(body.carrier ? { carrier: String(body.carrier) } : {}) })
     if (body.tracking) {
       const shipment = order.fulfillments.at(-1)
+      void registerOrderTracking(db(), current.store.id, order).catch(() => undefined)
       void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
     }
     return back(ctx, body.tracking ? 'Saved and marked shipped; the customer has the tracking link.' : 'Supplier order saved.')
@@ -586,7 +663,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/ai', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'ai', 'Assistant', pages.aiPage(ctxFor(current, ctx), history(db(), current.store.id, 60)))
+    return page(ctx, current, 'ai', 'Assistant', pages.aiPage(ctxFor(current, ctx), history(db(), current.store.id, 60, ctx.query.get('before') ?? undefined)))
   })
 
   router.get('/admin/products', (ctx) => {
@@ -635,7 +712,8 @@ export function adminRouter(): Router {
   router.post('/admin/orders/:id/fulfill', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    fulfillOrder(db(), current.store.id, ctx.params.id as string, { provider: 'manual', tracking: String(body.tracking ?? '') })
+    const order = fulfillOrder(db(), current.store.id, ctx.params.id as string, { provider: 'manual', tracking: String(body.tracking ?? '') })
+    if (body.tracking) void registerOrderTracking(db(), current.store.id, order).catch(() => undefined)
     return back(ctx, 'Marked fulfilled.')
   })
 
@@ -787,6 +865,32 @@ export function adminRouter(): Router {
     return page(ctx, current, 'settings', 'Settings', pages.settingsPage(ctxFor(current, ctx)))
   })
 
+  router.get('/admin/settings/export', (ctx) => {
+    const current = session(ctx)
+    const backup = exportStore(db(), current.store.id)
+    const filename = `${current.store.slug}-amboras-backup-${backup.exportedAt.slice(0, 10)}.json`
+    recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'export_store', target: current.store.id, diff: { filename } })
+    return new Raw(JSON.stringify(backup, null, 2), 'application/json; charset=utf-8', {
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+    })
+  })
+
+  router.post('/admin/settings/pixels/:id', async (ctx) => {
+    const current = session(ctx)
+    const pixel = ctx.params.id as string
+    if (!['ga4', 'meta-pixel', 'tiktok-pixel'].includes(pixel)) throw notFound('No such pixel')
+    const body = await ctx.body()
+    try {
+      install(db(), current.store.id, pixel, body)
+      invalidateStorefrontConfig(current.store.id)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'connect_pixel', target: pixel, diff: { connected: true } })
+      return redirect('/admin/settings?flash=' + encodeURIComponent(`${pixel === 'ga4' ? 'GA4' : pixel === 'meta-pixel' ? 'Meta Pixel' : 'TikTok Pixel'} connected. It will fire only on the live storefront.`))
+    } catch (error) {
+      return redirect(`/admin/settings?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not connect the pixel'}`)}`)
+    }
+  })
+
   router.get('/admin/domains', (ctx) => {
     const current = session(ctx)
     return page(ctx, current, 'domains', 'Domains', growth.domainsPage(ctxFor(current, ctx)))
@@ -847,7 +951,7 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const formats = (Array.isArray(body.formats) ? body.formats : body.formats ? [body.formats] : []) as string[]
     try {
-      const ads = await draftAds(db(), current.store, { productId: String(body.productId ?? ''), platform: String(body.platform ?? 'meta') as AdPlatform, formats, direction: String(body.direction ?? ''), ...(body.avatarId ? { avatarId: String(body.avatarId) } : {}), count: Number(body.count ?? 3) || 3 })
+      const ads = await draftAds(db(), current.store, { productId: String(body.productId ?? ''), platform: String(body.platform ?? 'meta') as AdPlatform, formats, direction: String(body.direction ?? ''), ...(body.avatarId ? { avatarId: String(body.avatarId) } : {}), count: Number(body.count ?? 3) || 3, ...(body.model ? { model: String(body.model) } : {}) })
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'draft_ads', target: String(body.productId ?? ''), diff: { formats: ads.map((ad) => ad.format), direction: body.direction } })
       return redirect(`/admin/ads?flash=${encodeURIComponent(`Drafted ${ads.length} ad${ads.length === 1 ? '' : 's'}: ${ads.map((ad) => ad.format).join(', ')}.`)}`)
     } catch (error) {
