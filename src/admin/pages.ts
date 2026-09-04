@@ -538,6 +538,13 @@ export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
   const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
+  // Contact-form submissions were written into the audit log's diff column and
+  // read back by nothing: a visitor was told "a person will read that and
+  // reply" and no person could.
+  const messages = ctx.db.all<{ target: string; diff: string; created_at: string }>(
+    "SELECT target, diff, created_at FROM audit_log WHERE store_id = ? AND action = 'contact_form' ORDER BY created_at DESC LIMIT 20",
+    ctx.store.id,
+  )
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     ${modelsCard(ctx)}
@@ -559,6 +566,21 @@ export function settingsPage(ctx: Ctx): string {
         || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
   </div>
   <div>
+    <div class="card"><h2>Messages</h2>
+      <p class="muted" style="font-size:11.5px">What visitors sent through the contact form.</p>
+      ${messages.length
+        ? messages.map((message) => {
+            let text = ''
+            try {
+              text = String((JSON.parse(message.diff || '{}') as { message?: string }).message ?? '')
+            } catch {
+              text = ''
+            }
+            return `<div style="border-top:1px solid var(--line);padding:.5rem 0">
+              <div class="row" style="justify-content:space-between"><a href="mailto:${escapeHtml(message.target)}">${escapeHtml(message.target || 'no address given')}</a><span class="muted" style="font-size:11px">${escapeHtml(message.created_at.slice(0, 16).replace('T', ' '))}</span></div>
+              <p style="margin:.3rem 0 0;font-size:12.5px;white-space:pre-wrap">${escapeHtml(text)}</p></div>`
+          }).join('')
+        : '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
@@ -657,6 +679,7 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:1"><label>1 · Advertorial page</label><select name="advertorialPageId">${pageOptions('advertorial', funnel?.advertorialPageId)}</select></div>
       <div class="field" style="flex:1"><label>2 · Offer page</label><select name="offerPageId">${pageOptions('any', funnel?.offerPageId)}</select></div></div>
     <div class="eyebrow" style="margin:.4rem 0">3 · Checkout order bump</div>
+    <label class="row" style="font-size:12px;margin-bottom:.4rem"><input type="checkbox" name="bumpOff" value="true" ${funnel && funnel.bump.enabled === false ? 'checked' : ''}> No order bump on this funnel</label>
     <div class="row"><div class="field" style="flex:2"><label>Bump product (default: shipping protection)</label><select name="bumpVariantId">${variantOptions(funnel?.bump.variantId)}</select></div>
       <div class="field" style="flex:1"><label>Label</label><input name="bumpLabel" value="${escapeHtml(funnel?.bump.label ?? '')}" placeholder="Protect my order"></div><div class="field" style="width:110px"><label>Price</label><input name="bumpPriceCents" value="${funnel?.bump.priceCents ?? ''}" placeholder="299"></div></div>
     <div class="eyebrow" style="margin:.4rem 0">4 · One-click upsell</div>
@@ -666,7 +689,7 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
     <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
     <div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
-    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
+    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? ''}" placeholder="50"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>

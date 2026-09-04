@@ -1,4 +1,5 @@
 import { getDb } from '../lib/db.ts'
+import { format } from '../lib/money.ts'
 import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
 import { acceptInvite, endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
@@ -627,11 +628,13 @@ export function adminRouter(): Router {
       productId: String(body.productId ?? ''),
       advertorialPageId: String(body.advertorialPageId ?? ''),
       offerPageId: String(body.offerPageId ?? ''),
-      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: true },
+      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: body.bumpOff !== 'true' },
       upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') },
       downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') },
       testGroup: String(body.testGroup ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
-      weight: Number(body.weight ?? 0) || 0,
+      // A funnel put into a test group with no weight is not in the test, and
+      // the entry URL then answers with nothing. Naming a group means running it.
+      weight: Number(body.weight ?? 0) || (String(body.testGroup ?? '').trim() ? 50 : 0),
     })
     return back(ctx, 'Funnel saved.')
   })
@@ -745,6 +748,13 @@ export function adminRouter(): Router {
     const moved = await refundThroughProvider(db(), current.store.id, existing)
     if (!moved.ok) return back(ctx, `!${moved.message}`)
     const order = refundOrder(db(), current.store.id, existing.id, { reason: 'Refunded from the admin' })
+    // The template exists with the trigger 'order.refunded' and nothing sent
+    // it: the customer learned about their refund from their bank.
+    void sendEmail(db(), current.store.id, {
+      template: 'refund_issued',
+      to: order.email,
+      context: { ...orderContext(order, publicUrl(ctx, current.store)), amount: format(order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0), order.currency) },
+    }).catch(() => undefined)
     return back(ctx, `Refunded${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}. Payment is now ${order.paymentStatus}.`)
   })
 

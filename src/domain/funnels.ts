@@ -126,6 +126,10 @@ export function ensureShippingProtection(db: Db, storeId: string, priceCents = 2
 export type ResolvedBump = { variantId: string; product: Product; label: string; text: string; priceCents: number }
 
 export function resolveBump(db: Db, storeId: string, funnel: Funnel | null): ResolvedBump | null {
+  // `enabled: false` was honoured here and written by nothing, so a merchant
+  // who did not want to sell shipping protection had no way to stop the
+  // checkout offering it — the fallback below invents the product when there
+  // is no funnel at all.
   const bump = funnel?.bump ?? {}
   if (bump.enabled === false) return null
   let product: Product | null = null

@@ -314,7 +314,15 @@ export function funnelTestCard(ctx: Ctx): string {
   if (!groups.length) return `<div class="card"><h2>Funnel split tests</h2><p class="muted" style="font-size:12.5px">Give two or more funnels the same test group name and a weight, then send traffic to <code>${e(ctx.storeUrl)}/go/&lt;group&gt;</code>. Each visitor is assigned one funnel and followed to the order.</p></div>`
   return groups.map((group) => {
     const stats = funnelStats(ctx.db, ctx.store.id, group)
-    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code>${cpc === null ? ' · log clicks with your ad spend to compare these against cost per click' : ` · winning means revenue per session above the ${format(cpc, ctx.store.currency)} it costs to buy one`}</p></div>
+    // /go/<group> picks among active funnels with a weight above zero, and a
+    // new funnel's weight defaults to 0 — so the obvious path, naming two
+    // funnels into a group and copying the entry URL this card prints into an
+    // ad, produced a URL that answers "No funnel is running under that name"
+    // with nothing here saying why.
+    const running = stats.filter((row) => row.weight > 0).length
+    return `<div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Test group “${e(group)}”</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">${
+      running ? `Entry: <code>${e(ctx.storeUrl)}/go/${e(group)}</code>` : `<strong>Not running.</strong> Every funnel in this group is at weight 0, so <code>${e(ctx.storeUrl)}/go/${e(group)}</code> answers with nothing. Give at least one of them a weight.`
+    }${cpc === null ? ' · log clicks with your ad spend to compare these against cost per click' : ` · winning means revenue per session above the ${format(cpc, ctx.store.currency)} it costs to buy one`}</p></div>
       <table class="data"><thead><tr><th>Funnel</th><th>Weight</th><th>Sessions</th><th>Carts</th><th>Orders</th><th>Revenue</th><th>Rev / session</th></tr></thead><tbody>${stats.map((row) => `<tr><td>${e(row.name)}</td><td>${row.weight}</td><td>${row.sessions}</td><td>${row.carts}</td><td>${row.purchases}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td><strong>${format(row.revenuePerSessionCents, ctx.store.currency)}</strong>${cpc !== null && row.sessions ? ` <span class="tag ${row.revenuePerSessionCents > cpc ? 'ok' : 'bad'}">${row.revenuePerSessionCents > cpc ? 'above' : 'below'} CPC</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`
   }).join('')
 }

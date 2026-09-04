@@ -669,7 +669,16 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const legal = legalFor(view.db, view.store)
   const firstProduct = items[0] ? getProduct(view.db, view.store.id, items[0].productId) : null
   const arrival = firstProduct ? deliveryEstimate(firstProduct.supplier) : null
-  const proof = listReviews(view.db, view.store.id, { status: 'approved', limit: 3 }).filter((review) => !items.length || items.some((item) => item.productId === review.productId)).slice(0, 3)
+  // Reviews for what is actually in the cart. Taking the store's three newest
+  // approved reviews and *then* keeping the ones for these products meant the
+  // proof block under the form vanished as soon as the three newest belonged
+  // to any other product — which on a multi-product store is most of the time,
+  // and the reference checkouts put reviews there on purpose.
+  const proof = items.length
+    ? [...new Map(items.map((item) => [item.productId, item])).keys()]
+        .flatMap((productId) => listReviews(view.db, view.store.id, { productId, status: 'approved', minRating: 4, limit: 3 }))
+        .slice(0, 3)
+    : listReviews(view.db, view.store.id, { status: 'approved', minRating: 4, limit: 3 })
   const summary = `<div class="summary-body">
     <table class="lines">${items.map((item) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
       <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
