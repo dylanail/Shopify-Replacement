@@ -770,10 +770,19 @@ export function adminRouter(): Router {
     return page(ctx, current, 'promotions', 'Promotions', pages.promotionsPage(ctxFor(current, ctx)))
   })
 
-  router.post('/admin/promotions/:id/disable', (ctx) => {
+  /**
+   * Turning a promotion off, and back on.
+   *
+   * setPromotionStatus took a status and every caller passed 'disabled'; the
+   * table only offered the button while a promotion was active, so a code
+   * switched off after a launch could never be run again. The only way back
+   * was a duplicate, which forks the usage count.
+   */
+  router.post('/admin/promotions/:id/:state', (ctx) => {
     const current = session(ctx)
-    setPromotionStatus(db(), current.store.id, ctx.params.id as string, 'disabled')
-    return back(ctx, 'Promotion disabled.')
+    const wanted = ctx.params.state === 'enable' ? 'active' : 'disabled'
+    setPromotionStatus(db(), current.store.id, ctx.params.id as string, wanted)
+    return back(ctx, wanted === 'active' ? 'Promotion is live again.' : 'Promotion disabled.')
   })
 
   router.get('/admin/analytics', (ctx) => {

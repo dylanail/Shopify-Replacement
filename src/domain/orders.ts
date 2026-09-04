@@ -35,6 +35,7 @@ export function rowToOrder(row: Row): Order {
     downsell: json(row.downsell, {}),
     supplierOrder: json(row.supplier_order, {}),
     deliveredAt: (row.delivered_at as string | null) ?? null,
+    notes: (row.notes as string) ?? '',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }

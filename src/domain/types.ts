@@ -136,6 +136,8 @@ export type Order = {
   paymentCustomerId: string
   paymentMethodId: string
   shippingOptionId: string
+  /** What the merchant needs to know about this order that the lines cannot say. */
+  notes: string
   upsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents; paymentIntentId?: string }
   downsell: { offered?: string; accepted?: boolean; variantId?: string; amountCents?: Cents }
   supplierOrder: { supplier?: string; orderId?: string; costCents?: Cents; shippingCents?: Cents; placedAt?: string; carrier?: string }

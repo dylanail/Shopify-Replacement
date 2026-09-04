@@ -23,6 +23,8 @@ import { completeCart, markDelivered } from '../src/domain/orders.ts'
 import { addToCart, createCart } from '../src/domain/cart.ts'
 import { createProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
+import { privacyHtml } from '../src/storefront/legal.ts'
+import { install } from '../src/control/plugins.ts'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -505,4 +507,17 @@ test('a back-in-stock email is not the welcome email wearing a different heading
   assert.ok(template, 'there is a template for it')
   assert.match(template.subject, /back in stock/i)
   assert.ok(!/Welcome/i.test(template.subject))
+})
+
+test('the privacy policy stops saying nothing is shared for advertising once a pixel is installed', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Pixels', prompt: 'pixels' })
+  const before = privacyHtml(db, getStore(db, store.id)!)
+  assert.match(before, /Nothing is sold or shared for advertising/)
+
+  install(db, store.id, 'meta-pixel', { pixelId: '1234567890' })
+  const after = privacyHtml(db, getStore(db, store.id)!)
+  assert.ok(!/Nothing is sold or shared for advertising/.test(after), 'not on a page that is firing a Meta pixel')
+  assert.match(after, /Meta \(Facebook and Instagram\)/)
+  assert.match(after, /set their own cookies/)
 })

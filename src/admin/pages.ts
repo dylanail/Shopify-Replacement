@@ -292,7 +292,9 @@ export function orderDetail(ctx: Ctx, orderId: string): string {
       <table class="data" style="margin-top:.4rem"><tr><td>Subtotal</td><td style="text-align:right">${format(order.subtotalCents, order.currency)}</td></tr>
       ${order.discountCents ? `<tr><td>Discount ${escapeHtml(order.discountCode)}</td><td style="text-align:right">-${format(order.discountCents, order.currency)}</td></tr>` : ''}
       <tr><td>Shipping</td><td style="text-align:right">${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</td></tr>
-      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table></div>
+      ${order.taxCents ? `<tr><td>Tax</td><td style="text-align:right">${format(order.taxCents, order.currency)}</td></tr>` : ''}
+      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table>
+      ${order.notes ? `<div class="notice" style="margin-top:.7rem;border-left-color:var(--warn);font-size:12px">${escapeHtml(order.notes)}</div>` : ''}</div>
     <div class="card"><h2>Customer</h2><p style="margin:.3rem 0 0">${escapeHtml(order.email)}</p>
       <p class="muted" style="font-size:12px;margin:.3rem 0 0">${escapeHtml([order.address.name, order.address.line1, order.address.city, order.address.postal, order.address.country].filter(Boolean).join(', '))}</p></div>
     ${order.refunds.length ? `<div class="card"><h2>Refunds</h2>${order.refunds.map((refund) => `<p class="muted" style="font-size:12px;margin:.3rem 0 0">${format(refund.amountCents, order.currency)} — ${escapeHtml(refund.reason || 'no reason given')}</p>`).join('')}</div>` : ''}
@@ -334,7 +336,7 @@ export function promotionsPage(ctx: Ctx): string {
     <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
     <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : `${promotion.value}%`}</td>
     <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
-    <td style="text-align:right">${promotion.status === 'active' ? `<form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/disable"><button class="btn">Disable</button></form>` : ''}</td></tr>`).join('')
+    <td style="text-align:right"><form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/${promotion.status === 'active' ? 'disable' : 'enable'}"><button class="btn">${promotion.status === 'active' ? 'Disable' : 'Enable'}</button></form></td></tr>`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
   </tbody></table></div>`
 }

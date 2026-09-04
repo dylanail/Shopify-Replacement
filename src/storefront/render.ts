@@ -85,7 +85,7 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
     <a href="${view.base}/pages/terms">Terms</a>
     <a href="${view.base}/cart">Cart</a></div>
 </div></footer>`}
-${page.bare ? '' : popupHtml(view.base, env.theme.popup)}
+${popupHtml(view.base, env.theme.popup)}
 ${view.preview ? '' : trackingScript(view.base)}
 ${env.theme.customJs ? `<script data-store-js>${env.theme.customJs.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
@@ -94,7 +94,15 @@ ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 
 /* ---------------------------------------------------------------- pages */
 
-/** A built page. Block pages bring their own header and footer; the theme supplies tokens and the cart. */
+/**
+ * A built page. Block pages bring their own header and footer; the theme
+ * supplies tokens and the cart.
+ *
+ * `bare` used to suppress the popup as well as the chrome, and every
+ * block-built page is bare — so the popup rendered on the home page, the PDP
+ * and the cart, and on none of the advertorials, offer pages or PDP versions
+ * an ad actually lands on.
+ */
 export function blockPage(view: StoreView, page: Page): string {
   const next = funnelNextFor(view.db, view.store.id, page.id)
   const context = { ...blockContextFor(view.db, view.store, view.base), ...(next ? { funnelNext: `${view.base}${next}` } : {}) }
@@ -152,7 +160,20 @@ export function home(view: StoreView, input: { featured: Product[]; collections:
              )
              .join('')}</div></section>`
         : '',
-    reviews: () => '',
+    reviews: () => {
+      // Registered, on by default, offered by the store designer and by
+      // edit_storefront — and it rendered an empty string, so asking for
+      // reviews on the home page reported success and produced nothing.
+      const shown = listReviews(view.db, store.id, { status: 'approved', minRating: 4, limit: 3 })
+      if (!shown.length) return ''
+      return `<section class="wrap">
+        <div class="section-head"><h2>What people say</h2></div>
+        <div class="reviews">${shown
+          .map(
+            (review) => `<article class="review"><div class="stars">${stars(review.rating)}</div>${review.title ? `<h3 style="margin:.4rem 0 .2rem">${escapeHtml(review.title)}</h3>` : ''}<p style="margin:.3rem 0 0">${escapeHtml(review.body)}</p><div class="who">${escapeHtml(review.author)}${review.verified ? ' · verified buyer' : ''}</div></article>`,
+          )
+          .join('')}</div></section>`
+    },
     newsletter: () => `<section class="wrap" style="text-align:center">
       <div class="eyebrow">Stay in touch</div><h2 style="margin:.6rem 0 1rem">One email when there is something to say</h2>
       <form method="post" action="${view.base}/subscribe" style="display:flex;gap:.6rem;max-width:26rem;margin-inline:auto">

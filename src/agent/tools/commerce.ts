@@ -107,6 +107,10 @@ export const commerceTools: Tool[] = defineTools([
       getQuantity: { type: 'number', integer: true, min: 1 },
       productIds: { type: 'array', of: { type: 'string' } },
       firstOrderOnly: { type: 'boolean' },
+      // 'tiered' was in the enum with no way to say what the tiers are, so the
+      // engine read an empty list, discounted nothing, and the promotion sat
+      // in the table marked active for ever.
+      tiers: { type: 'array', of: { type: 'string' }, help: 'For kind "tiered": one "quantity|percent" per entry, e.g. "2|10", "3|20".' },
       endsAt: { type: 'string', help: 'ISO date the promotion stops.' },
     },
     handler(args, ctx) {
@@ -115,6 +119,14 @@ export const commerceTools: Tool[] = defineTools([
       for (const key of ['minSubtotalCents', 'buyQuantity', 'getQuantity', 'productIds', 'firstOrderOnly']) {
         if (args[key] !== undefined) rules[key] = args[key]
       }
+      const tiers = ((args.tiers as string[] | undefined) ?? [])
+        .map((entry) => {
+          const [quantity = '', percent = ''] = String(entry).split('|')
+          return { quantity: Math.max(1, Math.round(Number(quantity) || 0)), percent: Math.max(0, Math.min(100, Number(percent) || 0)) }
+        })
+        .filter((tier) => tier.quantity > 0 && tier.percent > 0)
+      if (tiers.length) rules.tiers = tiers
+      if (args.kind === 'tiered' && !tiers.length) throw new Error('A tiered promotion needs its tiers: pass tiers as "quantity|percent" entries, e.g. ["2|10","3|20"].')
       const promotion = createPromotion(ctx.db, ctx.storeId, {
         title: args.title as string,
         kind: args.kind as 'percentage',

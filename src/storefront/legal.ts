@@ -58,6 +58,8 @@ type Facts = {
   hasReviews: boolean
   hasSubscriptions: boolean
   freeShippingAbove: string
+  /** Advertising measurement actually installed on this store, by name. */
+  pixels: string[]
 }
 
 function facts(db: Db, store: Store): Facts {
@@ -77,7 +79,21 @@ function facts(db: Db, store: Store): Facts {
     hasReviews: plugins.includes('product-reviews') || (db.one<{ c: number }>('SELECT COUNT(*) c FROM reviews WHERE store_id = ?', store.id)?.c ?? 0) > 0,
     hasSubscriptions: subscriptions > 0,
     freeShippingAbove: threshold?.free_above_cents ? `${(threshold.free_above_cents / 100).toFixed(0)} ${store.currency}` : '',
+    // The advertising pixels this store actually has installed. The Analytics
+    // clause asserted cookie-free counting and "nothing is sold or shared for
+    // advertising" on a page that was firing fbq('track','PageView') three
+    // lines above it.
+    pixels: plugins.filter((plugin) => ['meta-pixel', 'tiktok-pixel', 'ga4', 'google-ads', 'pinterest-tag', 'snap-pixel'].includes(plugin)).map((plugin) => PIXEL_NAMES[plugin] ?? plugin),
   }
+}
+
+const PIXEL_NAMES: Record<string, string> = {
+  'meta-pixel': 'Meta (Facebook and Instagram)',
+  'tiktok-pixel': 'TikTok',
+  ga4: 'Google Analytics',
+  'google-ads': 'Google Ads',
+  'pinterest-tag': 'Pinterest',
+  'snap-pixel': 'Snap',
 }
 
 const e = escapeHtml
@@ -147,7 +163,11 @@ export function privacyHtml(db: Db, store: Store): string {
 <li><strong>Orders.</strong> Your name, email, shipping address and what you bought, kept so we can fulfil the order, answer questions about it and meet tax and accounting obligations.</li>
 <li><strong>Payment.</strong> ${f.hasStripe ? 'Card details go directly to Stripe and never touch our servers; we keep the payment reference Stripe returns.' : 'Card details are handled by the payment provider shown at checkout and are not stored by us.'}</li>
 <li><strong>Email.</strong> Order confirmations, shipping updates and, only if you ticked the box or signed up, marketing email you can leave with one click.${f.hasEmail ? ' Opens and clicks on those emails are counted.' : ''}</li>
-<li><strong>Analytics.</strong> We count visits with a first-party, cookie-free method: a hash of your network address and browser that changes every day and cannot identify you across sites. We also record how far a page was scrolled, which sections were seen and which buttons were used, to improve the pages. Nothing is sold or shared for advertising.</li>
+<li><strong>Analytics.</strong> We count visits with a first-party, cookie-free method: a hash of your network address and browser that changes every day and cannot identify you across sites. We also record how far a page was scrolled, which sections were seen and which buttons were used, to improve the pages. ${
+  f.pixels.length
+    ? `This store also loads advertising measurement from ${e(f.pixels.join(', '))}, which set their own cookies and receive the pages you view and the orders you place so we can measure our advertising. Their own policies govern what they do with it, and your browser's tracking controls apply to them.`
+    : 'Nothing is sold or shared for advertising.'
+}</li>
 ${f.hasReviews ? '<li><strong>Reviews and questions.</strong> The name and text you submit with a review or a question are shown publicly with the product once approved.</li>' : ''}
 ${f.hasSubscriptions ? '<li><strong>Subscriptions.</strong> If you subscribe, we keep the schedule and the saved payment reference needed to charge each delivery until you cancel.</li>' : ''}
 <li><strong>Cart.</strong> A cookie holds your cart id for thirty days so what you add is still there when you come back. It contains nothing else.</li>

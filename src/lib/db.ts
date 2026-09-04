@@ -569,6 +569,15 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE orders ADD COLUMN review_requested_at TEXT;
     `,
   },
+  {
+    name: '014_order_notes',
+    sql: `
+    -- Somewhere to record what the merchant needs to know about an order that
+    -- the line items cannot say: a charge that did not match the total,
+    -- because the price moved while the shopper was paying.
+    ALTER TABLE orders ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ]
 
 function migrate(db: Db) {

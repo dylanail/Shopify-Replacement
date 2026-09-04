@@ -511,6 +511,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
         marketing: cart.checkout.marketing ?? false,
         payment: { provider: 'stripe', intentId: intent.id, customerId: intent.customer ?? '', methodId: intent.payment_method ?? '', status: 'captured' },
       })
+      // The intent was created for the cart as it stood; completeCart prices it
+      // again against the promotions live now. A code that expired between the
+      // two writes an order for one amount against a card charged another, and
+      // nothing compared them. The charge is never stranded — the order stands
+      // — but the difference is recorded on it and said out loud, because it is
+      // the merchant's to reconcile.
+      if (intent.amount && intent.amount !== order.totalCents) {
+        const note = `Charged ${(intent.amount / 100).toFixed(2)} ${order.currency}, order totals ${(order.totalCents / 100).toFixed(2)}: the price moved between starting the payment and finishing it.`
+        log.warn(`order ${order.displayId}: ${note}`)
+        current.db.run("UPDATE orders SET notes = TRIM(COALESCE(notes, '') || ' ' || ?) WHERE id = ?", note, order.id)
+      }
       afterOrder(ctx, current, order)
       return redirect(`${current.base}/orders/${order.id}/offer`)
     } catch (error) {
