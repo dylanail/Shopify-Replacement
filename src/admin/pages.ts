@@ -6,7 +6,7 @@ import { listCustomers, segment } from '../domain/customers.ts'
 import { listOrders, getOrder } from '../domain/orders.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
-import { listRegions } from '../domain/regions.ts'
+import { listRegions, type Region } from '../domain/regions.ts'
 import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
@@ -532,6 +532,56 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
   return `<div class="field"><label>${label}${field.help ? ` — <span class="muted">${escapeHtml(field.help)}</span>` : ''}</label>${control}</div>`
 }
 
+/**
+ * Regions and shipping, editable.
+ *
+ * These were four lines of read-only text. The rates a customer is quoted, the
+ * currency they are charged in and the countries a region claims could only be
+ * set by asking the assistant — and even it could only add, never change: a
+ * second "Standard shipping" landed beside the first and the cart quoted
+ * whichever came out of the database first.
+ */
+function regionsCard(ctx: Ctx, regions: Region[]): string {
+  const region = (entry: Region) => `<details style="border-top:1px solid var(--line);padding:.5rem 0">
+    <summary style="cursor:pointer"><strong>${escapeHtml(entry.name)}</strong> <span class="muted">${escapeHtml(entry.currency)} · ${escapeHtml(entry.countries.join(', ') || 'no countries')}${entry.taxRate ? ` · tax ${(entry.taxRate * 100).toFixed(2)}%` : ''}</span>${entry.isDefault ? ' <span class="tag ok">default</span>' : ''}</summary>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}" style="margin:.5rem 0">
+      <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" value="${escapeHtml(entry.name)}" required></div>
+        <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" value="${escapeHtml(entry.currency)}" required></div>
+        <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" value="${(entry.taxRate * 100).toFixed(2)}"></div></div>
+      <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" value="${escapeHtml(entry.countries.join(', '))}" placeholder="US, CA"></div>
+      <label class="row" style="font-size:12px;margin-bottom:.5rem"><input type="checkbox" name="isDefault" value="true" ${entry.isDefault ? 'checked disabled' : ''} style="width:auto"> The region a country no one claims falls back to</label>
+      <div class="row"><button class="btn primary" type="submit">Save region</button>
+        ${regions.length > 1 ? `<button class="btn" type="submit" formaction="/admin/regions/${escapeHtml(entry.id)}/delete" formnovalidate onclick="return confirm('Delete ${escapeHtml(entry.name)} and its rates?')">Delete region</button>` : ''}</div></form>
+    <table class="data" style="margin:.2rem 0"><tbody>${entry.shipping.map((option) => `<tr><td>
+      <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end">
+        <input type="hidden" name="optionId" value="${escapeHtml(option.id)}">
+        <div class="field" style="flex:2;margin:0"><label>Rate</label><input name="name" value="${escapeHtml(option.name)}" required></div>
+        <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" value="${(option.amountCents / 100).toFixed(2)}" required></div>
+        <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" value="${option.freeAboveCents === null ? '' : (option.freeAboveCents / 100).toFixed(2)}" placeholder="—"></div>
+        <button class="btn primary" type="submit">Save</button>
+        ${entry.shipping.length > 1 ? `<button class="btn" type="submit" formaction="/admin/shipping/${escapeHtml(option.id)}/delete" formnovalidate>Remove</button>` : ''}
+      </form>${option.position === 0 ? '<div class="muted" style="font-size:11px">The standard rate: this is the one a free-shipping promotion covers.</div>' : ''}</td></tr>`).join('')}</tbody></table>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end;margin-bottom:.4rem">
+      <div class="field" style="flex:2;margin:0"><label>Add a rate</label><input name="name" placeholder="Express (2 day)" required></div>
+      <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" placeholder="24.00" required></div>
+      <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" placeholder="—"></div>
+      <button class="btn" type="submit">Add</button></form>
+  </details>`
+  return `<div class="card" id="regions"><h2>Regions and shipping</h2>
+    <p class="muted" style="font-size:12px;margin:.2rem 0 .4rem">What each region is charged in, what it is quoted for shipping, and the tax on it. The cart and the checkout read these.</p>
+    ${regions.map(region).join('') || '<p class="muted" style="font-size:12px">No regions yet — add one below, or the checkout has no currency and no rate.</p>'}
+    <details style="border-top:1px solid var(--line);padding:.5rem 0"><summary class="muted" style="cursor:pointer;font-size:12.5px">Add a region</summary>
+      <form method="post" action="/admin/regions" style="margin-top:.5rem">
+        <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" required placeholder="United Kingdom"></div>
+          <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" required placeholder="GBP"></div>
+          <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" placeholder="20"></div></div>
+        <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" required placeholder="GB, IE"></div>
+        <div class="row"><div class="field" style="flex:2"><label>Standard rate</label><input name="shippingName" value="Standard shipping"></div>
+          <div class="field" style="width:7rem"><label>Price</label><input name="shippingAmount" placeholder="9.00"></div>
+          <div class="field" style="width:8rem"><label>Free over</label><input name="shippingFreeAbove" placeholder="200.00"></div></div>
+        <button class="btn primary" type="submit">Add region</button></form></details></div>`
+}
+
 /* ------------------------------------------------------------------- settings */
 
 export function settingsPage(ctx: Ctx): string {
@@ -551,11 +601,7 @@ export function settingsPage(ctx: Ctx): string {
     <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
       ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
         || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
-    <div class="card"><h2>Regions and shipping</h2>
-      ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
-        <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
-        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency)}` : ''}</div>`).join('')}
-      </div>`).join('')}</div>
+    ${regionsCard(ctx, regions)}
     <div class="card"><h2>Team</h2>
       <form method="post" action="/admin/team" class="row" style="margin:.6rem 0">
         <input name="email" type="email" placeholder="teammate@example.com" style="flex:1">

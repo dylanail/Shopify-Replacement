@@ -1,7 +1,7 @@
 import { listProducts } from '../../domain/catalog.ts'
 import { statsFor } from '../../domain/reviews.ts'
 import { environment, getStore, publish, publishState, rollback, setTheme, updateStore } from '../../control/stores.ts'
-import { addShippingOption, createRegion, defaultRegion, listRegions } from '../../domain/regions.ts'
+import { createRegion, defaultRegion, listRegions, setShippingOption } from '../../domain/regions.ts'
 import { inviteTeammate } from '../../control/auth.ts'
 import { refreshTodos } from '../../control/todos.ts'
 import { addRedirect, listSeoPages, productJsonLd, upsertSeoPage, validateProductSchema } from '../../seo/schema.ts'
@@ -221,14 +221,14 @@ export const storefrontTools: Tool[] = defineTools([
         countries: args.countries as string[],
         taxRate: args.taxRate as number,
       })
-      addShippingOption(ctx.db, region.id, { name: 'Standard shipping', amountCents: 900, freeAboveCents: 20000 })
+      setShippingOption(ctx.db, region.id, { name: 'Standard shipping', amountCents: 900, freeAboveCents: 20000 })
       return { summary: `${region.name} is live in ${region.currency} for ${region.countries.join(', ')}, with a standard rate and a free-shipping threshold.`, data: region }
     },
   },
   {
     name: 'set_shipping_rate',
     area: 'setup',
-    description: 'Add or change a shipping rate, with an optional free-shipping threshold, for a region.',
+    description: 'Add or change a shipping rate, with an optional free-shipping threshold, for a region. A rate of the same name is changed rather than duplicated.',
     schema: {
       name: { type: 'string', required: true },
       amountCents: { type: 'number', integer: true, min: 0, required: true },
@@ -240,13 +240,41 @@ export const storefrontTools: Tool[] = defineTools([
         ? listRegions(ctx.db, ctx.storeId).find((entry) => entry.id === args.regionId)
         : defaultRegion(ctx.db, ctx.storeId)
       if (!region) throw new Error('No region to attach the rate to')
-      const option = addShippingOption(ctx.db, region.id, {
+      const before = region.shipping.length
+      const option = setShippingOption(ctx.db, region.id, {
         name: args.name as string,
         amountCents: args.amountCents as number,
         freeAboveCents: (args.freeAboveCents as number) ?? null,
       })
       refreshTodos(ctx.db, ctx.storeId)
-      return { summary: `${option.name} added to ${region.name}.`, data: option }
+      const added = listRegions(ctx.db, ctx.storeId).find((entry) => entry.id === region.id)?.shipping.length !== before
+      return { summary: `${option.name} ${added ? 'added to' : 'changed on'} ${region.name}.`, data: option }
+    },
+  },
+  {
+    name: 'list_regions',
+    area: 'setup',
+    description: 'The selling regions on this store: currency, countries, tax and the shipping rates the cart quotes from.',
+    schema: {},
+    handler(_args, ctx) {
+      const regions = listRegions(ctx.db, ctx.storeId)
+      return {
+        summary: regions.length
+          ? `${regions.length} region${regions.length === 1 ? '' : 's'}: ${regions.map((region) => `${region.name} (${region.currency})`).join(', ')}.`
+          : 'No regions. The checkout has no currency and no rate until there is one.',
+        data: regions,
+        artifacts: [{
+          type: 'table',
+          columns: ['Region', 'Currency', 'Countries', 'Tax', 'Rates'],
+          rows: regions.map((region) => [
+            `${region.name}${region.isDefault ? ' (default)' : ''}`,
+            region.currency,
+            region.countries.join(', '),
+            `${(region.taxRate * 100).toFixed(2)}%`,
+            region.shipping.map((option) => `${option.name} ${(option.amountCents / 100).toFixed(2)}${option.freeAboveCents === null ? '' : ` free over ${(option.freeAboveCents / 100).toFixed(2)}`}`).join(' · '),
+          ]),
+        }],
+      }
     },
   },
   {

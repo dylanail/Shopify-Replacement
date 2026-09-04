@@ -502,6 +502,60 @@ test('a domain is attached with the registrar\'s records and a check says what i
   assert.equal(detached.status, 302)
 })
 
+test('regions, rates and tax are editable in the admin, not just readable', async () => {
+  // They were four lines of text. What a customer is charged for shipping, in
+  // what currency, with what tax, could only be changed by asking the
+  // assistant — and the assistant could only add: a second "Standard shipping"
+  // landed beside the first and the cart quoted whichever came out first.
+  const before = await call('/admin/settings')
+  assert.match(before.text, /Regions and shipping/)
+  assert.match(before.text, /name="countries"/, 'the region is a form now')
+  assert.match(before.text, /the one a free-shipping promotion covers/, 'and says which rate is the standard one')
+
+  const added = await call('/admin/regions', { form: { name: 'United Kingdom', currency: 'gbp', countries: 'GB, IE', taxPercent: '20', shippingName: 'Royal Mail', shippingAmount: '4.50', shippingFreeAbove: '60' } })
+  assert.match(flashOf(added.location), /United Kingdom added: GBP for GB, IE/)
+  const withUk = await call('/admin/settings')
+  const uk = withUk.text.split('<details').find((chunk) => chunk.includes('United Kingdom')) ?? ''
+  const regionId = /\/admin\/regions\/(reg_[a-z0-9]+)"/.exec(uk)?.[1] ?? ''
+  assert.ok(regionId, 'the region has its own form')
+  assert.match(uk, /value="GBP"/)
+  assert.match(uk, /value="GB, IE"/)
+  assert.match(uk, /value="20\.00"/, 'the tax rate comes back as the percentage it was typed as')
+  assert.match(uk, /value="4\.50"/)
+  assert.match(uk, /value="60\.00"/)
+
+  const rejected = await call('/admin/regions', { form: { name: 'Nowhere', currency: 'pounds', countries: 'GB' } })
+  assert.match(flashOf(rejected.location), /!?A currency is three letters/)
+
+  await call(`/admin/regions/${regionId}/shipping`, { form: { name: 'Royal Mail', amount: '5.50', freeAbove: '' } })
+  const changed = (await call('/admin/settings')).text.split('<details').find((chunk) => chunk.includes('United Kingdom')) ?? ''
+  assert.equal(changed.split('Royal Mail').length - 1, 1, 'the same name changes the rate rather than adding a second one')
+  assert.match(changed, /value="5\.50"/)
+
+  await call(`/admin/regions/${regionId}/shipping`, { form: { name: 'Next day', amount: '9.99' } })
+  const two = (await call('/admin/settings')).text.split('<details').find((chunk) => chunk.includes('United Kingdom')) ?? ''
+  const optionId = /\/admin\/shipping\/(so_[a-z0-9]+)\/delete/.exec(two)?.[1] ?? ''
+  assert.ok(optionId)
+  assert.match(two, /Next day/)
+
+  await call(`/admin/shipping/${optionId}/delete`, { form: {} })
+  const one = (await call('/admin/settings')).text.split('<details').find((chunk) => chunk.includes('United Kingdom')) ?? ''
+  assert.doesNotMatch(one, /value="5\.50"/, 'the removed rate is gone')
+  const lastRate = /\/admin\/shipping\/(so_[a-z0-9]+)\/delete/.exec(one)?.[1] ?? ''
+  assert.equal(lastRate, '', 'and the last rate in a region has no Remove button — the cart would have nothing to quote')
+
+  const renamed = await call(`/admin/regions/${regionId}`, { form: { name: 'Britain & Ireland', currency: 'GBP', countries: 'GB IE', taxPercent: '20' } })
+  assert.match(flashOf(renamed.location), /Britain & Ireland saved/)
+
+  const removed = await call(`/admin/regions/${regionId}/delete`, { form: {} })
+  assert.match(flashOf(removed.location), /Region removed/)
+  const after = await call('/admin/settings')
+  assert.doesNotMatch(after.text, /Britain &amp; Ireland/)
+  const usId = /\/admin\/regions\/(reg_[a-z0-9]+)"/.exec(after.text)?.[1] ?? ''
+  const lastOne = await call(`/admin/regions/${usId}/delete`, { form: {} })
+  assert.match(flashOf(lastOne.location), /A store needs one region/, 'the last region stays: it is where the checkout gets its currency')
+})
+
 test('product images are re-shot from a direction, and a lane can be made the hero', async () => {
   const products = await call('/admin/products')
   const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''

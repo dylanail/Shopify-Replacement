@@ -23,6 +23,7 @@ import { createPage, deletePage, duplicatePage, getPage, pageTemplate, updatePag
 import { clonePage, extractBlocks } from '../pages/clone.ts'
 import { blockDefinition } from '../pages/blocks.ts'
 import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
+import { createRegion, deleteRegion, deleteShippingOption, listRegions, setShippingOption, updateRegion, updateShippingOption } from '../domain/regions.ts'
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
@@ -1459,6 +1460,98 @@ export function adminRouter(): Router {
     if (body.as === 'hero') updateProduct(db(), current.store.id, product.id, { heroImage: url, media: [{ url, alt }, ...product.media.filter((entry) => entry.url !== url)].slice(0, 8) })
     else updateProduct(db(), current.store.id, product.id, { media: [...product.media.filter((entry) => entry.url !== url), { url, alt }].slice(0, 8) })
     return back(ctx, body.as === 'hero' ? 'That is the hero image now.' : 'Added to the gallery.')
+  })
+
+  /* Regions, rates and tax. Read-only until now: the only way to change what a
+     customer is charged for shipping was to ask the assistant, and it could
+     only add. */
+  const money = (raw: unknown): number | null => {
+    const text = String(raw ?? '').trim().replace(/[^0-9.,-]/g, '').replace(/,/g, '')
+    if (!text) return null
+    const value = Number(text)
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) : null
+  }
+  const countryList = (raw: unknown) =>
+    String(raw ?? '')
+      .split(/[,\s]+/)
+      .map((code) => code.trim().toUpperCase())
+      .filter((code) => /^[A-Z]{2}$/.test(code))
+
+  router.post('/admin/regions', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const currency = String(body.currency ?? '').trim().toUpperCase()
+    if (!/^[A-Z]{3}$/.test(currency)) return back(ctx, '!A currency is three letters, like USD or GBP.')
+    const countries = countryList(body.countries)
+    if (!countries.length) return back(ctx, '!Give the region at least one country, as a two-letter code.')
+    const region = createRegion(db(), current.store.id, {
+      name: String(body.name ?? '').trim() || currency,
+      currency,
+      countries,
+      taxRate: Math.min(1, Math.max(0, Number(String(body.taxPercent ?? '0').replace(/[^0-9.]/g, '')) / 100 || 0)),
+    })
+    const amount = money(body.shippingAmount)
+    if (amount !== null) {
+      setShippingOption(db(), region.id, { name: String(body.shippingName ?? '').trim() || 'Standard shipping', amountCents: amount, freeAboveCents: money(body.shippingFreeAbove) })
+    }
+    return back(ctx, `${region.name} added: ${region.currency} for ${countries.join(', ')}.`)
+  })
+
+  router.post('/admin/regions/:id', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const currency = String(body.currency ?? '').trim().toUpperCase()
+    if (currency && !/^[A-Z]{3}$/.test(currency)) return back(ctx, '!A currency is three letters, like USD or GBP.')
+    try {
+      const region = updateRegion(db(), current.store.id, ctx.params.id as string, {
+        name: String(body.name ?? '').trim() || undefined,
+        ...(currency ? { currency } : {}),
+        ...(body.countries === undefined ? {} : { countries: countryList(body.countries) }),
+        ...(body.taxPercent === undefined ? {} : { taxRate: Math.min(1, Math.max(0, Number(String(body.taxPercent).replace(/[^0-9.]/g, '')) / 100 || 0)) }),
+        ...(body.isDefault === 'true' ? { isDefault: true } : {}),
+      })
+      return back(ctx, `${region.name} saved.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save the region'}`)
+    }
+  })
+
+  router.post('/admin/regions/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    try {
+      deleteRegion(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, 'Region removed, with its rates.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not remove the region'}`)
+    }
+  })
+
+  router.post('/admin/regions/:id/shipping', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const region = listRegions(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!region) return back(ctx, '!No such region')
+    const amount = money(body.amount)
+    if (amount === null) return back(ctx, '!Give the rate a price — 0 for free shipping.')
+    const name = String(body.name ?? '').trim() || 'Standard shipping'
+    const freeAbove = money(body.freeAbove)
+    const optionId = String(body.optionId ?? '')
+    if (optionId && region.shipping.some((option) => option.id === optionId)) {
+      updateShippingOption(db(), optionId, { name, amountCents: amount, freeAboveCents: freeAbove })
+      return back(ctx, `${name} saved on ${region.name}.`)
+    }
+    setShippingOption(db(), region.id, { name, amountCents: amount, freeAboveCents: freeAbove })
+    return back(ctx, `${name} added to ${region.name}.`)
+  })
+
+  router.post('/admin/shipping/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    try {
+      deleteShippingOption(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, 'Rate removed.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not remove the rate'}`)
+    }
   })
 
   router.post('/admin/team', async (ctx) => {
