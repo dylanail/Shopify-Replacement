@@ -14,7 +14,7 @@ function frame(title: string, inner: string): string {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@400;500&display=swap">
 <style>
-:root{--paper:#faf7f3;--ink:#1c1a17;--muted:#7d746a;--line:#e6ded3;--accent:#7a4a2b}
+:root{--paper:#f6f7f9;--ink:#202223;--muted:#6d7175;--line:#dfe3e8;--accent:#2c6ecb}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 'Inter',ui-sans-serif,system-ui,sans-serif;
   min-height:100vh;display:grid;place-items:center;padding:2rem 1rem}
