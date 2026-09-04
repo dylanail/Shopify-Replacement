@@ -11,7 +11,7 @@ import { generate, imageModels, imagePrompt, defaultProvider, useImageTransport 
 import { attachDomain, checkDomain, dnsPlan, domainsFor, REGISTRARS, tlsAllowed, type Resolver } from '../src/control/domains.ts'
 import { directionFor, listAvatars, saveAvatar, suggestAvatars, shortWho } from '../src/agent/avatars.ts'
 import { applyCompetitor, classifyAngle, directionFrom, extractAngle, readCompetitor, saveCompetitor } from '../src/agent/angles.ts'
-import { AD_FORMATS, draftAds, limitWarnings, patternInspiration, PLATFORMS, readInspiration, reviseAd, saveAd, searchAdLibrary, useAdLibraryTransport, writeAd, type AdInput } from '../src/agent/ads.ts'
+import { AD_FORMATS, draftAds, limitWarnings, patternInspiration, PLATFORMS, readInspiration, reviseAd, saveAd, searchAdLibrary, unverifiedQuotes, useAdLibraryTransport, writeAd, type AdInput } from '../src/agent/ads.ts'
 import { latestResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { readDirection } from '../src/agent/directions.ts'
@@ -385,6 +385,20 @@ test('every ad format writes for every platform, and the testimonial format refu
   const testimonial = writeAd(adInput({ format: AD_FORMATS.find((format) => format.id === 'testimonial')!, reviews: [{ rating: 5, body: 'Four months of sparring and the stitching has not moved an inch, which is more than I can say for the last two pairs.', author: 'Marisol A.' }] }))
   assert.match(testimonial.primaryText, /"Four months of sparring/)
   assert.match(testimonial.primaryText, /— Marisol\./, 'first name only')
+})
+
+test('a quote the model wrote is checked against the approved reviews, not just asked for', () => {
+  // "Quote only the reviews you are given" was a line in a prompt and nothing
+  // else — the same footing the character limits were on before they were
+  // clipped after the fact. A fabricated testimonial is a false statement
+  // about a real person, in an ad, with the store's name on it.
+  const reviews = [{ body: 'Four months of sparring and the stitching has not moved an inch, which is more than I can say for the last two pairs.', author: 'Marisol A.' }]
+  assert.deepEqual(unverifiedQuotes('They said "Four months of sparring and the stitching has not moved an inch."', reviews), [])
+  assert.deepEqual(unverifiedQuotes('"the stitching has not moved an inch after four months of sparring" — Marisol', reviews), [], 'a trim of a real review still passes')
+  assert.equal(unverifiedQuotes('"My doctor told me these are the only gloves worth buying for tendonitis." — Dana', reviews).length, 1)
+  assert.deepEqual(unverifiedQuotes('It doesn\'t slip and it isn\'t heavy.', reviews), [], 'apostrophes are contractions, not quotation marks')
+  assert.deepEqual(unverifiedQuotes('"Built to last."', reviews), [], 'a phrase too short to be a testimonial is left alone')
+  assert.equal(unverifiedQuotes('"Anything at all here that nobody ever wrote about anything."', []).length, 1, 'with no reviews on file, any quote is unverified')
 })
 
 test('the avatar and the direction shape the copy', () => {

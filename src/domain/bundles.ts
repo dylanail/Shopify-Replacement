@@ -166,11 +166,15 @@ export function renderBundleWidget(bundle: Bundle, product: Product, currency: s
     const perUnit = Math.round(total / tier.quantity)
     const perks = [tier.freeShipping ? 'Free shipping' : '', tier.giftVariantId ? `+ ${tier.giftLabel || 'free gift'}` : ''].filter(Boolean)
     const checked = index === preselect ? 'checked' : ''
+    // The quantity and the discount ride on the input so the product page can
+    // re-price the tiers when the buyer picks a different variant. Rendered
+    // once from the cheapest variant, a three-pack of the large size showed
+    // the small size's price and the cart charged the large one.
     return `<label class="tier${tier.badge ? ' tier--hi' : ''}">
-      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency))}" ${checked}>
+      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency))}" data-discount="${tier.discountPercent}" ${checked}>
       <span class="tier-main"><span class="tier-label">${escapeHtml(tier.label)}${tier.discountPercent ? ` <em>Save ${tier.discountPercent}%</em>` : ''}</span>
         ${perks.length ? `<span class="tier-perks">${perks.map((perk) => escapeHtml(perk)).join(' · ')}</span>` : ''}</span>
-      <span class="tier-price"><b>${escapeHtml(format(total, currency))}</b>${style.showCompare !== false && tier.discountPercent ? `<s>${escapeHtml(format(full, currency))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small>${escapeHtml(format(perUnit, currency))} each</small>` : ''}</span>
+      <span class="tier-price"><b data-tier-total>${escapeHtml(format(total, currency))}</b>${style.showCompare !== false && tier.discountPercent ? `<s data-tier-compare>${escapeHtml(format(full, currency))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small data-tier-unit>${escapeHtml(format(perUnit, currency))} each</small>` : ''}</span>
       ${tier.badge ? `<span class="tier-badge">${escapeHtml(tier.badge)}</span>` : ''}</label>`
   })
   return `<div class="bundle bundle--${escapeHtml(style.layout ?? 'stacked')}" style="${style.accent ? `--bundle-accent:${escapeHtml(style.accent)};` : ''}${style.radius ? `--bundle-radius:${escapeHtml(style.radius)};` : ''}">

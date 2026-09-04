@@ -31,6 +31,7 @@ import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
+import { PHOTO_BRIEFS, shotOf } from '../creative/briefs.ts'
 import { listCustomBlocks, type CustomBlock } from '../pages/custom-blocks.ts'
 import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
@@ -167,15 +168,16 @@ export function productDetail(ctx: Ctx, productId: string): string {
   </div>
   <div>
     <div class="card"><h2>Media</h2><div class="grid3" style="grid-template-columns:repeat(2,1fr);margin-top:.6rem">
-      ${[product.heroImage, ...product.media.map((entry) => entry.url)]
-        .filter(Boolean)
+      ${(product.media.length ? product.media : product.heroImage ? [{ url: product.heroImage, alt: product.title }] : [])
         .slice(0, 4)
-        .map((url) => `<img src="${escapeHtml(url)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`)
-        .join('')}</div>
+        .map((entry) => `<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">
+          ${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
+        .join('') || '<p class="muted" style="font-size:12px">No images yet.</p>'}</div>
       <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
         <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>
         <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
           .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
+        <div class="field"><label>Which shot from the brief is it?</label><select name="shot"><option value="">— not one of them —</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}">${escapeHtml(brief.name)}</option>`).join('')}</select></div>
         <button class="btn primary" type="submit">Upload and stage</button></form>
       <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery.</p></div>
     ${regenerateCard(ctx, product)}
@@ -190,6 +192,19 @@ export function productDetail(ctx: Ctx, productId: string): string {
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.description ?? '')}</p></div>
   </div></div>
   <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${versionsCard(ctx, product)}</div>`
+}
+
+/**
+ * Which brief an image satisfies. The Creative page checks coverage by reading
+ * a `photo:<id>` marker out of the alt text and told the owner to type one
+ * there — with no field anywhere that could write it. So the checklist could
+ * only ever show the hero as taken and everything else as missing.
+ */
+function shotPicker(productId: string, url: string, current: string): string {
+  return `<form method="post" action="/admin/products/${escapeHtml(productId)}/media/label" class="row" style="gap:.25rem;margin-top:.3rem">
+    <input type="hidden" name="mediaUrl" value="${escapeHtml(url)}">
+    <select name="shot" style="flex:1;font-size:11px;padding:.2rem"><option value="">— which shot —</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}" ${brief.id === current ? 'selected' : ''}>${escapeHtml(brief.name)}</option>`).join('')}</select>
+    <button class="btn" type="submit" style="font-size:11px">Label</button></form>`
 }
 
 function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {

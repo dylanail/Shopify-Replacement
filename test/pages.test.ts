@@ -407,6 +407,30 @@ test('the assistant can read a page back and edit the blocks on it', async () =>
   await assert.rejects(execute('remove_block', { pageId, position: 99 }, ctx), /read_page/)
 })
 
+test('bundle tiers re-price against the variant the buyer picks', () => {
+  // The widget is rendered once, from the cheapest variant. On a product where
+  // the large size costs more, the three-pack quoted the small size's total
+  // and the cart charged the large one — the page said $240 and the customer
+  // paid $360.
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Sizes', prompt: 'sizes' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, {
+    title: 'Tee',
+    status: 'published',
+    variants: [{ title: 'Small', priceCents: 4000, inventory: 5 }, { title: 'Large', priceCents: 6000, inventory: 5 }],
+  })
+  upsertBundle(db, store.id, { productId: product.id, tiers: [{ quantity: 1, discountPercent: 0, label: 'One' }, { quantity: 3, discountPercent: 20, label: 'Three' }] })
+  const widget = renderBundleWidget(bundleFor(db, store.id, product.id)!, product, 'USD', { variantPriceCents: 4000 })
+  assert.match(widget, /data-discount="20"/, 'the tier carries what it is worth, not only what it costs today')
+  assert.match(widget, /<b data-tier-total>\$96\.00<\/b>/, 'three small at 20% off')
+
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const pdp = productPage(view as never, { product: getProduct(db, store.id, product.id)!, stats: statsFor(db, store.id, product.id), reviews: [], companions: [] })
+  assert.match(pdp, /data-tier-total/, 'and the page can find the number to change')
+  assert.match(pdp, /input\.dataset\.discount/, 'picking a variant re-prices every tier from that variant')
+})
+
 test('the buybox promises only what the store has actually configured', () => {
   const { db, user } = fresh()
   const store = createStore(db, user.id, { name: 'Bare', prompt: 'bare' })

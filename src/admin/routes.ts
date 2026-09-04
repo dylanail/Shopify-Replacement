@@ -43,7 +43,7 @@ import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
 import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
-import { deleteQueueItem, getQueueItem, PAGE_GOALS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
+import { deleteQueueItem, getQueueItem, labelShot, PAGE_GOALS, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
 import { newBlock } from '../pages/store.ts'
@@ -364,15 +364,34 @@ export function adminRouter(): Router {
     if (!files.photo) return back(ctx, '!Choose an image first.')
     try {
       const saved = saveUpload(files.photo, current.store.id)
+      const shot = String(body.shot ?? '').trim().toLowerCase()
       const result = await execute(
         'attach_product_photo',
-        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless') },
+        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless'), ...(shot ? { shot } : {}) },
         { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
       )
       return back(ctx, result.summary)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Upload failed'}`)
     }
+  })
+
+  /* Which brief an image satisfies. The Creative checklist reads these markers;
+     nothing could write one, so coverage never moved past the hero. */
+  router.post('/admin/products/:id/media/label', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, ctx.params.id as string)
+    if (!product) return back(ctx, '!No such product')
+    const url = String(body.mediaUrl ?? '')
+    const shot = String(body.shot ?? '').trim().toLowerCase()
+    if (shot && !PHOTO_BRIEFS.some((brief) => brief.id === shot)) return back(ctx, '!That is not one of the briefs.')
+    if (!product.media.some((entry) => entry.url === url)) return back(ctx, '!That image is not on this product.')
+    updateProduct(db(), current.store.id, product.id, {
+      media: product.media.map((entry) => (entry.url === url ? { ...entry, alt: labelShot(entry.alt, shot) } : entry)),
+    })
+    const brief = PHOTO_BRIEFS.find((entry) => entry.id === shot)
+    return back(ctx, brief ? `Labelled as "${brief.name}". The Creative checklist counts it now.` : 'Label removed.')
   })
 
   router.post('/admin/products/:id/rewrite', async (ctx) => {

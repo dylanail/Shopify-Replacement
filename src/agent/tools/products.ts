@@ -8,6 +8,7 @@ import { enhance, generate, PRESETS, type PresetId } from '../images.ts'
 import { authorContentFor, authorProductContent } from '../pages.ts'
 import { modelFor } from '../models.ts'
 import { latestResearch, rulesResearch } from '../research.ts'
+import { labelShot, PHOTO_BRIEFS } from '../../creative/briefs.ts'
 import { defineTools, type Tool } from '../registry.ts'
 
 const PRESET_IDS = PRESETS.map((preset) => preset.id)
@@ -364,6 +365,7 @@ export const productTools: Tool[] = defineTools([
       productId: { type: 'string', required: true },
       upload: { type: 'string', required: true, pattern: '^/_uploads/', help: 'The upload URL.' },
       preset: { type: 'string', enum: PRESET_IDS as unknown as string[], default: 'white-seamless' },
+      shot: { type: 'string', enum: PHOTO_BRIEFS.map((brief) => brief.id), help: 'Which brief from the photo checklist this satisfies. It goes in the alt text, which is what the Creative page counts coverage from.' },
     },
     async handler(args, ctx) {
       const store = getStore(ctx.db, ctx.storeId)
@@ -377,12 +379,18 @@ export const productTools: Tool[] = defineTools([
         reference: args.upload as string,
         ...(store?.brand ? { palette: store.brand } : {}),
       })
+      const shot = (args.shot as string) ?? ''
       updateProduct(ctx.db, ctx.storeId, product.id, {
         heroImage: staged,
-        media: [{ url: staged, alt: `${product.title}, ${args.preset}` }, { url: args.upload as string, alt: `${product.title}, original photo` }, ...product.media].slice(0, 8),
+        media: [
+          { url: staged, alt: labelShot(`${product.title}, ${args.preset}`, shot) },
+          { url: args.upload as string, alt: labelShot(`${product.title}, original photo`, shot) },
+          ...product.media,
+        ].slice(0, 8),
       })
+      const brief = PHOTO_BRIEFS.find((entry) => entry.id === shot)
       return {
-        summary: `${product.title} now leads with your photo, staged as ${args.preset}. The original is kept in the gallery.`,
+        summary: `${product.title} now leads with your photo, staged as ${args.preset}${brief ? `, labelled as the ${brief.name.toLowerCase()} shot` : ''}. The original is kept in the gallery.`,
         artifacts: [{ type: 'image', urls: [staged, args.upload as string], caption: `${product.title}: staged and original` }],
       }
     },

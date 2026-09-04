@@ -569,6 +569,29 @@ test('product images are re-shot from a direction, and a lane can be made the he
   assert.match(flashOf(used.location), /hero image now/)
 })
 
+test('a photo can be labelled as the shot it is, and the creative checklist counts it', async () => {
+  // The checklist read a photo:<id> marker out of the alt text and told the
+  // owner to type one there — with nothing anywhere that could write it. Every
+  // product showed twelve missing shots forever.
+  const products = await call('/admin/products')
+  const productId = /prod_[a-z0-9]+/.exec(products.text)?.[0] ?? ''
+  const detail = await call(`/admin/products/${productId}`)
+  assert.match(detail.text, /which shot/, 'every image on the product can say which brief it is')
+  const mediaUrl = /name="mediaUrl" value="([^"]+)"/.exec(detail.text)?.[1]?.replace(/&amp;/g, '&') ?? ''
+  assert.ok(mediaUrl, 'there is an image to label')
+
+  const labelled = await call(`/admin/products/${productId}/media/label`, { form: { mediaUrl, shot: 'detail' } })
+  assert.match(flashOf(labelled.location), /Detail of the mechanism/)
+  const creative = await call('/admin/creative')
+  const row = creative.text.split('<tr>').find((chunk) => chunk.includes('</td>') && chunk.includes('tag ok">detail')) ?? ''
+  assert.ok(row, 'the coverage table counts the shot as taken')
+
+  const cleared = await call(`/admin/products/${productId}/media/label`, { form: { mediaUrl, shot: '' } })
+  assert.match(flashOf(cleared.location), /Label removed/)
+  const refused = await call(`/admin/products/${productId}/media/label`, { form: { mediaUrl, shot: 'not-a-brief' } })
+  assert.match(flashOf(refused.location), /not one of the briefs/)
+})
+
 test('the storefront product page carries the conversion sections and the sticky bar', async () => {
   const dashboard = await call('/admin')
   const slug2 = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''

@@ -366,6 +366,18 @@ ${qaSection(view, product)}
     if(!match) return;
     document.getElementById('pdp-variant').value = match.id;
     document.getElementById('pdp-price').textContent = money(match.price);
+    /* The bundle tiers are drawn once, from the cheapest variant. Re-price them
+       against the variant actually chosen, or the three-pack of the large size
+       quotes the small size's total and the cart charges the large one. */
+    document.querySelectorAll('#pdp-form .tier').forEach(function(card){
+      var input = card.querySelector('input[name=quantity]'); if (!input) return;
+      var quantity = Number(input.value) || 1, off = Number(input.dataset.discount || 0);
+      var full = match.price * quantity, total = Math.round(full * (1 - off / 100));
+      input.dataset.total = money(total);
+      var b = card.querySelector('[data-tier-total]'); if (b) b.textContent = money(total);
+      var s = card.querySelector('[data-tier-compare]'); if (s) s.textContent = money(full);
+      var each = card.querySelector('[data-tier-unit]'); if (each) each.textContent = money(Math.round(total / quantity)) + ' each';
+    });
     var tier = document.querySelector('#pdp-form input[name=quantity]:checked');
     var total = tier && tier.dataset.total ? tier.dataset.total : money(match.price);
     document.querySelector('#pdp-cta span').textContent = total;
