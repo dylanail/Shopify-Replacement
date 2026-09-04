@@ -55,10 +55,17 @@ export function createArticle(
   db: Db,
   storeId: string,
   blogId: string,
-  input: { title: string; body?: string; excerpt?: string; image?: string; tags?: string[]; status?: Article['status'] },
+  input: { title: string; body?: string; excerpt?: string; image?: string; tags?: string[]; status?: Article['status']; publishAt?: string },
 ): Article {
   const articleId = id('art')
-  const status = input.status ?? 'published'
+  let status = input.status ?? 'published'
+  let publishedAt = status === 'published' ? now() : null
+  if (input.publishAt) {
+    const requested = new Date(input.publishAt)
+    if (Number.isNaN(requested.getTime())) throw new Error('Publish time is not a valid date')
+    publishedAt = requested.toISOString()
+    status = requested.getTime() > Date.now() ? 'scheduled' : 'published'
+  }
   db.insert('articles', {
     id: articleId,
     blog_id: blogId,
@@ -70,14 +77,20 @@ export function createArticle(
     image: input.image ?? '',
     tags: input.tags ?? [],
     status,
-    published_at: status === 'published' ? now() : null,
+    published_at: publishedAt,
     created_at: now(),
   })
   return rowToArticle(db.one('SELECT * FROM articles WHERE id = ?', articleId) as Row)
 }
 
+/** Scheduled posts become public from their timestamp without needing a worker. */
+export function articleIsPublic(article: Article, at = new Date()): boolean {
+  if (article.status === 'published') return true
+  return article.status === 'scheduled' && article.publishedAt !== null && Date.parse(article.publishedAt) <= at.getTime()
+}
+
 export function findArticle(db: Db, storeId: string, blogHandle: string, articleHandle: string): { blog: Blog; article: Article } | null {
   const blog = listBlogs(db, storeId).find((entry) => entry.handle === blogHandle)
-  const article = blog?.articles.find((entry) => entry.handle === articleHandle && entry.status === 'published')
+  const article = blog?.articles.find((entry) => entry.handle === articleHandle && articleIsPublic(entry))
   return blog && article ? { blog, article } : null
 }

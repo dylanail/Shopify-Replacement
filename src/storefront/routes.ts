@@ -15,7 +15,7 @@ import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
 import { getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
-import { findArticle, listBlogs } from '../domain/content.ts'
+import { articleIsPublic, findArticle, listBlogs } from '../domain/content.ts'
 import { CheckoutError, completeCart, getOrder } from '../domain/orders.ts'
 import { createReview, listReviews, statsFor } from '../domain/reviews.ts'
 import { environment, getStore, type Store } from '../control/stores.ts'
@@ -25,6 +25,7 @@ import { orderContext, sendEmail } from '../email/send.ts'
 import { findRedirect, llmsTxt, robots, sitemap } from '../seo/schema.ts'
 import * as view from './render.ts'
 import type { CheckoutInput, StoreView } from './render.ts'
+import { atomFeed, rssFeed } from './feeds.ts'
 
 const CART_COOKIE = 'amboras_cart'
 const log = logger('checkout')
@@ -275,12 +276,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const blog = listBlogs(current.db, current.store.id).find((entry) => entry.handle === ctx.params.blog)
     if (!blog) throw notFound('No such blog')
-    const published = blog.articles.filter((article) => article.status === 'published')
+    const published = blog.articles.filter((article) => articleIsPublic(article))
     return html(
       view.simplePage(
         current,
         blog.title,
-        published.length
+        (published.length
           ? published
               .map(
                 (article) =>
@@ -288,9 +289,24 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
                    <p class="micro">${escapeHtml(article.publishedAt?.slice(0, 10) ?? '')}</p><p>${escapeHtml(article.excerpt)}</p></article>`,
               )
               .join('')
-          : '<p>Nothing published yet.</p>',
+          : '<p>Nothing published yet.</p>') +
+          `<p class="micro"><a href="${current.base}/blogs/${blog.handle}/rss.xml">RSS</a> · <a href="${current.base}/blogs/${blog.handle}/atom.xml">Atom</a></p>`,
       ),
     )
+  })
+
+  router.get('/blogs/:blog/rss.xml', (ctx) => {
+    const current = open(ctx)
+    const blog = listBlogs(current.db, current.store.id).find((entry) => entry.handle === ctx.params.blog)
+    if (!blog) throw notFound('No such blog')
+    return new Raw(rssFeed({ blog, storeName: current.store.name, storefrontUrl: `${ctx.url.origin}${current.base}` }), 'application/rss+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=300' })
+  })
+
+  router.get('/blogs/:blog/atom.xml', (ctx) => {
+    const current = open(ctx)
+    const blog = listBlogs(current.db, current.store.id).find((entry) => entry.handle === ctx.params.blog)
+    if (!blog) throw notFound('No such blog')
+    return new Raw(atomFeed({ blog, storeName: current.store.name, storefrontUrl: `${ctx.url.origin}${current.base}` }), 'application/atom+xml; charset=utf-8', { 'Cache-Control': 'public, max-age=300' })
   })
 
   router.get('/blogs/:blog/:article', (ctx) => {

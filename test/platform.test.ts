@@ -14,6 +14,8 @@ import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { funnel, kpis, sessionFor, track } from '../src/analytics/events.ts'
 import { render } from '../src/email/templates.ts'
 import { productJsonLd, validateProductSchema } from '../src/seo/schema.ts'
+import { articleIsPublic, createArticle, createBlog, findArticle, listBlogs } from '../src/domain/content.ts'
+import { atomFeed, rssFeed } from '../src/storefront/feeds.ts'
 
 /* ------------------------------------------------------------------ platform */
 
@@ -57,6 +59,29 @@ test('the router matches params and wildcards and respects mounts', () => {
   assert.equal(router.match('GET', '/files/deep/path')?.params.wildcard, 'deep/path')
   assert.equal(router.match('GET', '/a/7'), null)
   assert.equal(router.match('POST', '/a/7/b'), null)
+})
+
+test('scheduled blog posts publish on time and feeds expose only public articles', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Field & Forge' })
+  const blog = createBlog(db, store.id, 'Field Notes')
+  createArticle(db, store.id, blog.id, { title: 'Draft only', body: 'No', status: 'draft' })
+  createArticle(db, store.id, blog.id, { title: 'Next year', body: 'Later', publishAt: '2099-01-01T00:00:00Z' })
+  const live = createArticle(db, store.id, blog.id, { title: 'Leather & care', excerpt: 'Oil < water & wax', body: 'Now', publishAt: '2020-01-01T00:00:00Z' })
+
+  assert.equal(live.status, 'published')
+  assert.equal(articleIsPublic(live), true)
+  assert.equal(findArticle(db, store.id, blog.handle, live.handle)?.article.id, live.id)
+
+  const current = listBlogs(db, store.id)[0]!
+  const input = { blog: current, storeName: store.name, storefrontUrl: 'https://shop.example/s/field-forge' }
+  const rss = rssFeed(input)
+  const atom = atomFeed(input)
+  assert.match(rss, /Leather &amp; care/)
+  assert.match(rss, /Oil &lt; water &amp; wax/)
+  assert.match(atom, /Leather &amp; care/)
+  assert.doesNotMatch(rss, /Draft only|Next year/)
+  assert.doesNotMatch(atom, /Draft only|Next year/)
 })
 
 /* -------------------------------------------------------------- control plane */

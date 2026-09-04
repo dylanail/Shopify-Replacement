@@ -24,7 +24,7 @@ npm start                          # http://localhost:4100
 ```
 
 ```
-npm test            # 123 tests, ~4s; the model path runs against a fake network
+npm test            # 146 tests, ~4s; the model path runs against a fake network
 npm run typecheck
 npm run reset       # throw the database away and re-seed
 ```
@@ -76,7 +76,7 @@ says on every page and every record when it is looking at rules output.
 | **Domains** | host here or forward from the registrar, with the records and menu path for Namecheap, GoDaddy, Cloudflare, Squarespace, Porkbun; real DNS and redirect checks; certificates issued on demand by the edge once a name verifies |
 | **Conversion widgets** | recent sales, live viewers, scarcity, free-shipping bar, delivery estimate, payment icons, size chart, customer photos, Q&A, back-in-stock, announcements, compare-at badges, abandoned-cart email, GA4/Meta/TikTok events; each renders nothing when it has nothing honest to say |
 | **Commerce core** | products, variants, inventory, collections, customers, carts, orders, fulfilments, refunds, returns, six promotion types, regions, shipping |
-| **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll; an email for a code, the deal itself, or the quiz; says how long the code is valid; never on the checkout); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
+| **Storefront** | server-rendered per brand with Google Fonts pairings by mood, Brotli, one external request; home, collections, PDP, cart, checkout, order, offer, track, blog with scheduled publishing plus RSS and Atom feeds, pages, sitemap, robots, JSON-LD, `llms.txt`; a privacy policy and terms of sale generated from how the store is actually configured; one optional popup (exit, delay or scroll; an email for a code, the deal itself, or the quiz; says how long the code is valid; never on the checkout); skip link, landmarks, focus styles, reduced motion; a first-party beacon that records scroll depth, sections seen, buttons pressed, popup and quiz events |
 | **Site health** | renders the pages as a visitor gets them and checks landmarks, alt text, labels, headings, button names, contrast, weight on the wire, scripts, fonts, lazy loading, and the template residue the reference pages shipped ("[confirm]" markers, dead links, placeholder images, counters at zero) |
 | **Plugins** | manifest schema, settings validation, sealed credentials, storefront slots, plugin-contributed tools; eleven first-party integrations installable, the rest a directory |
 | **Analytics, email, SEO** | cookieless sessions and events, KPIs, funnel, live visitors, affinity, and a behaviour report (scroll depth, sections seen, buttons pressed, per-page revenue per session); ten transactional templates over Resend; meta, structured data, redirects, sitemap |
