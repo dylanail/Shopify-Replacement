@@ -1,9 +1,9 @@
 # Amboras
 
 One person's replacement for Shopify and the thirty apps a dropshipper bolts
-onto it. A store builder with the commerce backend underneath, for stores
-that sell through paid traffic, advertorials and Shopify-style product
-pages: the work is research → pages → offers → ads → domains, and a model
+onto it. Stores and funnels are separate top-level assets over the same
+commerce backend: a store is a full Shopify-style catalog, while a funnel is
+an advertorial or quiz → PDP → checkout conversion path. The work is research → pages → offers → ads → domains, and a model
 does as much of it as a good operator would.
 
 You type one sentence, optionally with a product photo and a site to read.
@@ -24,7 +24,7 @@ npm start                          # http://localhost:4100
 ```
 
 ```
-npm test            # 150 tests, ~4s; model and service paths run against fake networks
+npm test            # 160 tests, ~4s; model and service paths run against fake networks
 npm run typecheck
 npm run reset       # throw the database away and re-seed
 ```
@@ -59,17 +59,18 @@ says on every page and every record when it is looking at rules output.
 
 | | |
 |---|---|
-| **Stores hub** | every store you own with 30-day numbers; "+ New store" runs onboarding again |
+| **All assets** | card grid for every store and funnel with today and 30-day revenue, type filters and per-asset switching; create a blank asset, run the AI build, or paste one store URL to clone its home plus a bounded set of product, collection, content and blog pages into editable local pages |
 | **Build** | three ways to build (bring your own product, copy a funnel, copy a funnel with a new angle), each with its own order of work; two shapes the result takes (a Shopify-style store or a funnel) with an advertorial or a quiz in front of either and a popup decision; a page plan that lists every page the shape needs with its status read from what exists and a template for each one missing; step statuses read from the world, not ticked; eight buyer questions where "I don't know" is an answer that research fills in and labels as assumed |
 | **Market** | the market analysis (awareness, sophistication, desires ranked, the searches to run, competitors, mechanisms, new information, underserved avatars, whether there is a way to stand out at all), the product overview, core avatars with sub-avatars, the ad plan (concept → angle → variations → format → method) and feedback loops, all saved under the store |
 | **Creative** | sixteen photo briefs (the course's eight plus the shots every reference page uses: the pack per tier, the "before" moments, the mechanism diagram, goes-everywhere, the infographic slides, and the expert, origin and texture when there are any) checked against each product's media; creator-content concepts for a real person to film, vetted in a queue and never published as reviews; a dependency-free GIF maker over the product's PNG renders; a layout suggester that picks blocks from the catalog for an offer page, advertorial, quiz, product page or home |
 | **Research & avatars** | the research record; avatars suggested from it (who, wants, fears, angle, hooks, tone, first objection), editable and selectable; competitor pages read into editable angle records that fold into the research or become a direction |
 | **Products** | options, variants, swatches, media, SEO, supplier cost and margin, size chart, import from any Shopify `/products/x.json` or Open Graph page, structured page content, image re-shoots from a sentence with GPT Image 2 or Gemini 3 Pro Image |
-| **Pages & builder** | blocks the store defines for itself (a name, fields, an HTML template in a small language, css) when the catalog has nothing for a section, by the owner or by the assistant through `create_block`; they sit in the palette under Custom and render through the same validated path; the assistant can also drop a one-off `custom-html` section into a page, and the page writers may add a section a layout is missing; css and js wherever they are needed: a `custom-code` block for one page, a block's own css and script (run once per page that uses it), and store-wide css and js on the theme through the designer or `set_store_code`; 73 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz, the checkout's own pieces, and the parts the reference funnels run on: rating line, big numbers, results timeline, steps, value stack, expert quotes, founder letter, cost of the alternatives, video reviews, research citations, gallery, specs) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls a reference URL in with its styles and images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
+| **Pages & builder** | blocks the store defines for itself (a name, fields, an HTML template in a small language, css) when the catalog has nothing for a section, by the owner or by the assistant through `create_block`; they sit in the palette under Custom and render through the same validated path; the assistant can also drop a one-off `custom-html` section into a page, and the page writers may add a section a layout is missing; css and js wherever they are needed: a `custom-code` block for one page, a block's own css and script (run once per page that uses it), and store-wide css and js on the theme through the designer or `set_store_code`; 73 blocks (Shopify sections, Funnelish elements, advertorial parts, a quiz, the checkout's own pieces, and the parts the reference funnels run on: rating line, big numbers, results timeline, steps, value stack, expert quotes, founder letter, cost of the alternatives, video reviews, research citations, gallery, specs) in a drag-and-drop editor with live preview, HTML mode, a cloner that pulls reference URLs in with their styles and locally owned images, and a funnel rip that keeps only a page's structure: the section order comes back as blocks, every word is rewritten (in the source's angle or yours) and every image becomes a photo brief |
 | **Templates** | offer page in the order that turned 1.18x into 3.59x, the long-form sales page, the Shopify-style product page, the science page, the story landing page, advertorial listicle, quiz funnel, product landing page, home page, and the checkout itself as blocks — published, it becomes the store's `/checkout` |
 | **Dashboard** | Shopify-style operator home and organized channel/marketing/insights navigation with familiar icons; sales and profit, period-over-period KPIs, conversion funnel, live visitors, fulfillment load, experiments, recent orders, next steps, quick actions and a compact storefront preview |
 | **Versions & CRO** | PDP versions and advertorials in named formats with free-form direction; stable per-session assignment; Beta-Bernoulli probability-to-win; minimum-view and purchase guardrails; autonomous winner promotion; exact prior-weight rollback |
-| **Funnels** | ad → advertorial → offer → checkout with an order bump → one-click upsell → downsell → thank-you; funnels in the same test group split traffic at `/go/<group>` by weight and are compared on revenue per session |
+| **Funnels** | standalone Funnelish assets have their own navigation and visible ad → advertorial/quiz → PDP/sales page → checkout → post-purchase flow; store assets can still attach optional campaign funnels; test groups split traffic at `/go/<group>` by weight and compare revenue per session |
+| **Media** | one per-asset library aggregating uploads, generated images, cloned assets, product and variant media, collections, block pages, imported HTML and creative output, with reusable URLs |
 | **Bundles** | Kaching-style tiers enforced by a promotion the cart reads |
 | **Checkout** | one page that re-sells the way the reference checkouts do (arrival date above the form, free shipping shown as a saving, the bump, the store's own guarantee and returns numbers under the button, reviews below the form), express row, buy-it-now, Stripe Payment Element with saved cards for the post-purchase offer, demo orders without keys; or laid out in the builder from the checkout blocks (form, summary, bump, steps) with a timer, the rating, the guarantee and proof around the same form |
 | **Dropshipping ops** | supplier fulfilment with carrier detection, branded `/track`, live 17TRACK carrier status and event history cached in SQLite, delivery estimates, ad-spend log, profit report with ROAS |

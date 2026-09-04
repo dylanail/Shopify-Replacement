@@ -39,6 +39,7 @@ import { domainsFor } from '../control/domains.ts'
 import { listFlows, recentFlowDeliveries } from '../email/flows.ts'
 import { serverEventSummary } from '../analytics/server-events.ts'
 import { listAssistantQueue } from '../agent/queue.ts'
+import { listStoreMedia, storeCoverImage } from '../control/media.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
 
@@ -73,6 +74,7 @@ function flash(ctx: Ctx): string {
 /* ------------------------------------------------------------------ dashboard */
 
 export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string {
+  const noun = ctx.store.kind === 'funnel' ? 'Funnel' : 'Store'
   const days = range === '24h' ? 2 : range === '7d' ? 7 : range === '30d' ? 30 : 90
   const series = revenueSeries(ctx.db, ctx.store.id, days)
   const stats = kpis(ctx.db, ctx.store.id, range)
@@ -94,9 +96,9 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
     ['Average order', format(stats.aovCents, ctx.store.currency), stats.deltas.aovCents ?? 0, 'analytics'],
   ]
   return `${flash(ctx)}
-  <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? 'Store is live' : 'Draft storefront'}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
+  <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? `${noun} is live` : `Draft ${noun.toLowerCase()}`}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
       <p class="muted">${escapeHtml(ctx.store.name)} · ${products.filter((product) => product.status === 'published').length} published products</p></div>
-    <div class="dash-actions"><a class="btn" href="/admin/store">Customize store</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View store ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
+    <div class="dash-actions"><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/funnels' : '/admin/store'}">${ctx.store.kind === 'funnel' ? 'Edit funnel flow' : 'Customize store'}</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View ${noun.toLowerCase()} ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
       ${(['24h', '7d', '30d', '90d'] as const).map((option) => `<option value="${option}" ${option === range ? 'selected' : ''}>Last ${option}</option>`).join('')}
     </select></form></div></div>
   <div class="commerce-kpis">${tiles.map(([label, value, delta, icon]) => `<div class="metric-card"><div class="label"><span>${label}</span>${uiIcon(icon, 16)}</div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
@@ -106,7 +108,7 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
     <div class="card dash-card"><div class="dash-card-head"><h2>Next things to do</h2><a href="/admin/build" class="muted" style="font-size:11px">See plan</a></div><div class="pulse-list" style="margin-top:.55rem">${todos.length ? todos.map((todo) => `<a href="/admin${escapeHtml(todo.href)}" style="background:#fafbf9;color:var(--ink);border-color:var(--line)"><span>${escapeHtml(todo.label)}</span><strong>→</strong></a>`).join('') : '<div class="dash-empty">Setup is clear. Keep an eye on orders and experiments.</div>'}</div></div></div>
   <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><h2>Recent orders</h2><a class="btn" href="/admin/orders">View all</a></div><div class="order-list">${orders.length ? orders.slice(0, 6).map((order) => `<a class="order-item" href="/admin/orders/${escapeHtml(order.id)}"><span class="order-badge">#${order.displayId}</span><span><strong>${escapeHtml(order.email)}</strong><small>${order.items.length} item${order.items.length === 1 ? '' : 's'} · ${order.createdAt.slice(0, 10)}</small></span><span style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong><small>${escapeHtml(order.fulfillmentStatus)}</small></span></a>`).join('') : '<div class="dash-empty">No orders yet. Your first one will appear here.</div>'}</div></div>
     <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products">${uiIcon('products', 17)}<strong>Add product</strong></a><a href="/admin/pages">${uiIcon('pages', 17)}<strong>Build page</strong></a><a href="/admin/ads">${uiIcon('ads', 17)}<strong>Draft ads</strong></a><a href="/admin/cro">${uiIcon('experiment', 17)}<strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
-  <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>Storefront preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} storefront.</p></div><a class="btn" href="/admin/store">Open designer</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="Storefront preview" loading="lazy"></iframe></div></div>`
+  <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>${noun} preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} ${noun.toLowerCase()}.</p></div><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/pages' : '/admin/store'}">Open builder</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="${noun} preview" loading="lazy"></iframe></div></div>`
 }
 
 function salesChart(series: Array<{ day: string; revenue: number; orders: number }>): string {
@@ -682,6 +684,7 @@ export function profitPage(ctx: Ctx, days: number): string {
 
 export function funnelsPage(ctx: Ctx): string {
   const funnels = listFunnels(ctx.db, ctx.store.id)
+  const standalone = ctx.store.kind === 'funnel'
   const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
   const pages = listPages(ctx.db, ctx.store.id)
   const variantOptions = (selected?: string) => `<option value="">— pick automatically —</option>` + products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === selected ? 'selected' : ''}>${escapeHtml(product.title)} — ${escapeHtml(variant.title)} (${format(variant.priceCents, ctx.store.currency)})</option>`)).join('')
@@ -706,7 +709,8 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${standalone ? 'Funnel asset' : 'Store campaign'}</div><h1 class="serif">${standalone ? 'Funnel flow' : 'Sales funnels'}</h1><p class="muted" style="margin:.25rem 0 0">${standalone ? 'A focused Funnelish-style conversion path, separate from a catalog store.' : 'Optional conversion paths attached to this full store. For a standalone Funnelish build, create a Funnel from All Assets.'} Each content step opens in the same AI page builder.</p></div><a class="btn primary" href="/admin/pages">Build a funnel page</a></div>
+  <div class="funnel-path" aria-label="Funnel path"><div><span>1</span><b>Ad traffic</b><small>Campaign link</small></div><i>→</i><div><span>2</span><b>Front door</b><small>Advertorial or quiz</small></div><i>→</i><div><span>3</span><b>PDP / sales page</b><small>The offer and proof</small></div><i>→</i><div><span>4</span><b>Checkout</b><small>Order bump</small></div><i>→</i><div><span>5</span><b>Post-purchase</b><small>Upsell · downsell · thanks</small></div></div>
   <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
 }
 
@@ -716,8 +720,9 @@ export function pagesPage(ctx: Ctx): string {
   const pages = listPages(ctx.db, ctx.store.id)
   const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 50 })
   const productOptions = products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Pages &amp; funnels</h1>
-    <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
+  const funnel = ctx.store.kind === 'funnel'
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${funnel ? 'Funnel asset' : 'Store asset'}</div><h1 class="serif">${funnel ? 'Funnel pages' : 'Store pages'}</h1>
+    <p class="muted" style="margin:.25rem 0 0">${funnel ? 'Build the advertorial or quiz, sales page, PDP and checkout path as separate editable steps.' : 'Build the home, editorial, campaign and information pages around the full catalog storefront.'} Every page can use blocks, HTML or a cloned reference.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
       <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template">${PAGE_TEMPLATES.map((template) => `<option value="${escapeHtml(template.key)}" title="${escapeHtml(template.description)}">${escapeHtml(template.name)}</option>`).join('')}</select></div>
@@ -823,27 +828,48 @@ export function paymentsPage(ctx: Ctx): string {
   </div></div>`
 }
 
-/* --------------------------------------------------------------- stores hub */
+/* --------------------------------------------------------------- assets hub */
 
 export function storesPage(ctx: Ctx, stores: Store[]): string {
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Your stores</h1>
-    <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}. Each one is its own catalog, customers, orders, brand and address.</p></div>
-    <a class="btn primary" href="/onboarding">+ Start a new store</a></div>
-  <div class="grid3">${stores.map((store) => {
+  const storeCount = stores.filter((store) => store.kind === 'store').length
+  const funnelCount = stores.length - storeCount
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">All assets</h1>
+    <p class="muted" style="margin:.25rem 0 0">${storeCount} store${storeCount === 1 ? '' : 's'} · ${funnelCount} funnel${funnelCount === 1 ? '' : 's'}. Stores are full catalogs; funnels are focused conversion paths.</p></div>
+    <a class="btn primary" href="#new">+ New asset</a></div>
+  <div class="asset-tabs"><button class="on" type="button" data-filter="all">All ${stores.length}</button><button type="button" data-filter="store">Stores ${storeCount}</button><button type="button" data-filter="funnel">Funnels ${funnelCount}</button></div>
+  <div class="asset-grid" id="asset-grid">${stores.map((store) => {
     const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
-    const sales = salesSummary(ctx.db, store.id, 30)
-    return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
-      <div class="row" style="justify-content:space-between;align-items:flex-start">
-        <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
-          <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
-        <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
-      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)}</div>
-      <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
-      <div class="row" style="margin-top:.4rem">
-        <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
-        <a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">Storefront ↗</a></div>
-    </div>`
-  }).join('')}</div>`
+    const pages = ctx.db.one<{ c: number }>('SELECT COUNT(*) c FROM pages WHERE store_id = ?', store.id)?.c ?? 0
+    const todayRevenue = ctx.db.one<{ revenue: number | null }>("SELECT SUM(COALESCE(base_total_cents, total_cents)) revenue FROM orders WHERE store_id = ? AND created_at >= ? AND status != 'cancelled'", store.id, todayStart.toISOString())?.revenue ?? 0
+    const month = salesSummary(ctx.db, store.id, 30)
+    const cover = storeCoverImage(ctx.db, store.id)
+    return `<article class="asset-card" data-kind="${store.kind}">
+      <a class="asset-cover" href="/admin/switch?storeId=${escapeHtml(store.id)}">${cover ? `<img src="${escapeHtml(cover)}" alt="">` : `<span>${uiIcon(store.kind === 'funnel' ? 'funnel' : 'store', 30)}</span>`}<em>${store.kind}</em></a>
+      <div class="asset-body"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2>${escapeHtml(store.name)}</h2><p>${escapeHtml(store.brand.slogan || store.prompt.slice(0, 90) || `Blank ${store.kind}`)}</p></div><span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
+        <div class="asset-facts"><span>${products} product${products === 1 ? '' : 's'}</span><span>${pages} page${pages === 1 ? '' : 's'}</span></div>
+        <div class="asset-metrics"><div><small>Today</small><strong>${format(todayRevenue, store.currency)}</strong></div><div><small>30 days</small><strong>${format(month.revenueCents, store.currency)}</strong><em>${month.orders} order${month.orders === 1 ? '' : 's'}</em></div></div>
+        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">View ↗</a></div></div>
+    </article>`
+  }).join('')}</div>
+  <section id="new" class="section-title" style="margin-top:1.5rem"><div><h2>Create an asset</h2><p class="muted">Start clean, run the full AI build, or clone the front end from one link.</p></div></section>
+  <div class="grid2 asset-create"><form method="post" action="/admin/assets/import" class="card"><div class="row" style="justify-content:space-between"><h2>Clone from a link</h2><span class="tag">fastest</span></div><p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Creates a separate store or funnel, copies the page and image assets locally, and opens it for HTML or block editing. Source scripts and pixels are removed.</p>
+    <div class="field"><label>Store or funnel URL</label><input name="url" type="url" required placeholder="https://example.com"></div><div class="row"><div class="field" style="flex:1"><label>Name (optional)</label><input name="name" placeholder="Use the page title"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn primary" type="submit" onclick="this.textContent='Cloning…'">Clone and open</button></form>
+  <div><form method="post" action="/admin/assets/create" class="card"><h2>Start blank</h2><div class="row" style="margin-top:.7rem"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="New brand"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn" type="submit">Create blank asset</button></form><div class="card"><h2>AI build from a brief</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .7rem">Research, brand, products, imagery and the appropriate store or funnel page plan.</p><a class="btn" href="/onboarding">Start a new store or funnel with AI</a></div></div></div>
+  <script>(function(){var buttons=document.querySelectorAll('.asset-tabs button');var cards=document.querySelectorAll('.asset-card');buttons.forEach(function(button){button.addEventListener('click',function(){buttons.forEach(function(item){item.classList.remove('on')});button.classList.add('on');cards.forEach(function(card){card.hidden=button.dataset.filter!=='all'&&card.dataset.kind!==button.dataset.filter})})})})()</script>`
+}
+
+/* --------------------------------------------------------------- media */
+
+export function mediaPage(ctx: Ctx): string {
+  const assets = listStoreMedia(ctx.db, ctx.store.id)
+  const local = assets.filter((asset) => asset.url.startsWith('/_uploads/')).length
+  const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${ctx.store.kind} asset</div><h1 class="serif">Media</h1><p class="muted" style="margin:.25rem 0 0">Every image used by ${escapeHtml(ctx.store.name)} — uploads, generated scenes, cloned pages, products, variants, collections and page blocks.</p></div><span class="tag">${assets.length} images · ${local} locally owned</span></div>
+  <form method="post" action="/admin/media/upload" enctype="multipart/form-data" class="card media-upload"><div><h2>Add an image</h2><p class="muted">Saved to this ${ctx.store.kind}'s library and ready to paste into any builder field.</p></div><input type="file" name="image" accept="image/*" required><button class="btn primary" type="submit">Upload</button></form>
+  ${assets.length ? `<div class="media-grid">${assets.map((asset) => `<figure class="media-card"><a href="${escapeHtml(asset.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(asset.url)}" alt="${escapeHtml(asset.label)}" loading="lazy"></a><figcaption><div><strong>${escapeHtml(asset.label)}</strong><span>${escapeHtml(asset.source)}${size(asset.bytes) ? ` · ${size(asset.bytes)}` : ''}</span></div><button class="btn" type="button" data-copy="${escapeHtml(asset.url)}">Copy URL</button></figcaption></figure>`).join('')}</div>` : '<div class="card cro-empty"><div class="cro-orb">'+uiIcon('image', 24)+'</div><h2>No images yet</h2><p class="muted">Upload the first product photo, clone a reference, or generate imagery from the Assistant.</p></div>'}
+  <script>document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){navigator.clipboard.writeText(button.dataset.copy);button.textContent='Copied';setTimeout(function(){button.textContent='Copy URL'},1200)})})</script>`
 }
 
 /* ------------------------------------------------------------- research page */

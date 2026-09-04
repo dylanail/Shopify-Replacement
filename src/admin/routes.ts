@@ -54,6 +54,7 @@ import { registerOrderTracking } from '../shipping/seventeen-track.ts'
 import { exportStore } from '../control/export.ts'
 import { addShippingOption, createRegion, getRegion, updateRegion } from '../domain/regions.ts'
 import { listFlows, runFlow, updateFlow } from '../email/flows.ts'
+import { createBlankAsset, importAssetFromUrl } from '../control/assets.ts'
 
 const STORE_COOKIE = 'amboras_store'
 
@@ -202,7 +203,9 @@ export function adminRouter(): Router {
     setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
     const mode = modeById(String(body.mode ?? 'own-product')) ?? modeById('own-product')
     if (mode) setBuildMode(db(), result.store.id, mode.id)
-    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
+    if (body.shape === 'store' || body.shape === 'funnel') setSiteShape(db(), result.store.id, { shape: String(body.shape) })
+    const kind = body.shape === 'funnel' ? 'funnel' : 'store'
+    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built as a ${kind} — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
   })
 
   /* ------------------------------------------------------------------ pages */
@@ -288,7 +291,53 @@ export function adminRouter(): Router {
 
   router.get('/admin/stores', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'stores', 'Your stores', pages.storesPage(ctxFor(current, ctx), current.stores))
+    return page(ctx, current, 'stores', 'All assets', pages.storesPage(ctxFor(current, ctx), current.stores))
+  })
+
+  router.post('/admin/assets/create', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const kind = body.kind === 'funnel' ? 'funnel' : 'store'
+      const asset = createBlankAsset(db(), current.user.id, { name: String(body.name ?? ''), kind, currency: String(body.currency ?? 'USD') })
+      setCookie(ctx.res, STORE_COOKIE, asset.id, { maxAge: 60 * 60 * 24 * 365 })
+      recordAudit(db(), { storeId: asset.id, actorType: 'user', actorId: current.user.id, action: 'create_asset', target: asset.id, diff: { kind } })
+      return redirect(`/admin?flash=${encodeURIComponent(`${asset.name} is ready as a blank ${kind}.`)}`)
+    } catch (error) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not create the asset'}`)}`)
+    }
+  })
+
+  router.post('/admin/assets/import', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const kind = body.kind === 'funnel' ? 'funnel' : 'store'
+      const imported = await importAssetFromUrl(db(), current.user.id, { url: String(body.url ?? ''), name: String(body.name ?? ''), kind, currency: String(body.currency ?? 'USD') })
+      setCookie(ctx.res, STORE_COOKIE, imported.store.id, { maxAge: 60 * 60 * 24 * 365 })
+      recordAudit(db(), { storeId: imported.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_asset', target: imported.clone.sourceUrl, diff: { kind, pageId: imported.page.id, stylesheets: imported.clone.stylesheets, images: imported.clone.imagesLocalized } })
+      return redirect(`/admin/pages/${imported.page.id}/edit?flash=${encodeURIComponent(`Cloned ${imported.pages.length} page${imported.pages.length === 1 ? '' : 's'} into a new ${kind}. ${imported.clone.stylesheets} stylesheets and ${imported.clone.imagesLocalized} images were copied; use Convert to blocks when you want structural editing.`)}`)
+    } catch (error) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent(`!Could not clone that asset: ${error instanceof Error ? error.message : 'unknown error'}`)}`)
+    }
+  })
+
+  router.get('/admin/media', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'media', 'Media', pages.mediaPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/media/upload', async (ctx) => {
+    const current = session(ctx)
+    const files = await ctx.files()
+    if (!files.image) return redirect('/admin/media?flash=' + encodeURIComponent('!Choose an image first.'))
+    try {
+      const saved = saveUpload(files.image, current.store.id)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'upload_media', target: saved.url, diff: { type: saved.type, bytes: files.image.data.length } })
+      return redirect('/admin/media?flash=' + encodeURIComponent('Image added to this asset.'))
+    } catch (error) {
+      return redirect(`/admin/media?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Upload failed'}`)}`)
+    }
   })
 
   router.get('/admin/research', (ctx) => {
@@ -343,7 +392,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/pages', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'pages', 'Pages & funnels', pages.pagesPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'pages', current.store.kind === 'funnel' ? 'Funnel pages' : 'Store pages', pages.pagesPage(ctxFor(current, ctx)))
   })
 
   router.post('/admin/pages/new', async (ctx) => {

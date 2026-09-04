@@ -6,18 +6,20 @@ import { SUGGESTIONS } from '../agent/chat.ts'
 import type { Artifact } from '../agent/registry.ts'
 import type { AssistantRequest } from '../agent/queue.ts'
 
-export type IconName = 'home' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
+export type IconName = 'home' | 'assets' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'image' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
 export type NavItem = { key: string; href: string; label: string; icon: IconName; area?: string }
 
 export function uiIcon(name: IconName, size = 18): string {
   const paths: Record<IconName, string> = {
     home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5M9 21v-7h6v7"/>',
+    assets: '<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><path d="M17 13v8M13 17h8"/>',
     sparkles: '<path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/>',
     orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6M9 12h6"/>',
     products: '<path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
     customers: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
     store: '<path d="M3 9 5 3h14l2 6"/><path d="M5 13v8h14v-8M9 21v-6h6v6"/><path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/>',
     pages: '<path d="M6 2h9l5 5v15H6V2Z"/><path d="M14 2v6h6M9 13h8M9 17h6"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 2-2 5 5"/>',
     collections: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     funnel: '<path d="M3 4h18l-7 8v6l-4 2v-8L3 4Z"/>',
     bundle: '<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M7.5 8C5 8 4 6.8 4 5.3S5.2 3 6.6 3C9 3 12 8 12 8m4.5 0C19 8 20 6.8 20 5.3S18.8 3 17.4 3C15 3 12 8 12 8"/>',
@@ -41,20 +43,29 @@ export function uiIcon(name: IconName, size = 18): string {
 
 export const NAV: NavItem[] = [
   { key: 'dashboard', href: '/admin', label: 'Home', icon: 'home' },
+  { key: 'stores', href: '/admin/stores', label: 'All assets', icon: 'assets' },
   { key: 'ai', href: '/admin/ai', label: 'Assistant', icon: 'sparkles' },
   { key: 'orders', href: '/admin/orders', label: 'Orders', icon: 'orders', area: 'orders' },
   { key: 'products', href: '/admin/products', label: 'Products', icon: 'products', area: 'products' },
   { key: 'customers', href: '/admin/customers', label: 'Customers', icon: 'customers', area: 'customers' },
 ]
 
-const GROUPS: Array<{ label: string; icon: IconName; children: NavItem[] }> = [
-  { label: 'Sales channels', icon: 'store', children: [
-    { key: 'store', href: '/admin/store', label: 'Online store', icon: 'store', area: 'store' },
-    { key: 'pages', href: '/admin/pages', label: 'Pages', icon: 'pages', area: 'store' },
-    { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections', area: 'organization' },
-    { key: 'funnels', href: '/admin/funnels', label: 'Funnels', icon: 'funnel', area: 'store' },
-    { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle', area: 'promotions' },
-  ] },
+function groupsFor(kind: Store['kind']): Array<{ label: string; icon: IconName; children: NavItem[] }> {
+  const first = kind === 'funnel'
+    ? { label: 'Funnel', icon: 'funnel' as const, children: [
+        { key: 'funnels', href: '/admin/funnels', label: 'Funnel flow', icon: 'funnel' as const, area: 'store' },
+        { key: 'pages', href: '/admin/pages', label: 'Funnel pages', icon: 'pages' as const, area: 'store' },
+        { key: 'bundles', href: '/admin/bundles', label: 'Offers & bundles', icon: 'bundle' as const, area: 'promotions' },
+        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
+      ] }
+    : { label: 'Online store', icon: 'store' as const, children: [
+        { key: 'store', href: '/admin/store', label: 'Theme & navigation', icon: 'store' as const, area: 'store' },
+        { key: 'pages', href: '/admin/pages', label: 'Store pages', icon: 'pages' as const, area: 'store' },
+        { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections' as const, area: 'organization' },
+        { key: 'media', href: '/admin/media', label: 'Media', icon: 'image' as const, area: 'store' },
+        { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle' as const, area: 'promotions' },
+      ] }
+  return [first,
   { label: 'Marketing', icon: 'marketing', children: [
     { key: 'marketing', href: '/admin/marketing', label: 'Campaigns & flows', icon: 'marketing', area: 'emails' },
     { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
@@ -66,12 +77,13 @@ const GROUPS: Array<{ label: string; icon: IconName; children: NavItem[] }> = [
     { key: 'profit', href: '/admin/profit', label: 'Profit', icon: 'profit', area: 'analytics' },
   ] },
   { label: 'Create', icon: 'build', children: [
-    { key: 'build', href: '/admin/build', label: 'Build store', icon: 'build', area: 'store' },
+    { key: 'build', href: '/admin/build', label: kind === 'funnel' ? 'Build funnel' : 'Build store', icon: 'build', area: 'store' },
     { key: 'research', href: '/admin/research', label: 'Research & avatars', icon: 'research', area: 'products' },
     { key: 'market', href: '/admin/market', label: 'Market strategy', icon: 'analytics', area: 'products' },
     { key: 'creative', href: '/admin/creative', label: 'Creative', icon: 'creative', area: 'products' },
   ] },
-]
+  ]
+}
 
 export type ShellInput = {
   store: Store
@@ -111,14 +123,14 @@ export function shell(input: ShellInput): string {
   <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation">${uiIcon('menu')}</button>
   <div class="logo"><span class="logo-mark">${uiIcon('store', 17)}</span><strong>Amboras</strong></div>
   <form method="get" action="/admin/switch" class="switcher">
-    <select name="storeId" onchange="this.form.submit()" aria-label="Store">
-      ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)}</option>`).join('')}
+    <select name="storeId" onchange="this.form.submit()" aria-label="Asset">
+      ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)} · ${store.kind}</option>`).join('')}
     </select>
   </form>
-  <a class="chip" href="/admin/stores">Stores (${input.stores.length})</a>
-  <a class="chip" href="/onboarding">+ New store</a>
+  <a class="chip" href="/admin/stores">All assets (${input.stores.length})</a>
+  <a class="chip" href="/admin/stores#new">+ New asset</a>
   <div class="spacer"></div>
-  <a class="chip" href="${escapeHtml(input.storeUrl)}" target="_blank" rel="noopener">View store ↗</a>
+  <a class="chip" href="${escapeHtml(input.storeUrl)}" target="_blank" rel="noopener">View ${input.store.kind} ↗</a>
   <form method="post" action="/admin/publish">
     <button class="publish" type="submit" ${input.publish.ready ? '' : 'disabled'} title="${escapeHtml(input.publish.reason)}">${escapeHtml(input.publish.label)}</button>
   </form>
@@ -126,7 +138,7 @@ export function shell(input: ShellInput): string {
 <div class="frame">
   <nav class="rail" aria-label="Sections">
     <div class="nav-main">${NAV.map((item) => navLink(item, input.active)).join('')}</div>
-    ${GROUPS.map((group, index) => {
+    ${groupsFor(input.store.kind).map((group, index) => {
       const active = group.children.some((item) => item.key === input.active)
       return `<details class="nav-tree ${active ? 'active' : ''}" ${active || index < 2 ? 'open' : ''}><summary>${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron', 14)}</summary><div>${group.children.map((item) => navLink(item, input.active, true)).join('')}</div></details>`
     }).join('')}
@@ -366,9 +378,10 @@ body{font-size:13px}.icon{display:block;flex:0 0 auto}.serif,.head h1{font-famil
 .card,.metric-card{border-color:#e1e3e5;border-radius:12px;box-shadow:0 1px 3px #0000000a}.btn{border-color:#c9cccf;border-radius:7px;box-shadow:0 1px 0 #0000000d}.btn.primary{background:#008060;border-color:#008060}.btn.primary:hover{background:#006e52}.pulse-card{background:linear-gradient(145deg,#102f25,#174c3b)}
 .voice,.send{display:grid;place-items:center;border:0;border-radius:8px;width:34px;height:32px;cursor:pointer}.voice{background:#eef0f1;color:#4f5559}.voice.listening{color:#fff;background:#b3261e;animation:pulse 1s infinite}.voice:disabled{opacity:.35;cursor:not-allowed}.send{margin-left:0;background:#202223;color:#fff}.send:disabled{opacity:.5}
 .assistant-queue{border-top:1px solid var(--line);padding:.65rem .8rem;max-height:150px;overflow:auto}.queue-item{display:flex;align-items:center;gap:.45rem;justify-content:space-between;padding:.4rem 0;border-top:1px solid #eef0f1}.queue-item:first-of-type{margin-top:.35rem}.queue-item span{min-width:0}.queue-item b{font-size:10px;text-transform:uppercase;color:var(--ok)}.queue-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);max-width:230px}.queue-item button{border:0;background:none;color:var(--muted);cursor:pointer}.queue-spin{width:12px;height:12px;border:2px solid #d9ddda;border-top-color:var(--ok);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.asset-tabs{display:flex;gap:.35rem;margin-bottom:.9rem}.asset-tabs button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:.42rem .75rem;font:500 12px/1 'Inter';cursor:pointer}.asset-tabs button.on{background:#202223;color:#fff;border-color:#202223}.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:1rem}.asset-card{display:flex;flex-direction:column;min-width:0;background:#fff;border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:0 1px 3px #0000000a}.asset-card[hidden]{display:none}.asset-cover{height:150px;position:relative;display:grid;place-items:center;overflow:hidden;background:linear-gradient(145deg,#e5ece7,#f5f6f5);color:#48715b}.asset-cover img{width:100%;height:100%;object-fit:cover;transition:transform .2s}.asset-cover:hover img{transform:scale(1.015)}.asset-cover>span{width:58px;height:58px;display:grid;place-items:center;border-radius:16px;background:#fff9;box-shadow:0 8px 24px #38523e15}.asset-cover em{position:absolute;left:.65rem;bottom:.6rem;background:#202223dd;color:#fff;border-radius:999px;padding:.23rem .55rem;font:600 9px/1 'Inter';text-transform:uppercase;letter-spacing:.12em}.asset-body{display:flex;flex-direction:column;gap:.7rem;padding:.9rem}.asset-body h2{font-size:14px;font-weight:600}.asset-body p{color:var(--muted);font-size:11px;line-height:1.35;margin:.15rem 0 0;min-height:2.7em}.asset-facts{display:flex;gap:.8rem;color:var(--muted);font-size:11px}.asset-metrics{display:grid;grid-template-columns:1fr 1fr;border:1px solid #e6e8e6;border-radius:9px;overflow:hidden}.asset-metrics>div{padding:.55rem .65rem}.asset-metrics>div+div{border-left:1px solid #e6e8e6}.asset-metrics small,.asset-metrics em{display:block;color:var(--muted);font:10px/1.3 'Inter';font-style:normal}.asset-metrics strong{display:block;font-size:14px;margin:.12rem 0;font-variant-numeric:tabular-nums}.asset-create{grid-template-columns:1.3fr 1fr}.media-upload{display:grid;grid-template-columns:1fr minmax(220px,320px) auto;align-items:center;gap:1rem}.media-upload p{font-size:11.5px;margin:.15rem 0 0}.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:.8rem}.media-card{margin:0;background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;min-width:0}.media-card>a{display:block;height:180px;background:linear-gradient(45deg,#f1f2f1 25%,#fafafa 25%,#fafafa 50%,#f1f2f1 50%,#f1f2f1 75%,#fafafa 75%);background-size:20px 20px}.media-card img{width:100%;height:100%;object-fit:contain;display:block}.media-card figcaption{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.65rem}.media-card figcaption>div{min-width:0}.media-card strong,.media-card span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.media-card strong{font-size:11.5px}.media-card span{font-size:10px;color:var(--muted);margin-top:.1rem}.media-card .btn{padding:.4rem .5rem;flex:0 0 auto}.funnel-path{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;align-items:center;gap:.45rem;background:#fff;border:1px solid var(--line);border-radius:12px;padding:.8rem;margin-bottom:1rem}.funnel-path>div{border:1px solid #e4e7e4;border-radius:9px;padding:.65rem;min-width:0}.funnel-path span{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#e3f1eb;color:#007a5c;font-size:10px;font-weight:700;margin-bottom:.4rem}.funnel-path b,.funnel-path small{display:block}.funnel-path b{font-size:11.5px}.funnel-path small{font-size:9.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.funnel-path>i{font-style:normal;color:#8c9196}
 .create-panel>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none}.create-panel>summary::-webkit-details-marker{display:none}.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;margin-bottom:1rem}.flow-card{margin:0}.flow-card>summary{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:.7rem;cursor:pointer;list-style:none}.flow-card>summary::-webkit-details-marker{display:none}.flow-card summary small{display:block;color:var(--muted);font-size:11px}.flow-icon{width:32px;height:32px;border-radius:9px;background:#e3f1eb;color:#007a5c;display:grid;place-items:center;font-size:10px;font-weight:700}.section-title{display:flex;justify-content:space-between;align-items:flex-end;margin:.2rem 0 .7rem}.section-title h2{font-size:1rem}.section-title p{font-size:11.5px;margin:.15rem 0 0}.check{display:flex;align-items:center;gap:.35rem;font-size:12px;color:var(--muted)}
 @media (min-width:1560px){.frame{grid-template-columns:var(--rail) minmax(0,1fr) var(--panel)}.panel{display:flex}.page{padding-left:2.2rem;padding-right:2.2rem}}
 @media (min-width:901px) and (max-width:1559px){:root{--rail:240px}.frame{grid-template-columns:var(--rail) minmax(0,1fr)}}
-@media (max-width:900px){:root{--rail:240px}.nav-toggle{display:grid;place-items:center}.frame{display:block}.rail{position:fixed;z-index:60;left:-260px;top:56px;width:240px;transition:left .2s;box-shadow:10px 0 28px #0002}.nav-open .rail{left:0}.rail a{justify-content:flex-start}.rail a b{display:block}.page{padding:1rem}.flow-grid{grid-template-columns:1fr}.top .logo{min-width:0}.top .chip{display:none}}
+@media (max-width:900px){:root{--rail:240px}.nav-toggle{display:grid;place-items:center}.frame{display:block}.rail{position:fixed;z-index:60;left:-260px;top:56px;width:240px;transition:left .2s;box-shadow:10px 0 28px #0002}.nav-open .rail{left:0}.rail a{justify-content:flex-start}.rail a b{display:block}.page{padding:1rem}.flow-grid{grid-template-columns:1fr}.top .logo{min-width:0}.top .chip{display:none}.asset-create{grid-template-columns:1fr}.media-upload{grid-template-columns:1fr}.funnel-path{display:flex;overflow-x:auto;align-items:stretch}.funnel-path>div{min-width:145px}}
 `
 }

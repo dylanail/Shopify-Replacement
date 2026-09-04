@@ -1,5 +1,5 @@
 import { escapeHtml } from '../lib/http.ts'
-import { MODES } from '../control/build.ts'
+import { MODES, SHAPES } from '../control/build.ts'
 
 const EXAMPLES = [
   'A hand-stitched boxing gear store called Ironjaw & Co, 1920s heritage leather atelier in Mexico City',
@@ -62,13 +62,15 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
 }
 
 export function onboardingPage(name: string, error: string | null, hasStores = false): string {
-  return frame('Build your store', `
-    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin">← Back to your stores</a></p>' : ''}
+  return frame('Build an asset', `
+    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">← Back to all assets</a></p>' : ''}
     <h1>What are you selling?</h1>
-    <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Research runs first; then naming, brand, three products with pages and imagery, and the promotions all run at once.</p>
+    <p class="lead">Choose a full store or a focused funnel, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Then one sentence builds the brand, products, pages and imagery.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
     <form method="post" action="/onboarding" enctype="multipart/form-data">
-      <div class="field"><label for="prompt">Your store, in a sentence</label>
+      <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">What are you building?</legend>
+        ${SHAPES.map((shape, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="shape" value="${shape.id}" ${index === 0 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(shape.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(shape.description)}</span></span></label>`).join('')}</fieldset>
+      <div class="field"><label for="prompt">The product and angle, in a sentence</label>
         <textarea id="prompt" name="prompt" required placeholder="${escapeHtml(EXAMPLES[0] ?? '')}"></textarea></div>
       <div class="chips">${EXAMPLES.map((example) => `<button type="button" onclick="document.getElementById('prompt').value=${escapeHtml(JSON.stringify(example))}">${escapeHtml(example.slice(0, 46))}…</button>`).join('')}</div>
       <div class="field"><label for="photo">A product photo (optional)</label>
@@ -79,13 +81,13 @@ export function onboardingPage(name: string, error: string | null, hasStores = f
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
       <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">How will you build it?</legend>
         ${MODES.map((mode, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${index === 2 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
-      <button type="submit">Build my store</button>
+      <button type="submit">Build my asset</button>
     </form>
     <div class="steps">
       <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
       <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
       <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
       <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
-      <div><i></i><span>Builds the storefront and hands you the address</span></div>
+      <div><i></i><span>Builds the chosen store or funnel and hands you the address</span></div>
     </div>`)
 }
