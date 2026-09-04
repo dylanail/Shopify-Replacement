@@ -25,6 +25,7 @@ import { blockDefinition } from '../pages/blocks.ts'
 import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
 import { createRegion, deleteRegion, deleteShippingOption, listRegions, setShippingOption, updateRegion, updateShippingOption } from '../domain/regions.ts'
 import { qualifyCatalogProduct, TRENDS, writeQualifyNotes } from '../domain/qualify.ts'
+import { createArticle, createBlog, deleteArticle, deleteBlog, listBlogs, updateArticle } from '../domain/content.ts'
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
@@ -1619,6 +1620,60 @@ export function adminRouter(): Router {
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not remove the rate'}`)
     }
+  })
+
+  /* The blog. The storefront has served it from the beginning and the
+     assistant could write into it; the merchant could not read it back, fix a
+     line, unpublish it or take it down. */
+  router.post('/admin/blogs', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const title = String(body.title ?? '').trim()
+    if (!title) return back(ctx, '!Give the blog a name.')
+    const blog = createBlog(db(), current.store.id, title)
+    return back(ctx, `"${blog.title}" is at /blogs/${blog.handle}. It shows once it has a published article.`)
+  })
+
+  router.post('/admin/blogs/:id/articles', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const blog = listBlogs(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!blog) return back(ctx, '!No such blog')
+    const title = String(body.title ?? '').trim()
+    if (!title) return back(ctx, '!Give the article a title.')
+    const article = createArticle(db(), current.store.id, blog.id, {
+      title,
+      body: String(body.body ?? ''),
+      excerpt: String(body.excerpt ?? ''),
+      status: body.status === 'published' ? 'published' : 'draft',
+    })
+    return back(ctx, `"${article.title}" saved as a ${article.status}.`)
+  })
+
+  router.post('/admin/articles/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const article = updateArticle(db(), current.store.id, ctx.params.id as string, {
+        title: String(body.title ?? '').trim() || undefined,
+        body: String(body.body ?? ''),
+        excerpt: String(body.excerpt ?? ''),
+        status: body.status === 'published' ? 'published' : 'draft',
+      })
+      return back(ctx, `"${article.title}" saved as a ${article.status}.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save the article'}`)
+    }
+  })
+
+  router.post('/admin/articles/:id/delete', (ctx) => {
+    const current = session(ctx)
+    return back(ctx, deleteArticle(db(), current.store.id, ctx.params.id as string) ? 'Article deleted.' : '!No such article')
+  })
+
+  router.post('/admin/blogs/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    return back(ctx, deleteBlog(db(), current.store.id, ctx.params.id as string) ? 'Blog deleted, with everything in it.' : '!No such blog')
   })
 
   router.post('/admin/team', async (ctx) => {

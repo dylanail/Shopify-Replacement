@@ -76,6 +76,54 @@ export function createArticle(
   return rowToArticle(db.one('SELECT * FROM articles WHERE id = ?', articleId) as Row)
 }
 
+export function getArticle(db: Db, storeId: string, articleId: string): Article | null {
+  const row = db.one('SELECT * FROM articles WHERE id = ? AND store_id = ?', articleId, storeId)
+  return row ? rowToArticle(row) : null
+}
+
+/**
+ * Articles were write-only: the assistant could publish one and the storefront
+ * served it, and the merchant had no way to change a word of it, unpublish it
+ * or take it down.
+ */
+export function updateArticle(
+  db: Db,
+  storeId: string,
+  articleId: string,
+  patch: Partial<Pick<Article, 'title' | 'body' | 'excerpt' | 'image' | 'tags' | 'status'>>,
+): Article {
+  const article = getArticle(db, storeId, articleId)
+  if (!article) throw new Error('No such article')
+  const values: Row = {}
+  if (patch.title !== undefined) { values.title = patch.title; values.handle = toHandle(patch.title) }
+  if (patch.body !== undefined) values.body = patch.body
+  if (patch.excerpt !== undefined) values.excerpt = patch.excerpt
+  if (patch.image !== undefined) values.image = patch.image
+  if (patch.tags !== undefined) values.tags = patch.tags
+  if (patch.status !== undefined) {
+    values.status = patch.status
+    // The date is when it went out, and it is set once: republishing an
+    // article should not tell readers it was written today.
+    if (patch.status === 'published' && !article.publishedAt) values.published_at = now()
+  }
+  if (Object.keys(values).length) db.update('articles', articleId, values)
+  return getArticle(db, storeId, articleId) as Article
+}
+
+export function deleteArticle(db: Db, storeId: string, articleId: string): boolean {
+  return Number(db.run('DELETE FROM articles WHERE id = ? AND store_id = ?', articleId, storeId).changes) > 0
+}
+
+/** Removes a blog and everything in it. */
+export function deleteBlog(db: Db, storeId: string, blogId: string): boolean {
+  return Number(
+    db.tx(() => {
+      db.run('DELETE FROM articles WHERE blog_id = ? AND store_id = ?', blogId, storeId)
+      return db.run('DELETE FROM blogs WHERE id = ? AND store_id = ?', blogId, storeId).changes
+    }),
+  ) > 0
+}
+
 export function findArticle(db: Db, storeId: string, blogHandle: string, articleHandle: string): { blog: Blog; article: Article } | null {
   const blog = listBlogs(db, storeId).find((entry) => entry.handle === blogHandle)
   const article = blog?.articles.find((entry) => entry.handle === articleHandle && entry.status === 'published')

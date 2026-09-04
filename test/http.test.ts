@@ -338,6 +338,37 @@ test('a block the store defined can be read back, edited, and outlives its own r
   await call(`/admin/pages/${pageId}/delete`, { form: {} })
 })
 
+test('the blog is editable in the admin, not only writable by the assistant', async () => {
+  // The storefront has served /blogs since the beginning and the assistant
+  // could publish into it. The merchant could not read it back, fix a line,
+  // unpublish it or take it down.
+  const started = await call('/admin/blogs', { form: { title: 'Journal' } })
+  assert.match(flashOf(started.location), /\/blogs\/journal/)
+  const hub = await call('/admin/pages')
+  const blogId = /\/admin\/blogs\/(blog_[a-z0-9]+)\/articles/.exec(hub.text)?.[1] ?? ''
+  assert.ok(blogId, 'the blog has a form to write into')
+
+  const written = await call(`/admin/blogs/${blogId}/articles`, { form: { title: 'How we choose leather', excerpt: 'Two tanneries.', body: 'It starts at the tannery.', status: 'published' } })
+  assert.match(flashOf(written.location), /saved as a published/)
+  const live = await call(`/s/${slug}/blogs/journal/how-we-choose-leather`)
+  assert.equal(live.status, 200)
+  assert.match(live.text, /It starts at the tannery/)
+
+  const withArticle = await call('/admin/pages')
+  const articleId = /\/admin\/articles\/(art_[a-z0-9]+)"/.exec(withArticle.text)?.[1] ?? ''
+  assert.ok(articleId, 'and the article that exists can be opened')
+  assert.match(withArticle.text, /It starts at the tannery/, 'with what it actually says in the form')
+
+  const unpublished = await call(`/admin/articles/${articleId}`, { form: { title: 'How we choose leather', excerpt: 'Two tanneries.', body: 'It starts at the tannery, in León.', status: 'draft' } })
+  assert.match(flashOf(unpublished.location), /saved as a draft/)
+  assert.equal((await call(`/s/${slug}/blogs/journal/how-we-choose-leather`)).status, 404, 'a draft is off the storefront')
+
+  await call(`/admin/articles/${articleId}/delete`, { form: {} })
+  assert.doesNotMatch((await call('/admin/pages')).text, /It starts at the tannery/)
+  await call(`/admin/blogs/${blogId}/delete`, { form: {} })
+  assert.doesNotMatch((await call('/admin/pages')).text, /\/blogs\/journal/)
+})
+
 test('publishing a store with nothing new to publish is refused, not a version bump for nothing', async () => {
   // The version bump itself is asserted where it belongs: the first test
   // publishes this store and watches its public address open.

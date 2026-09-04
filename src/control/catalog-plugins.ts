@@ -450,13 +450,28 @@ const DIRECTORY_CATEGORIES: Array<[string, number, string[]]> = [
 const NOUNS = ['Flow', 'Desk', 'Hub', 'Loop', 'Bridge', 'Sync', 'Pilot', 'Ledger', 'Signal', 'Atlas', 'Beacon', 'Forge', 'Relay', 'Vault', 'Compass', 'Anchor', 'Prism']
 const PREFIXES = ['Ship', 'Order', 'Stock', 'Track', 'Bright', 'Clear', 'North', 'Swift', 'Iron', 'Open', 'True', 'Bold', 'Quick', 'Sun', 'Blue', 'Ever', 'Fair']
 
-/** Directory-only listings. Discoverable, honestly marked, never installable. */
+/**
+ * Directory-only listings. Discoverable, honestly marked, never installable.
+ *
+ * The two word lists have seventeen entries each and the names were drawn at
+ * (7i, 5i) mod 17, which repeats after seventeen — so Shipping & Fulfillment,
+ * with thirty-three entries, listed sixteen names twice. Two rows with the
+ * same name in a category also produce the same id, and the second of each
+ * pair was unreachable: opening it showed the first. Walking the prefixes
+ * across and the nouns down gives 289 distinct pairs per category, and a
+ * seen-set catches anything a longer list would collide on anyway.
+ */
 export function directoryEntries(): Plugin[] {
   const out: Plugin[] = []
+  const seen = new Set<string>()
   for (const [category, count, regions] of DIRECTORY_CATEGORIES) {
+    const shift = category.length
     for (let index = 0; index < count; index++) {
-      const name = `${PREFIXES[(index * 7 + category.length) % PREFIXES.length]}${NOUNS[(index * 5 + category.length) % NOUNS.length]}`
-      const slug = `${name.toLowerCase()}-${category.toLowerCase().replace(/[^a-z]+/g, '')}`.slice(0, 40)
+      const name = `${PREFIXES[(index + shift) % PREFIXES.length]}${NOUNS[(Math.floor(index / PREFIXES.length) + shift) % NOUNS.length]}`
+      const base = `${name.toLowerCase()}-${category.toLowerCase().replace(/[^a-z]+/g, '')}`.slice(0, 40)
+      let slug = base
+      for (let attempt = 2; seen.has(slug); attempt++) slug = `${base}-${attempt}`.slice(0, 44)
+      seen.add(slug)
       out.push({
         id: slug,
         name,

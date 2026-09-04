@@ -8,13 +8,16 @@ import { createStore, DEFAULT_THEME, environment, getStore, publish, publishStat
 import { themeCss } from '../src/storefront/theme.ts'
 import { requireRole, register, inviteTeammate, acceptInvite, roleOn } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
-import { directoryEntries } from '../src/control/catalog-plugins.ts'
+import { allPlugins, directoryEntries, findPlugin } from '../src/control/catalog-plugins.ts'
 import { createProduct } from '../src/domain/catalog.ts'
 import { createReview, flagsFor, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { funnel, kpis, sessionFor, track } from '../src/analytics/events.ts'
 import { render } from '../src/email/templates.ts'
 import { productJsonLd, validateProductSchema } from '../src/seo/schema.ts'
+
+/** The prefix list the directory names are drawn from; the generator used to repeat once a category ran past it. */
+const PREFIX_COUNT = 17
 
 /* ------------------------------------------------------------------ platform */
 
@@ -146,11 +149,22 @@ test('plugin settings are validated, secrets are sealed away from settings', () 
   assert.deepEqual(readCredentials(db, store.id, 'stripe'), {}, 'uninstall takes the credentials with it')
 })
 
-test('a directory listing refuses to pretend it installs', () => {
+test('a directory listing refuses to pretend it installs, and every listing can be opened', () => {
   const { db, user } = fresh()
   const store = createStore(db, user.id, { name: 'Directory' })
   const listing = directoryEntries()[0]!.id
   assert.throws(() => install(db, store.id, listing, {}), /directory listing/)
+
+  // The name generator repeated after seventeen, so the biggest category
+  // listed sixteen names twice — and the second of each pair was unreachable,
+  // because opening it found the first by the same id.
+  const all = allPlugins()
+  const ids = all.map((plugin) => plugin.id)
+  assert.equal(new Set(ids).size, ids.length, 'no two plugins share an id')
+  for (const plugin of all) assert.equal(findPlugin(plugin.id)?.name, plugin.name, `${plugin.id} opens to itself`)
+  const shipping = directoryEntries().filter((plugin) => plugin.category === 'Shipping & Fulfillment')
+  assert.ok(shipping.length > PREFIX_COUNT, 'the category that overflowed the word list is still the test case')
+  assert.equal(new Set(shipping.map((plugin) => plugin.name)).size, shipping.length, 'and no two of its listings share a name')
 })
 
 test('a catalog plugin that used to be plan-gated installs like any other', () => {

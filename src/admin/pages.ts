@@ -8,6 +8,7 @@ import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions, type Region } from '../domain/regions.ts'
 import { qualifyCatalogProduct, readQualifyNotes } from '../domain/qualify.ts'
+import { listBlogs } from '../domain/content.ts'
 import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
@@ -822,6 +823,7 @@ export function pagesPage(ctx: Ctx): string {
   </div>
   <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
   ${customBlocksCard(ctx)}
+  ${blogCard(ctx)}
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
   ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}${page.role === 'checkout' ? ` <span class="tag ${page.status === 'published' ? 'ok' : 'warn'}" title="The most recently updated published checkout page is the store's /checkout">checkout</span>` : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
@@ -832,6 +834,38 @@ export function pagesPage(ctx: Ctx): string {
       <form method="post" action="/admin/pages/${escapeHtml(page.id)}/delete" onsubmit="return confirm('Delete this page?')"><button class="btn">Delete</button></form></div></td></tr>`).join('')
     : '<tr><td colspan="6" class="muted" style="padding:1.4rem">No pages yet. Start from the advertorial template, clone a page, or paste HTML.</td></tr>'}
   </tbody></table></div>`
+}
+
+/**
+ * The blog, in the admin.
+ *
+ * The storefront has served /blogs/:blog and /blogs/:blog/:article since the
+ * beginning and the assistant could write into them — and the merchant could
+ * not see what was there, fix a line of it, unpublish it or take it down. A
+ * page a store publishes under its own name with no way to edit it is worse
+ * than no blog at all.
+ */
+function blogCard(ctx: Ctx): string {
+  const blogs = listBlogs(ctx.db, ctx.store.id)
+  const statuses = ['published', 'draft'] as const
+  const article = (blogId: string, entry: (typeof blogs)[number]['articles'][number] | null) => `<form method="post" action="${entry ? `/admin/articles/${escapeHtml(entry.id)}` : `/admin/blogs/${escapeHtml(blogId)}/articles`}" style="padding:.4rem 0">
+    <div class="row"><div class="field" style="flex:2"><label>Title</label><input name="title" value="${escapeHtml(entry?.title ?? '')}" required placeholder="How we choose leather"></div>
+      <div class="field" style="width:8rem"><label>Status</label><select name="status">${statuses.map((status) => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${status}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Excerpt — the line the blog index shows</label><input name="excerpt" value="${escapeHtml(entry?.excerpt ?? '')}"></div>
+    <div class="field"><label>Body — one paragraph per blank line</label><textarea name="body" rows="${entry ? 6 : 4}">${escapeHtml(entry?.body ?? '')}</textarea></div>
+    <div class="row"><button class="btn primary" type="submit">${entry ? 'Save' : 'Write it'}</button>
+      ${entry ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/blogs/${escapeHtml(blogs.find((blog) => blog.id === blogId)?.handle ?? '')}/${escapeHtml(entry.handle)}" target="_blank" rel="noopener">View ↗</a>
+        <button class="btn" type="submit" formaction="/admin/articles/${escapeHtml(entry.id)}/delete" formnovalidate onclick="return confirm('Delete this article?')">Delete</button>` : ''}</div></form>`
+  return `<div class="card" id="blog" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Blog</h2>
+      <span class="muted" style="font-size:12px">${blogs.length ? `${blogs.reduce((sum, blog) => sum + blog.articles.length, 0)} articles across ${blogs.length} blog${blogs.length === 1 ? '' : 's'}` : 'None yet'} · served at /blogs on the storefront</span></div>
+    ${blogs.map((blog) => `<details style="border-top:1px solid var(--line);padding:.4rem 0"><summary style="cursor:pointer"><strong>${escapeHtml(blog.title)}</strong> <span class="muted">/blogs/${escapeHtml(blog.handle)} · ${blog.articles.filter((entry) => entry.status === 'published').length} published, ${blog.articles.filter((entry) => entry.status !== 'published').length} draft</span></summary>
+      ${blog.articles.map((entry) => `<details style="border-top:1px solid var(--line)"><summary style="cursor:pointer;padding:.4rem 0;font-size:13px"><span class="tag ${entry.status === 'published' ? 'ok' : 'warn'}">${escapeHtml(entry.status)}</span> ${escapeHtml(entry.title)} <span class="muted">· ${escapeHtml(entry.publishedAt?.slice(0, 10) ?? 'unpublished')}</span></summary>${article(blog.id, entry)}</details>`).join('')
+        || '<p class="muted" style="font-size:12px;margin:.4rem 0">Nothing in it yet.</p>'}
+      <details style="border-top:1px solid var(--line)"><summary class="muted" style="cursor:pointer;padding:.4rem 0;font-size:12.5px">Write an article</summary>${article(blog.id, null)}</details>
+      <form method="post" action="/admin/blogs/${escapeHtml(blog.id)}/delete" onsubmit="return confirm('Delete this blog and every article in it?')" style="margin-top:.3rem"><button class="btn" type="submit" style="font-size:11px">Delete the blog</button></form></details>`).join('')}
+    <form method="post" action="/admin/blogs" class="row" style="gap:.4rem;align-items:flex-end;margin-top:.5rem">
+      <div class="field" style="flex:1;margin:0"><label>Start a blog</label><input name="title" required placeholder="Journal"></div>
+      <button class="btn" type="submit">Create</button></form></div>`
 }
 
 /**
