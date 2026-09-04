@@ -12,6 +12,7 @@ import { suggestAvatars } from '../src/agent/avatars.ts'
 import { readCompetitor } from '../src/agent/angles.ts'
 import { listProducts } from '../src/domain/catalog.ts'
 import { listPromotions } from '../src/domain/promotions.ts'
+import { saveAnswers } from '../src/control/build.ts'
 
 /**
  * The model path, exercised end to end against a fake network: the request
@@ -283,5 +284,28 @@ test('avatars and competitor pages are written by the model when one is configur
     assert.equal(angle.offer.guarantee, '90-day money back')
     assert.equal(angle.offer.comparePrice, '$149')
     assert.match(angle.notes.join(' '), /Read by Claude Opus 5/)
+  })
+})
+
+test('the eight buyer answers reach the research step they are collected for', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Answers', prompt: 'a sleep supplement' })
+  saveAnswers(db, store.id, {
+    who: { value: 'Shift nurses in their thirties' },
+    tried: { value: 'Melatonin, and it left them groggy' },
+    instinct: { unknown: true },
+  })
+
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    const network = fakeNetwork(() =>
+      anthropicText(
+        JSON.stringify({ category: 'supplements', positioning: 'x', audience: [], triggers: [], objections: [], competitors: [], keywords: [], proofPoints: [], comparison: { rows: [] }, priceAnchor: { lowCents: 1000, midCents: 2000, highCents: 3000, note: '' }, sourceNotes: [] }),
+      ),
+    )
+    await runResearch(db, store.id, { prompt: 'a sleep supplement' })
+    const sent = JSON.stringify(network.calls)
+    assert.match(sent, /Shift nurses in their thirties/, 'what the owner told the build about their buyer is in the research prompt')
+    assert.match(sent, /left them groggy/)
+    assert.match(sent, /does not know/, 'and so is what they said they do not know, which is what research is for')
   })
 })

@@ -30,7 +30,7 @@ import { applyAuthoring } from '../src/agent/directions.ts'
 import { editorPage } from '../src/admin/editor.ts'
 import { getPage, renderPageBody } from '../src/pages/store.ts'
 import { layout } from '../src/storefront/render.ts'
-import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate } from '../src/pages/store.ts'
+import { advertorialTemplate, createPage, homeTemplate, offerTemplate, quizTemplate, salesTemplate, updatePage } from '../src/pages/store.ts'
 import { funnelStats, pickFunnel, upsertFunnel, funnelEntry } from '../src/domain/funnels.ts'
 import { behaviour, revenuePerSession, sessionFor, track } from '../src/analytics/events.ts'
 import { blockContextFor } from '../src/pages/store.ts'
@@ -114,10 +114,15 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   let progress = buildProgress(db, store.id)
   assert.equal(progress.mode?.id, 'own-product')
   assert.equal(progress.steps[0]?.key, 'shape')
-  assert.equal(progress.steps[0]?.status, 'done', 'a product of one\'s own defaults to a store until the owner says otherwise')
+  assert.equal(buildState(db, store.id).shape, 'store', 'a product of one\'s own defaults to a store so the plan has something to list')
+  assert.equal(progress.steps[0]?.status, 'next', 'but the default is not the owner having decided: step one stays open until they confirm it')
+  assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
+
+  setSiteShape(db, store.id, { shape: 'store', doors: [], popup: 'no' })
+  progress = buildProgress(db, store.id)
+  assert.equal(progress.steps[0]?.status, 'done', 'confirming the shape and the front door is what completes it')
   assert.equal(progress.steps[1]?.key, 'images')
   assert.equal(progress.steps[1]?.status, 'next', 'no product has an image yet')
-  assert.equal(progress.steps.filter((step) => step.status === 'next').length, 1, 'exactly one step is next')
 
   // An image on the product completes the step without anyone ticking anything.
   const { updateProduct } = require_catalog()
@@ -168,6 +173,9 @@ test('the shape decides the page plan, and every page on it reads its status fro
   const sales = createPage(db, store.id, { title: 'Save today', kind: 'landing', blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }) })
   const funnel = upsertFunnel(db, store.id, { name: 'Main', productId: product.id, offerPageId: sales.id, upsell: { variantId: product.variants[0]?.id, discountPercent: 20 } })
   plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'draft', 'written but not published is not done: the storefront serves a 404')
+  updatePage(db, store.id, sales.id, { status: 'published' })
+  plan = pagePlan(db, store.id)
   assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.status, 'done')
   assert.equal(plan.pages.find((entry) => entry.key === 'sales')?.href, `/pages/${sales.id}/edit`, 'an existing page links to its editor')
   assert.equal(plan.pages.find((entry) => entry.key === 'checkout')?.status, 'done')
@@ -182,9 +190,13 @@ test('the shape decides the page plan, and every page on it reads its status fro
   assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'missing')
   assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.status, 'missing', 'chosen but not on')
   assert.equal(plan.pages.find((entry) => entry.key === 'popup')?.optional, false)
-  createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
-  createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
+  const quizPage = createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }) })
+  const advertorialPage = createPage(db, store.id, { title: '7 reasons', kind: 'advertorial', blocks: advertorialTemplate({ storeName: store.name }) })
   setTheme(db, store.id, { popup: { enabled: true, trigger: 'exit', after: 0, headline: 'Wait', text: '', code: 'TEN', buttonLabel: 'Send', dismissDays: 7 } })
+  plan = pagePlan(db, store.id)
+  assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'draft', 'a page with a quiz block is the quiz, but a draft one is not a front door yet')
+  updatePage(db, store.id, quizPage.id, { status: 'published' })
+  updatePage(db, store.id, advertorialPage.id, { status: 'published' })
   plan = pagePlan(db, store.id)
   assert.equal(plan.pages.find((entry) => entry.key === 'quiz')?.status, 'done', 'a page with a quiz block is the quiz')
   assert.equal(plan.pages.find((entry) => entry.key === 'advertorial')?.status, 'done')
@@ -199,7 +211,7 @@ test('the shape decides the page plan, and every page on it reads its status fro
   assert.equal(plan.pages.find((entry) => entry.key === 'pdp')?.status, 'missing', 'the product has no image yet')
   const progress = buildProgress(db, store.id)
   assert.equal(progress.steps.find((step) => step.key === 'shape')?.status, 'done')
-  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Missing: Product page, Bundle tiers/)
+  assert.match(progress.steps.find((step) => step.key === 'pages')?.why ?? '', /Product page \(missing\)/)
   assert.throws(() => setSiteShape(db, store.id, { shape: 'catalogue' }), /No such shape/)
 })
 
@@ -518,7 +530,9 @@ test('the blocks, templates, popup kinds and hygiene checks learned from the ref
   assert.ok(home.some((block) => block.type === 'featured-products') && home.some((block) => block.type === 'email-signup'))
   // A page from the sales template is found by the page plan as the sales page.
   setBuildMode(db, store.id, 'copy-funnel')
-  createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  const salesPage = createPage(db, store.id, { title: 'Sales', kind: 'landing', blocks: sales })
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'draft')
+  updatePage(db, store.id, salesPage.id, { status: 'published' })
   assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done')
 
   // The popup offers one thing: an email, the deal, or the quiz; it says how long the code is good for.
@@ -783,4 +797,32 @@ test('a split test is decided on this product, after the session saw the version
   assert.equal(after?.purchases, 1)
   assert.equal(after?.revenueCents, 4_000, 'and only the order that came after it')
   assert.equal(after?.revenuePerSessionCents, 4_000, 'and the version carries the number the course decides a test on')
+})
+
+test('the quiz does not also satisfy the sales page, and a copied funnel page does', () => {
+  const { db, store, product } = shop()
+  setBuildMode(db, store.id, 'copy-funnel')
+  setSiteShape(db, store.id, { shape: 'funnel', doors: ['quiz'] })
+
+  // The quiz template is a landing page with a buy box on it, so it used to
+  // tick the sales row too — and the sales page could then never be created.
+  const quiz = createPage(db, store.id, { title: 'Find yours', kind: 'landing', blocks: quizTemplate({ storeName: store.name }), status: 'published' })
+  const withQuiz = pagePlan(db, store.id)
+  assert.equal(withQuiz.pages.find((entry) => entry.key === 'quiz')?.status, 'done')
+  assert.equal(withQuiz.pages.find((entry) => entry.key === 'sales')?.status, 'missing', 'the quiz is the front door, not the sales page')
+  assert.ok(quiz.id)
+
+  // A page ripped from a competitor's funnel is written with role 'pdp' and
+  // was invisible here, so "Copy a funnel" demanded the page its own first
+  // two steps had just produced.
+  const ripped = createPage(db, store.id, {
+    title: 'Copied structure',
+    kind: 'landing',
+    role: 'pdp',
+    sourceUrl: 'https://example.com/offer',
+    status: 'published',
+    blocks: offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' } }),
+  })
+  assert.ok(ripped.id)
+  assert.equal(pagePlan(db, store.id).pages.find((entry) => entry.key === 'sales')?.status, 'done', 'the page the rip produced is the sales page')
 })

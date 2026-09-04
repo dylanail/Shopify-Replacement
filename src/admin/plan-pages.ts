@@ -75,6 +75,8 @@ export function pagePlanCard(ctx: Ctx): string {
   if (!plan.shape) return `<div class="card" id="pages"><h2>Page plan</h2><p class="muted" style="font-size:12.5px">Choose the shape and the pages it needs are listed here, each with a status and a template.</p></div>`
   const product = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 1 })[0]
   const make = (entry: (typeof plan.pages)[number]) => {
+    // A draft is written; what it needs is publishing, not another copy.
+    if (entry.status === 'draft') return `<a class="btn primary" href="/admin${e(entry.href)}" style="font-size:11px">Publish it</a>`
     if (entry.status === 'done') return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.builtIn && !entry.template ? 'Open' : 'Edit'}</a>`
     if (entry.template && !entry.builtIn) return `<form method="post" action="/admin/pages/new"><input type="hidden" name="template" value="${entry.template}"><input type="hidden" name="productId" value="${e(product?.id ?? '')}"><button class="btn primary" type="submit" style="font-size:11px">Create from template</button></form>`
     return `<a class="btn" href="/admin${e(entry.href)}" style="font-size:11px">${entry.status === 'missing' ? 'Set it up' : 'Open'}</a>`
@@ -82,7 +84,7 @@ export function pagePlanCard(ctx: Ctx): string {
   return `<div class="card" id="pages" style="padding:0"><div style="padding:1rem 1.1rem"><h2 style="margin:0">Page plan</h2><p class="muted" style="font-size:12px;margin:.3rem 0 0">${plan.shape === 'store' ? 'A Shopify-style store' : 'A funnel'}${plan.doors.length ? ` with ${plan.doors.map((door) => DOORS.find((entry) => entry.id === door)?.name.toLowerCase() ?? door).join(' and ')} in front` : ''}. Statuses come from what exists.</p></div>
     <table class="data"><tbody>${plan.pages.map((entry) => `<tr>
       <td><strong>${e(entry.label)}</strong>${entry.optional ? ' <span class="muted" style="font-size:11px">optional</span>' : ''}<div class="muted" style="font-size:11.5px">${e(entry.detail)}</div></td>
-      <td style="width:12rem"><span class="tag ${entry.status === 'done' ? 'ok' : entry.status === 'missing' ? (entry.optional ? '' : 'warn') : ''}">${entry.status}</span> <span class="muted" style="font-size:11.5px">${e(entry.why)}</span></td>
+      <td style="width:12rem"><span class="tag ${entry.status === 'done' ? 'ok' : entry.status === 'draft' ? 'warn' : entry.status === 'missing' ? (entry.optional ? '' : 'warn') : ''}">${entry.status}</span> <span class="muted" style="font-size:11.5px">${e(entry.why)}</span></td>
       <td style="width:9rem;text-align:right">${make(entry)}</td></tr>`).join('')}</tbody></table></div>`
 }
 
