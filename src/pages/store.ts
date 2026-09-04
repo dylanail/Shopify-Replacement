@@ -230,12 +230,25 @@ export function offerTemplate(input: TemplateInput): BlockInstance[] {
     newBlock('countdown', { text: 'Save on your first order — ending soon' }),
     newBlock('hero', { headline: product ? `${product.title}: the one that works when the others did not` : `Introducing ${input.storeName}`, sub: product?.subtitle ?? '', image: product?.image ?? '', cta: 'Get it and save', ctaHref: '#offer', height: 'medium' }),
     newBlock('trust-badges', {}),
+    // The combined proof bar and the authority section were missing, and the
+    // order they sit in is the whole point of the case: the rating and the
+    // count answer "is this real" before the problem is named, and the
+    // authority line answers "who says so" before the story of the failures.
+    newBlock('rating-strip', { ...(product ? { productId: product.id } : {}) }),
     newBlock('headline', { level: 'h2', text: 'Why the usual fix keeps failing', sub: 'Say what the alternatives do wrong, in one line each.' }),
+    newBlock('expert-quote', {
+      headline: 'Who says so',
+      quotes: 'One sentence from the person who stands behind it, in their own words.|Their name|Their credential — maker, clinician, coach|',
+    }),
     newBlock('rich-text', { text: 'The cheap version fails in a month. The expensive one asks for a routine nobody keeps. Name each one, what it cost, and what happened next.' }),
     ...(product ? [newBlock('image-with-text', { image: product.image, headline: `What ${product.title} does differently`, text: 'The mechanism: how it creates the result, in two sentences an eleven-year-old follows.', cta: 'See the offer', ctaHref: '#offer' })] : []),
     newBlock('multicolumn', { headline: 'How it works' }),
     newBlock('review-wall', { headline: 'From people who bought it', count: 6, ...(product ? { productId: product.id } : {}) }),
     ...(product ? [newBlock('buy-box', { productId: product.id, buyNow: true, background: 'raise' })] : [newBlock('offer-box', {})]),
+    // "Deeper education" after the buy box: whoever scrolled past the offer
+    // has a question the offer did not answer, and this is where the case put
+    // the answer rather than sending them away to look for it.
+    newBlock('how-it-works', { headline: 'In more detail' }),
     ...(input.research?.comparison.rows.length ? [newBlock('comparison', { themLabel: input.research.competitors[0]?.name ?? 'The usual', rows: input.research.comparison.rows.map((row) => `${row.label}|${row.us}|${row.them}`).join('\n') })] : []),
     ...(input.research?.objections.length ? [newBlock('faq', { headline: 'Before you decide', items: input.research.objections.map((entry) => `${entry.objection}|${entry.answer}`).join('\n') })] : [newBlock('faq', {})]),
     newBlock('guarantee', {}),

@@ -85,6 +85,47 @@ test('the root is the admin, and login and register are served', async () => {
   assert.equal((await call('/nope')).status, 404)
 })
 
+test('a forgotten password has a way back into the account', async () => {
+  // There was none: a forgotten password meant the store, its products, its
+  // orders and its connected domain were gone, with no recovery short of
+  // editing the database by hand.
+  assert.match((await call('/login')).text, /Forgot your password/)
+
+  const { getDb } = await import('../src/lib/db.ts')
+  const { register, startPasswordReset, userForReset } = await import('../src/control/auth.ts')
+  register(getDb(), { email: 'locked-out@example.com', password: 'the-old-password', name: 'Locked' })
+
+  // The form answers the same either way, so it cannot be used to find out who
+  // has an account.
+  const unknown = await call('/forgot', { form: { email: 'nobody@example.com' } })
+  const known = await call('/forgot', { form: { email: 'locked-out@example.com' } })
+  assert.equal(unknown.location.split('&')[0], known.location.split('&')[0])
+  assert.match((await call(known.location)).text, /a link is on its way/)
+  assert.match((await call(known.location)).text, /written to the server log/, 'with no sender configured it says where the link went, and never shows it')
+
+  const first = startPasswordReset(getDb(), 'locked-out@example.com')!
+  const second = startPasswordReset(getDb(), 'locked-out@example.com')!
+  assert.equal(userForReset(getDb(), first.token), null, 'asking again kills the earlier link')
+
+  const form = await call(`/reset?token=${encodeURIComponent(second.token)}`)
+  assert.equal(form.status, 200)
+  assert.match(form.text, /locked-out@example\.com/)
+  assert.match((await call('/reset', { form: { token: second.token, password: 'short' } })).location, /\/reset\?token=.*at%20least%2010/, 'a short password comes back to the same form')
+
+  const jarBefore = new Map(jar)
+  const done = await call('/reset', { form: { token: second.token, password: 'a-brand-new-password' } })
+  assert.match(flashOf(done.location), /Password changed/)
+  assert.match((await call('/reset', { form: { token: second.token, password: 'another-new-password' } })).location, /\/forgot\?error=.*already%20been%20used/, 'the link works once')
+
+  // The reset signed this browser in as the recovered user; put the jar back
+  // so the rest of the file keeps working as the owner it started as.
+  jar.clear()
+  for (const [name, value] of jarBefore) jar.set(name, value)
+  assert.equal((await call('/login', { form: { email: 'locked-out@example.com', password: 'a-brand-new-password' } })).location, '/admin', 'and the new password is the password')
+  jar.clear()
+  for (const [name, value] of jarBefore) jar.set(name, value)
+})
+
 test('an unauthenticated admin request is sent to the login page', async () => {
   const response = await fetch(`${base}/admin`, { headers: { accept: 'text/html' }, redirect: 'manual' })
   assert.equal(response.status, 302)

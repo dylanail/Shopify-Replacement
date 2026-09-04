@@ -602,6 +602,19 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     DROP TABLE IF EXISTS geo_prompts;
     `,
   },
+  {
+    name: '017_password_resets',
+    sql: `
+    -- There was no way back into an account. A forgotten password meant the
+    -- store, its products, its orders and its domain were gone, with no
+    -- recovery short of editing the database by hand.
+    CREATE TABLE password_resets (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL,
+      used_at TEXT, created_at TEXT NOT NULL);
+    CREATE INDEX password_resets_user ON password_resets(user_id, created_at DESC);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

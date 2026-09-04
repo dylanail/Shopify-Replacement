@@ -562,6 +562,16 @@ test('legal pages, the popup and the quiz block render from the store\'s own con
   const offer = offerTemplate({ storeName: store.name, product: { id: product.id, title: product.title, image: '', subtitle: '' }, research: null })
   assert.equal(offer[1]?.type, 'countdown', 'the saving with a timer is above the fold')
   assert.ok(offer.some((block) => block.type === 'buy-box'))
+
+  // The order is the case (docs/knowledge/offers.md): combined proof answers
+  // "is this real" before the problem is named, the authority answers "who
+  // says so" before the story of the failures, and the deeper education sits
+  // after the buy box for whoever scrolled past the offer with a question.
+  const order = offer.map((block) => block.type)
+  const at = (type: string) => order.indexOf(type)
+  assert.ok(at('rating-strip') > at('trust-badges') && at('rating-strip') < at('headline'), 'proof lands between the trust bar and the problem')
+  assert.ok(at('expert-quote') > at('headline') && at('expert-quote') < at('rich-text'), 'the authority comes before the failed alternatives')
+  assert.ok(at('how-it-works') > at('buy-box'), 'and the deeper education is after the offer, not instead of it')
 })
 
 test('the blocks, templates, popup kinds and hygiene checks learned from the reference pages', () => {

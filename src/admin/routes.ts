@@ -1,7 +1,7 @@
 import { getDb } from '../lib/db.ts'
 import { format } from '../lib/money.ts'
-import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
-import { acceptInvite, endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
+import { badRequest, escapeHtml, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
+import { acceptInvite, endSession, login, register, requireRole, requireUser, resetPassword, SESSION_COOKIE, startPasswordReset, startSession, userFor, userForReset, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
 import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
 import { deleteAd, draftAds, getAd, reviseAd, saveAd, saveInspiration, deleteInspiration, readInspiration, type AdPlatform } from '../agent/ads.ts'
@@ -34,13 +34,13 @@ import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.t
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
 import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
 import { generateVersions, setVersionWeight } from '../pages/versions.ts'
-import { sendEmail, orderContext } from '../email/send.ts'
+import { sendAccountEmail, sendEmail, orderContext } from '../email/send.ts'
 import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
 import { buildTicket, startOnboarding } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
 import { shell } from './shell.ts'
-import { authPage, buildingPage, onboardingPage } from './auth-pages.ts'
+import { authPage, buildingPage, forgotPage, onboardingPage, resetPage } from './auth-pages.ts'
 import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
@@ -181,6 +181,54 @@ export function adminRouter(): Router {
       return redirect('/admin')
     } catch (error) {
       return redirect(`/login?error=${encodeURIComponent(error instanceof Error ? error.message : 'Could not sign in')}`)
+    }
+  })
+
+  /* A way back into an account. There was none: a forgotten password meant the
+     store, its products, its orders and its domain were gone. */
+  router.get('/forgot', (ctx) =>
+    userFor(db(), ctx)
+      ? redirect('/admin')
+      : html(forgotPage({ error: ctx.query.get('error'), sent: ctx.query.get('sent') === '1', logged: ctx.query.get('logged') === '1' })),
+  )
+
+  router.post('/forgot', async (ctx) => {
+    const body = await ctx.body()
+    const email = String(body.email ?? '').trim().toLowerCase()
+    const started = email ? startPasswordReset(db(), email) : null
+    let delivery: 'sent' | 'logged' | 'failed' = 'sent'
+    if (started) {
+      const origin = process.env.AMBORAS_PUBLIC_ORIGIN || ctx.url.origin
+      const link = `${origin}/reset?token=${encodeURIComponent(started.token)}`
+      delivery = await sendAccountEmail({
+        to: started.user.email,
+        subject: 'Reset your Amboras password',
+        html: `<p>Someone asked to reset the password for this account.</p><p><a href="${escapeHtml(link)}">Choose a new password</a></p><p>The link works once and expires in an hour. If it was not you, nothing has changed and you can ignore this.</p>`,
+      })
+    }
+    // The same answer either way: a form that says "no account with that
+    // email" is a way to find out who has one.
+    return redirect(`/forgot?sent=1${delivery === 'logged' ? '&logged=1' : ''}`)
+  })
+
+  router.get('/reset', (ctx) => {
+    const value = ctx.query.get('token') ?? ''
+    const user = value ? userForReset(db(), value) : null
+    if (!user) return redirect(`/forgot?error=${encodeURIComponent('That reset link has expired or has already been used. Ask for another.')}`)
+    return html(resetPage({ token: value, email: user.email, error: ctx.query.get('error') }))
+  })
+
+  router.post('/reset', async (ctx) => {
+    const body = await ctx.body()
+    const value = String(body.token ?? '')
+    try {
+      const user = resetPassword(db(), value, String(body.password ?? ''))
+      setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
+      return redirect(`/admin?flash=${encodeURIComponent('Password changed. Every other signed-in device has been signed out.')}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not change the password'
+      // A live token keeps its form; a dead one goes back to asking for another.
+      return redirect(userForReset(db(), value) ? `/reset?token=${encodeURIComponent(value)}&error=${encodeURIComponent(message)}` : `/forgot?error=${encodeURIComponent(message)}`)
     }
   })
 

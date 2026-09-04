@@ -58,7 +58,41 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
       ${isLogin ? '' : '<p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>'}
       <button type="submit">${isLogin ? 'Sign in' : 'Create account'}</button>
     </form>
-    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
+    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a> · <a href="/forgot">Forgot your password?</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
+}
+
+/**
+ * Asking for a reset link.
+ *
+ * The answer is the same whether or not the address has an account: a form
+ * that says "no account with that email" is a way to find out who has one.
+ */
+export function forgotPage(state: { error?: string | null; sent?: boolean; logged?: boolean }): string {
+  return frame('Reset your password', `
+    <h1>Reset your password</h1>
+    <p class="lead">${state.sent ? 'If that address has an account, a link is on its way. It is good for an hour.' : 'We will email you a link. It works once, and it expires in an hour.'}</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    ${state.logged ? '<div class="err">No email sender is configured on this deployment, so the link was written to the server log instead. Whoever runs the process can read it out.</div>' : ''}
+    <form method="post" action="/forgot">
+      <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="email"></div>
+      <button type="submit">Email me a link</button>
+    </form>
+    <p class="alt">Remembered it? <a href="/login">Sign in</a></p>`)
+}
+
+/** Choosing the new password. The token rides in a hidden field; it is single-use and checked again on submit. */
+export function resetPage(state: { token: string; email?: string; error?: string | null }): string {
+  return frame('Choose a new password', `
+    <h1>Choose a new password</h1>
+    <p class="lead">${state.email ? `For ${escapeHtml(state.email)}. ` : ''}Signing in everywhere else ends when you save this.</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    <form method="post" action="/reset">
+      <input type="hidden" name="token" value="${escapeHtml(state.token)}">
+      <div class="field"><label for="password">New password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password"></div>
+      <p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>
+      <button type="submit">Save it and sign in</button>
+    </form>
+    <p class="alt"><a href="/login">Back to sign in</a></p>`)
 }
 
 /**
