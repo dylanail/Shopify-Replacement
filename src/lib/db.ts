@@ -590,6 +590,18 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     UPDATE store_environments SET brand = (SELECT brand FROM stores WHERE stores.id = store_environments.store_id);
     `,
   },
+  {
+    name: '016_drop_unused_tables',
+    sql: `
+    -- Two tables nothing ever read or wrote. \`experiments\` was a split-test
+    -- store from before page versions and funnel groups did that job with
+    -- their own weights, and \`geo_prompts\` was for tracking whether a model
+    -- cites the store, which nothing checks. A schema that describes features
+    -- the product does not have is a map of a place that is not there.
+    DROP TABLE IF EXISTS experiments;
+    DROP TABLE IF EXISTS geo_prompts;
+    `,
+  },
 ]
 
 function migrate(db: Db) {

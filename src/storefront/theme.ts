@@ -16,8 +16,13 @@ export function themeCss(brand: Brand, theme: Theme): string {
   const ink = brand.ink ?? '#241a14'
   const display = brand.displayFont ?? "'Playfair Display', Georgia, serif"
   const body = brand.bodyFont ?? "'Inter', ui-sans-serif, system-ui, sans-serif"
-  const gap = theme.density === 'compact' ? '2.5rem' : '5rem'
   const gallery = theme.template === 'gallery'
+  // "Market" was a third option in the template picker and in edit_storefront's
+  // enum that rendered byte for byte like the atelier: the merchant chose it,
+  // saw no change, and reasonably concluded the picker was broken. It is a
+  // shop rather than a showroom now — denser, sans headings, filled buttons.
+  const market = theme.template === 'market'
+  const gap = theme.density === 'compact' ? '2.5rem' : market ? '3.4rem' : '5rem'
 
   return `
 :root{
@@ -293,6 +298,26 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
 .plg-contact input,.plg-contact textarea{padding:.6rem .7rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);color:inherit;font:inherit}
 .plg-contact button{justify-self:start}
 @media (max-width:640px){.plg-contact .plg-row{grid-template-columns:1fr}}
+${market ? `
+/* Market: a shop, not a showroom. Sans headings at a smaller step, the primary
+   colour on the buttons rather than the ink, tighter cards and a shorter hero,
+   so more of the catalogue is above the fold. Everything still reads the same
+   tokens — this is a different arrangement of the brand, not a second brand. */
+h1,h2,h3{font-family:var(--body);font-weight:600;letter-spacing:-.02em;line-height:1.12}
+h1{font-size:clamp(1.9rem,4.4vw,3rem)}
+h2{font-size:clamp(1.35rem,2.6vw,1.95rem)}
+h3{font-size:1.05rem}
+.eyebrow{letter-spacing:.12em}
+.hero{min-height:52vh}
+.btn{background:var(--primary);border-color:var(--primary);color:#fff;text-transform:none;letter-spacing:.01em;font-weight:600;padding:.85rem 1.4rem}
+.btn:hover{background:var(--secondary);border-color:var(--secondary)}
+.btn--ghost{background:transparent;color:var(--primary);border-color:var(--primary)}
+.btn--ghost:hover{background:var(--primary);color:#fff}
+.grid{gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.card .title{font-family:var(--body);font-weight:600;font-size:1rem}
+.card .body{padding:.8rem .9rem 1rem}
+.card .price{font-weight:600}
+` : ''}
 `
 }
 

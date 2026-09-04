@@ -4,7 +4,8 @@ import { fresh } from './helpers.ts'
 import { open, seal, verifyPassword, hashPassword, fingerprint } from '../src/lib/crypto.ts'
 import { check, validate, ValidationError } from '../src/lib/validate.ts'
 import { Router } from '../src/lib/http.ts'
-import { createStore, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, updateStore, addDomain, verifyDomain } from '../src/control/stores.ts'
+import { createStore, DEFAULT_THEME, environment, getStore, publish, publishState, rollback, setTheme, storeForHost, updateStore, addDomain, verifyDomain } from '../src/control/stores.ts'
+import { themeCss } from '../src/storefront/theme.ts'
 import { requireRole, register, inviteTeammate, acceptInvite, roleOn } from '../src/control/auth.ts'
 import { getInstalled, install, readCredentials, renderSlot, setSlot, uninstall } from '../src/control/plugins.ts'
 import { directoryEntries } from '../src/control/catalog-plugins.ts'
@@ -247,6 +248,32 @@ test('kpis and the funnel are computed from real events', () => {
   assert.deepEqual(stages.map((stage) => stage.count), [20, 8, 4, 2])
   assert.equal(stages[1]?.dropOff.toFixed(2), '0.60')
   assert.equal(kpis(db, store.id, '7d').sessions, 20)
+
+  // A visitor who arrived before the window and came back inside it counted at
+  // every stage but the first, because the first counted sessions that started
+  // in the window and the rest counted sessions active in it. The funnel could
+  // report more add-to-carts than sessions, with a negative drop-off under it.
+  const returning = sessionFor(db, store.id, { ip: '10.0.0.99', userAgent: 'test' })
+  db.run("UPDATE sessions_analytics SET first_seen = ? WHERE id = ?", '2000-01-01T00:00:00.000Z', returning)
+  track(db, store.id, returning, 'cart.add')
+  const withReturning = funnel(db, store.id, '7d')
+  assert.equal(withReturning[0]?.count, 21)
+  assert.equal(withReturning[1]?.count, 9)
+  assert.ok(withReturning.every((stage, index) => index === 0 || stage.count <= (withReturning[index - 1]?.count ?? 0)), 'no stage is bigger than the one above it')
+  assert.ok(withReturning.every((stage) => stage.dropOff >= 0), 'and no drop-off is negative')
+})
+
+test('each theme template renders differently — a picker with a dead option is a broken picker', () => {
+  // "Market" was offered in the admin and in edit_storefront's enum and
+  // produced byte-for-byte the same stylesheet as the atelier.
+  const brand = { primary: '#7a4a2b', paper: '#f4ece1', ink: '#241a14' }
+  const css = (template: string) => themeCss(brand, { ...DEFAULT_THEME, template } as never)
+  const atelier = css('atelier')
+  assert.notEqual(css('market'), atelier)
+  assert.notEqual(css('gallery'), atelier)
+  assert.notEqual(css('market'), css('gallery'))
+  assert.match(css('market'), /Market: a shop, not a showroom/)
+  assert.ok(!/Market: a shop/.test(atelier), 'and the atelier is untouched by it')
 })
 
 test('one visitor across many requests is one session', () => {

@@ -716,7 +716,11 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const draft = cart?.checkout ?? {}
   const items = cart?.items ?? []
   const shipping = (region?.shipping ?? []).map((option) => {
-    const free = totals.appliedPromotions.some((promotion) => promotion.amountCents === 0 && /shipping/i.test(promotion.title)) && option.position === 0
+    // Which promotion paid for the shipping is a property of the promotion, not
+    // of what someone typed in its title: matching /shipping/i meant "Shipping
+    // protection bundle" zeroed the delivery charge, while a real free-shipping
+    // promotion named "Delivery on us" left the customer paying for it.
+    const free = totals.appliedPromotions.some((promotion) => promotion.kind === 'free_shipping') && option.position === 0
     const clears = option.freeAboveCents !== null && totals.subtotalCents - totals.discountCents >= option.freeAboveCents
     const amount = free || clears ? 0 : option.amountCents
     return { id: option.id, name: option.name, amountCents: amount, listCents: option.amountCents, selected: option.id === totals.shippingOptionId }

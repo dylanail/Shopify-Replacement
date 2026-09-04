@@ -91,7 +91,14 @@ function eligibleItems(promotion: Promotion, items: LineItem[], collectionsByPro
 export type PromotionOutcome = {
   discountCents: number
   freeShipping: boolean
-  applied: Array<{ id: string; title: string; code: string; amountCents: number }>
+  /**
+   * `kind` rides along because the checkout has to know which of these paid
+   * for the shipping. It decided that by matching the promotion's *title*
+   * against /shipping/i, so "Shipping protection bundle" zeroed the delivery
+   * charge and a free-shipping promotion someone had named "Delivery on us"
+   * did not.
+   */
+  applied: Array<{ id: string; title: string; code: string; amountCents: number; kind: Promotion['kind'] }>
 }
 
 /**
@@ -184,7 +191,7 @@ export function applyPromotions(
     amount = Math.min(amount, takeable)
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
-      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount })
+      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount, kind: promotion.kind })
     }
   }
 
@@ -192,7 +199,7 @@ export function applyPromotions(
   // product's own bundle tiers are two answers to the same question; the
   // customer gets the better one, not both.
   const quantityKinds = new Set(['bundle', 'tiered'])
-  const quantity = outcome.applied.filter((entry) => quantityKinds.has(all.find((promotion) => promotion.id === entry.id)?.kind ?? ''))
+  const quantity = outcome.applied.filter((entry) => quantityKinds.has(entry.kind))
   if (quantity.length > 1) {
     const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))
     const dropped = quantity.filter((entry) => entry.id !== best.id)

@@ -105,7 +105,7 @@ export type Totals = {
   taxCents: Cents
   totalCents: Cents
   currency: string
-  appliedPromotions: Array<{ id: string; title: string; code: string; amountCents: Cents }>
+  appliedPromotions: Array<{ id: string; title: string; code: string; amountCents: Cents; kind: string }>
   /** How much more the cart needs to clear the free-shipping threshold. */
   freeShippingGapCents: Cents | null
   shippingOptionId: string

@@ -39,6 +39,24 @@ test('totals apply a percentage code and a free-shipping threshold together', ()
   assert.equal(amounts.totalCents, 27000)
 })
 
+test('the checkout charges for delivery unless a free-shipping promotion actually paid for it', () => {
+  // It decided by matching the promotion's title against /shipping/i: a
+  // "Shipping protection bundle" zeroed the delivery charge, and a real
+  // free-shipping promotion someone had named "Delivery on us" did not.
+  const { db, store, variant } = shop()
+  createPromotion(db, store.id, { title: 'Shipping protection bundle', kind: 'percentage', value: 5, code: 'PROTECT' })
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, variant.id, 1)
+  applyCode(db, store.id, cart.id, 'PROTECT')
+  const misleading = totals(db, store.id, { ...cart, discountCode: 'PROTECT' })
+  assert.equal(misleading.appliedPromotions[0]?.kind, 'percentage', 'what a promotion is travels with it, not just what it is called')
+  assert.ok(!misleading.appliedPromotions.some((promotion) => promotion.kind === 'free_shipping'))
+
+  createPromotion(db, store.id, { title: 'Delivery on us', kind: 'free_shipping', automatic: true })
+  const real = totals(db, store.id, addToCart(db, store.id, createCart(db, store.id).id, variant.id, 1))
+  assert.ok(real.appliedPromotions.some((promotion) => promotion.kind === 'free_shipping'), 'and a free-shipping promotion is one whatever it is named')
+  assert.equal(real.shippingCents, 0)
+})
+
 test('the free-shipping gap is reported until the threshold is cleared', () => {
   const { db, store, variant } = shop()
   const cart = addToCart(db, store.id, createCart(db, store.id).id, variant.id, 1)
