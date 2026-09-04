@@ -451,11 +451,26 @@ function decode(input: string): string {
   return input.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').trim()
 }
 
-/** Creates the product from an import, with a default markup when the supplier price is the only price known. */
-export function createFromImport(db: Db, storeId: string, imported: ImportedProduct, opts: { markup?: number; asSupplier?: boolean; status?: 'draft' | 'published' } = {}): Product {
-  const markup = opts.markup ?? 2.5
+/**
+ * Creates the product from an import, with a default markup when the supplier
+ * price is the only price known.
+ *
+ * The markup is on the landed cost — the supplier's price plus their shipping
+ * — not on the item alone. docs/knowledge/product-research.md asks for "at
+ * least 3x landed cost (COGS + shipping)", and multiplying the item only put
+ * $7 of freight through at cost: a $12 item at 2.5x came in at $29.99 against
+ * a $19 landed cost, a 1.6x that no ad account can carry.
+ */
+export function createFromImport(
+  db: Db,
+  storeId: string,
+  imported: ImportedProduct,
+  opts: { markup?: number; asSupplier?: boolean; status?: 'draft' | 'published'; supplierShippingCents?: number } = {},
+): Product {
+  const markup = opts.markup ?? 3
   const supplierCost = opts.asSupplier ? (imported.priceCents ?? 0) : 0
-  const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round((cents * markup) / 100) * 100 - 1) : cents)
+  const supplierShipping = Math.max(0, Math.round(opts.supplierShippingCents ?? 0))
+  const price = (cents: number) => (opts.asSupplier ? Math.max(100, Math.round(((cents + supplierShipping) * markup) / 100) * 100 - 1) : cents)
   const variants = imported.variants.length ? imported.variants.map((variant) => ({ title: variant.title, priceCents: price(variant.priceCents), ...(variant.sku ? { sku: variant.sku } : {}), inventory: 100 })) : [{ title: 'Default', priceCents: price(imported.priceCents ?? 2999), inventory: 100 }]
   return createProduct(db, storeId, {
     title: imported.title,
@@ -465,7 +480,7 @@ export function createFromImport(db: Db, storeId: string, imported: ImportedProd
     media: imported.images.map((url) => ({ url, alt: imported.title })),
     options: imported.options.map((option) => ({ title: option.title, values: option.values.map((value) => ({ value })) })),
     tags: ['imported'],
-    supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
+    supplier: { url: imported.source, ...(imported.vendor ? { name: imported.vendor } : {}), ...(opts.asSupplier ? { costCents: supplierCost, shippingCents: supplierShipping, processingDays: 2, shippingDaysMin: 7, shippingDaysMax: 14 } : {}) },
     variants,
   })
 }

@@ -20,6 +20,7 @@ import { sessionFor, track } from '../src/analytics/events.ts'
 import { sweepAbandonedCarts } from '../src/email/abandoned.ts'
 import { saveCheckoutDraft } from '../src/domain/cart.ts'
 import { listReviews } from '../src/domain/reviews.ts'
+import { execute } from '../src/agent/registry.ts'
 
 function shop() {
   const { db, user } = fresh()
@@ -188,10 +189,54 @@ test('products import from a Shopify store JSON or an Open Graph page', async ()
   assert.equal(product.supplier.costCents, 1990)
   assert.equal(product.variants[0]?.priceCents, 4999, 'marked up to the next hundred, ending in 99')
   assert.equal(product.status, 'draft')
+
+  // The markup is on the landed cost. Multiplying the item alone put the
+  // supplier's freight through at cost: $19.90 plus $7 of shipping at 2.5x
+  // priced at $49.99 against a $26.90 cost — 1.9x, which no ad account carries.
+  const landed = createFromImport(db, store.id, shopify, { asSupplier: true, markup: 2.5, supplierShippingCents: 700 })
+  assert.equal(landed.supplier.shippingCents, 700)
+  assert.equal(landed.variants[0]?.priceCents, 6699, '(1990 + 700) × 2.5, to the next hundred less a penny')
   const og = await importProductFromUrl('https://supplier.example.com/item/9', fetchImpl)
   assert.equal(og.title, 'Steel Widget')
   assert.equal(og.priceCents, 420)
   assert.deepEqual(og.images, ['https://supplier.example.com/img/w.jpg'])
+})
+
+test('a product is checked against the qualification criteria before anything is built on it', async () => {
+  // docs/knowledge/product-research.md opens the whole method with this and
+  // none of it was anywhere in the product: a store could be built end to end
+  // around a $9 seasonal item at 1.4x on a declining trend, and nothing would
+  // say so until the ad spend had already gone.
+  const { db, store, user } = shop()
+  const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
+
+  const bad = createProduct(db, store.id, { title: 'Novelty Snowman', status: 'draft', variants: [{ title: 'One', priceCents: 900, inventory: 5 }], supplier: { costCents: 600, shippingCents: 40 } })
+  const skipped = await execute('qualify_product', { productId: bad.id, trend: 'declining', seasonal: true }, ctx)
+  const result = skipped.data as { decision: string; checks: Array<{ key: string; verdict: string; detail: string }> }
+  assert.equal(result.decision, 'skip')
+  assert.equal(result.checks.find((check) => check.key === 'aov')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'markup')?.verdict, 'fail', '$9.00 on a $6.40 landed cost is 1.4x')
+  assert.equal(result.checks.find((check) => check.key === 'unit-price')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'trend')?.verdict, 'fail')
+  assert.equal(result.checks.find((check) => check.key === 'seasonality')?.verdict, 'warn')
+  assert.equal(result.checks.find((check) => check.key === 'stand-out')?.verdict, 'fail', 'no way to stand out found is a reason not to run it')
+  assert.ok(result.checks.every((check) => check.detail), 'every check says what it found')
+
+  // The judgements stick to the product, so the next run remembers them.
+  assert.match(getProduct(db, store.id, bad.id)?.metadata.qualify ?? '', /declining/)
+  const again = await execute('qualify_product', { productId: bad.id, standOut: 'Nobody sells one that folds' }, ctx)
+  assert.match((again.data as { checks: Array<{ key: string; verdict: string }> }).checks.find((check) => check.key === 'trend')?.verdict ?? '', /fail/, 'the trend from the earlier run is still on file')
+
+  // The glove: $100 on a $38 landed cost, a flat trend, a stand-out named.
+  const good = await execute('qualify_product', { productId: listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id, trend: 'flat', weightGrams: 600, standOut: 'Repairs, for club coaches who buy for a room' }, ctx)
+  const passing = good.data as { decision: string; markup: number; summary: string; margin: { breakevenRoas: number | null } }
+  assert.equal(passing.markup, 2.63, 'the markup is on the landed cost, the supplier\'s shipping included')
+  assert.equal(passing.decision, 'work', 'nothing disqualifies it, but 2.63x is under the 3x line')
+  assert.match(passing.summary, /markup on landed cost/)
+  assert.ok(passing.margin.breakevenRoas, 'and the qualification quotes the same breakeven the profit page does')
+  updateProduct(db, store.id, listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id, { supplier: { costCents: 2500, shippingCents: 500 } })
+  const priced = await execute('qualify_product', { productId: listProducts(db, store.id, { limit: 10 }).find((entry) => entry.title === 'The Glove')!.id }, ctx)
+  assert.equal((priced.data as { decision: string }).decision, 'run', 'at 3.3x on $30 landed every criterion passes')
 })
 
 test('questions are answered before they show, and social proof is only real orders', () => {

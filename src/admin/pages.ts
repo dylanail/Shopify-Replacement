@@ -7,6 +7,7 @@ import { listOrders, getOrder } from '../domain/orders.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions, type Region } from '../domain/regions.ts'
+import { qualifyCatalogProduct, readQualifyNotes } from '../domain/qualify.ts'
 import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
@@ -113,9 +114,11 @@ export function productsPage(ctx: Ctx, status: string, search: string): string {
       <input type="hidden" name="status" value="${escapeHtml(status)}"><button class="btn" type="submit">Search</button></form></div>
   <form method="post" action="/admin/products/import" class="card row" style="align-items:flex-end">
     <div class="field" style="flex:2;margin:0"><label>Import a product from a URL — any Shopify store's product page, or a supplier page with Open Graph tags</label><input name="url" type="url" required placeholder="https://some-store.com/products/the-thing"></div>
-    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="2.5"></div>
+    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="3"></div>
+    <div class="field" style="width:150px;margin:0"><label>Their shipping (minor units)</label><input name="supplierShippingCents" value="0" title="Part of the landed cost the markup is taken on, not something the margin absorbs."></div>
     <label class="row" style="font-size:12px;margin:0 .5rem .6rem"><input type="checkbox" name="asSupplier" value="true" checked> Their price is my cost</label>
     <button class="btn primary" type="submit">Import</button></form>
+  <p class="muted" style="font-size:11.5px;margin:-.6rem 0 1rem">The markup is on the landed cost — their price plus their shipping. At least 3×; 5× is the ideal band.</p>
   <div class="tabs">${['all', 'published', 'draft', 'archived']
     .map((option) => `<a class="${option === status ? 'on' : ''}" href="/admin/products?status=${option}">${option[0]?.toUpperCase()}${option.slice(1)}</a>`)
     .join('')}</div>
@@ -191,7 +194,8 @@ export function productDetail(ctx: Ctx, productId: string): string {
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.title ?? product.title)}</p>
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.description ?? '')}</p></div>
   </div></div>
-  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${versionsCard(ctx, product)}</div>`
+  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${qualifyCard(ctx, product)}</div>
+  <div class="grid2" style="margin-top:1rem">${versionsCard(ctx, product)}</div>`
 }
 
 /**
@@ -231,6 +235,41 @@ function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
       <tr><td>Breakeven ROAS <span class="muted" style="font-size:11px">1 ÷ margin</span></td><td style="text-align:right">${margin.breakevenRoas === null ? '<span class="muted">set a cost</span>' : `${margin.breakevenRoas}×`}</td></tr>
       <tr><td>Target ROAS <span class="muted" style="font-size:11px">breakeven + 1, the line to scale above</span></td><td style="text-align:right">${margin.targetRoas === null ? '<span class="muted">—</span>' : `<strong>${margin.targetRoas}×</strong>`}</td></tr></table>
     <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
+}
+
+/**
+ * The qualification checklist, applied to this product.
+ *
+ * docs/knowledge/product-research.md opens the method with it — AOV over $60,
+ * 3x landed cost, unit price over $15, a flat or rising trend, light enough to
+ * ship, nothing patented or big-brand, and a way to stand out named before a
+ * pound is spent. None of it existed anywhere in the product: a store could be
+ * built end to end around a $9 seasonal item at 1.4x and nothing said so until
+ * the ads had run.
+ *
+ * What the numbers know — price, landed cost, margin — is read from the
+ * product. What only a person knows — the trend, the weight, whether it is
+ * patented, what the stand-out is — is a form, kept on the product.
+ */
+function qualifyCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
+  const judged = readQualifyNotes(product.metadata)
+  const result = qualifyCatalogProduct(product, judged)
+  const tone = { pass: 'ok', warn: 'warn', fail: 'bad' } as const
+  const decision = { run: 'ok', work: 'warn', skip: 'bad' } as const
+  const trends: Array<[string, string]> = [['unknown', 'Not checked'], ['up', 'Rising'], ['flat', 'Flat'], ['declining', 'Declining'], ['spike', 'Spiked and crashed']]
+  const flag = (name: string, label: string, on: boolean) => `<label class="row" style="font-size:12px;gap:.3rem;margin:0 .8rem .3rem 0"><input type="checkbox" name="${name}" value="true" ${on ? 'checked' : ''} style="width:auto"> ${escapeHtml(label)}</label>`
+  return `<div class="card" id="qualify"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Does it qualify?</h2><span class="tag ${decision[result.decision]}">${result.decision === 'run' ? 'run it' : result.decision === 'work' ? 'work on it' : 'skip it'}</span></div>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">${escapeHtml(result.summary)}</p>
+    <table class="data"><tbody>${result.checks.map((check) => `<tr><td style="width:9rem"><span class="tag ${tone[check.verdict]}">${check.verdict}</span> ${escapeHtml(check.label)}</td>
+      <td>${escapeHtml(check.detail)}<div class="muted" style="font-size:11px">${escapeHtml(check.rule)}</div></td></tr>`).join('')}</tbody></table>
+    <form method="post" action="/admin/products/${escapeHtml(product.id)}/qualify" style="margin-top:.7rem">
+      <div class="row"><div class="field" style="flex:1"><label>Trend — Google Trends, US, five years</label><select name="trend">${trends.map(([value, label]) => `<option value="${value}" ${judged.trend === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+        <div class="field" style="width:9rem"><label>Weight (grams)</label><input name="weightGrams" value="${judged.weightGrams ?? ''}"></div>
+        <div class="field" style="width:11rem"><label>Order value after bundles</label><input name="aovCents" value="${judged.aovCents ?? ''}" placeholder="minor units"></div></div>
+      <div class="row" style="flex-wrap:wrap;margin-bottom:.2rem">${flag('seasonal', 'Seasonal', Boolean(judged.seasonal))}${flag('tech', 'Tech or battery', Boolean(judged.tech))}${flag('patented', 'Patented', Boolean(judged.patented))}${flag('bigBrand', 'Big brand', Boolean(judged.bigBrand))}${flag('printOnDemand', 'Print on demand', Boolean(judged.printOnDemand))}</div>
+      <div class="field"><label>The way to stand out — the underserved avatar or the mechanism. None found is a reason not to run it.</label><input name="standOut" value="${escapeHtml(judged.standOut ?? '')}" placeholder="Night-shift nurses; nobody sells blackout for daytime sleep"></div>
+      <button class="btn primary" type="submit">Save the judgement</button></form>
+    <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Price and landed cost come from the supplier card; the rest is what only you can check. ${ctx.store.currency === 'USD' ? '' : `The thresholds are the method's, in US dollars.`}</p></div>`
 }
 
 function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {

@@ -2,6 +2,7 @@ import { getStore } from '../../control/stores.ts'
 import { getProduct, listProducts, updateProduct } from '../../domain/catalog.ts'
 import { answerQuestion, createFromImport, importProductFromUrl, importReviews, listQuestions, marginFor, profitReport, recordAdSpend } from '../../domain/ops.ts'
 import { upsertFunnel } from '../../domain/funnels.ts'
+import { qualifyCatalogProduct, readQualifyNotes, TRENDS, writeQualifyNotes } from '../../domain/qualify.ts'
 import { format } from '../../lib/money.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, readDirection, redirectContent } from '../directions.ts'
 import { generateVersions, setVersionWeight, versionStats } from '../../pages/versions.ts'
@@ -69,18 +70,57 @@ export const dropshipTools: Tool[] = defineTools([
   {
     name: 'import_product_from_url',
     area: 'products',
-    description: 'Import a product from any Shopify store product URL (their /products/x.json) or a supplier page with Open Graph tags. Keeps the supplier link; optionally treats their price as your cost with a markup.',
+    description: 'Import a product from any Shopify store product URL (their /products/x.json) or a supplier page with Open Graph tags. Keeps the supplier link; optionally treats their price as your cost with a markup on the landed cost (their price plus their shipping).',
     risk: 'confirm',
-    schema: { url: { type: 'string', required: true, pattern: '^https?://' }, markup: { type: 'number', min: 1, max: 10, default: 2.5 }, asSupplier: { type: 'boolean', default: true }, publish: { type: 'boolean', default: false } },
+    schema: {
+      url: { type: 'string', required: true, pattern: '^https?://' },
+      markup: { type: 'number', min: 1, max: 10, default: 3, help: 'On the landed cost. The method asks for at least 3x, 5x ideal.' },
+      supplierShippingCents: { type: 'number', integer: true, min: 0, default: 0, help: "What the supplier charges to ship one unit. It is part of the cost the markup is taken on, not something the margin absorbs." },
+      asSupplier: { type: 'boolean', default: true },
+      publish: { type: 'boolean', default: false },
+    },
     async handler(args, ctx) {
       const imported = await importProductFromUrl(args.url as string)
-      const product = createFromImport(ctx.db, ctx.storeId, imported, { markup: args.markup as number, asSupplier: Boolean(args.asSupplier), status: args.publish ? 'published' : 'draft' })
+      const product = createFromImport(ctx.db, ctx.storeId, imported, { markup: args.markup as number, supplierShippingCents: (args.supplierShippingCents as number) ?? 0, asSupplier: Boolean(args.asSupplier), status: args.publish ? 'published' : 'draft' })
       const store = getStore(ctx.db, ctx.storeId)
       const margin = marginFor(Math.min(...product.variants.map((variant) => variant.priceCents)), product.supplier)
       return {
-        summary: `Imported "${product.title}" with ${product.variants.length} variants and ${product.media.length} images as a ${product.status}${args.asSupplier ? `; cost ${format(margin.costCents, store?.currency ?? 'USD')}, selling at ${format(margin.priceCents, store?.currency ?? 'USD')} (${margin.marginPercent}% margin before ads)` : ''}.`,
+        summary: `Imported "${product.title}" with ${product.variants.length} variants and ${product.media.length} images as a ${product.status}${args.asSupplier ? `; landed cost ${format(margin.costCents + margin.shippingCents, store?.currency ?? 'USD')}, selling at ${format(margin.priceCents, store?.currency ?? 'USD')} (${margin.marginPercent}% margin before ads, breakeven ROAS ${margin.breakevenRoas ?? '—'})` : ''}.`,
         data: { id: product.id, handle: product.handle },
         artifacts: [{ type: 'product', id: product.id, title: product.title, image: product.heroImage, href: `/admin/products/${product.id}` }],
+      }
+    },
+  },
+  {
+    name: 'qualify_product',
+    area: 'products',
+    description: "Run the product-research checklist against a product: order value over $60, at least 3x the landed cost (supplier price plus their shipping), unit price over $15, a flat or rising five-year trend, light enough to ship, nothing patented, big-brand or print-on-demand, and a named way to stand out. Price and landed cost come from the product; the judgements passed in are kept on it, so the next run remembers them. Answer nothing you have not actually checked — an unchecked trend is a warning, a guessed one is a lie.",
+    schema: {
+      productId: { type: 'string', required: true },
+      trend: { type: 'string', enum: TRENDS as unknown as string[], help: 'Google Trends, US, five years, on the niche keyword.' },
+      weightGrams: { type: 'number', integer: true, min: 0 },
+      aovCents: { type: 'number', integer: true, min: 0, help: 'Order value after bundles and add-ons, if it is higher than the unit price.' },
+      seasonal: { type: 'boolean' },
+      tech: { type: 'boolean', help: 'Electronics or anything with a battery.' },
+      patented: { type: 'boolean' },
+      bigBrand: { type: 'boolean' },
+      printOnDemand: { type: 'boolean' },
+      standOut: { type: 'string', help: 'The underserved avatar or the mechanism this will run on. None found is a reason not to run it.' },
+    },
+    handler(args, ctx) {
+      const product = getProduct(ctx.db, ctx.storeId, args.productId as string)
+      if (!product) throw new Error('No product with that id')
+      const { productId: _productId, ...given } = args as Record<string, unknown>
+      const notes = { ...readQualifyNotes(product.metadata), ...Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined && value !== '')) }
+      updateProduct(ctx.db, ctx.storeId, product.id, { metadata: { qualify: writeQualifyNotes(notes) } })
+      const result = qualifyCatalogProduct(product, notes)
+      return {
+        summary: `${product.title}: ${result.decision === 'run' ? 'run it' : result.decision === 'work' ? 'work on it first' : 'skip it'}. ${result.summary}`,
+        data: result,
+        artifacts: [
+          { type: 'table', columns: ['Check', 'Verdict', 'Detail'], rows: result.checks.map((check) => [check.label, check.verdict, check.detail]) },
+          { type: 'link', href: `/admin/products/${product.id}#qualify`, label: 'Open the checklist' },
+        ],
       }
     },
   },

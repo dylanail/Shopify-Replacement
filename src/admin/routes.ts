@@ -24,6 +24,7 @@ import { clonePage, extractBlocks } from '../pages/clone.ts'
 import { blockDefinition } from '../pages/blocks.ts'
 import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
 import { createRegion, deleteRegion, deleteShippingOption, listRegions, setShippingOption, updateRegion, updateShippingOption } from '../domain/regions.ts'
+import { qualifyCatalogProduct, TRENDS, writeQualifyNotes } from '../domain/qualify.ts'
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
@@ -394,6 +395,31 @@ export function adminRouter(): Router {
     return back(ctx, brief ? `Labelled as "${brief.name}". The Creative checklist counts it now.` : 'Label removed.')
   })
 
+  /* The judgements the numbers cannot make: the trend, the weight, whether it
+     is patented, and whether anyone has found a way to stand out. */
+  router.post('/admin/products/:id/qualify', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, ctx.params.id as string)
+    if (!product) return back(ctx, '!No such product')
+    const trend = String(body.trend ?? 'unknown')
+    const number = (key: string) => Math.max(0, Math.round(Number(body[key] ?? 0)) || 0)
+    const notes = {
+      ...(TRENDS.includes(trend as (typeof TRENDS)[number]) ? { trend: trend as (typeof TRENDS)[number] } : {}),
+      ...(number('weightGrams') ? { weightGrams: number('weightGrams') } : {}),
+      ...(number('aovCents') ? { aovCents: number('aovCents') } : {}),
+      ...(body.seasonal === 'true' ? { seasonal: true } : {}),
+      ...(body.tech === 'true' ? { tech: true } : {}),
+      ...(body.patented === 'true' ? { patented: true } : {}),
+      ...(body.bigBrand === 'true' ? { bigBrand: true } : {}),
+      ...(body.printOnDemand === 'true' ? { printOnDemand: true } : {}),
+      ...(String(body.standOut ?? '').trim() ? { standOut: String(body.standOut).trim() } : {}),
+    }
+    updateProduct(db(), current.store.id, product.id, { metadata: { qualify: writeQualifyNotes(notes) } })
+    const result = qualifyCatalogProduct(getProduct(db(), current.store.id, product.id) as typeof product, notes)
+    return back(ctx, result.decision === 'skip' ? `!${result.summary}` : result.summary)
+  })
+
   router.post('/admin/products/:id/rewrite', async (ctx) => {
     const current = session(ctx)
     const result = await execute(
@@ -595,7 +621,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
+      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 3), supplierShippingCents: Math.max(0, Math.round(Number(body.supplierShippingCents ?? 0)) || 0), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
       const productId = (result.data as { id?: string })?.id
       return redirect(productId ? `/admin/products/${productId}?flash=${encodeURIComponent(result.summary)}` : `/admin/products?flash=${encodeURIComponent(result.summary)}`)
     } catch (error) {
