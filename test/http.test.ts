@@ -82,6 +82,8 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.equal(dashboard.status, 200)
   assert.match(dashboard.text, /Hello Franz/)
   assert.match(dashboard.text, /Ironjaw/)
+  assert.match(dashboard.text, /commerce-kpis/)
+  assert.match(dashboard.text, /Store pulse/)
   slug = /\/s\/([a-z0-9-]+)/.exec(dashboard.text)?.[1] ?? ''
   assert.ok(slug, 'the dashboard links a live preview')
 })
@@ -89,7 +91,7 @@ test('registering lands on onboarding, and one sentence builds a store', async (
 test('every admin page renders', async () => {
   for (const path of [
     '/admin', '/admin/ai', '/admin/products', '/admin/orders', '/admin/customers', '/admin/collections',
-    '/admin/promotions', '/admin/analytics', '/admin/reviews', '/admin/store', '/admin/marketing',
+    '/admin/promotions', '/admin/analytics', '/admin/cro', '/admin/reviews', '/admin/store', '/admin/marketing',
     '/admin/plugins', '/admin/settings', '/admin/ads', '/admin/domains', '/admin/research', '/admin/funnels', '/admin/profit', '/admin/bundles', '/admin/pages',
     '/admin/build', '/admin/market', '/admin/creative', '/admin/store?health=1',
   ]) {
@@ -97,6 +99,13 @@ test('every admin page renders', async () => {
     assert.equal(response.status, 200, `${path} responded ${response.status}`)
     assert.match(response.text, /Amboras Business Assistant/, `${path} carries the assistant panel`)
   }
+  const settings = await call('/admin/settings')
+  assert.match(settings.text, /Customer event pixels/)
+  assert.match(settings.text, /17TRACK/)
+  assert.match(settings.text, /Download JSON backup/)
+  const backup = JSON.parse((await call('/admin/settings/export')).text)
+  assert.equal(backup.tables.stores[0].name, 'Ironjaw & Co')
+  assert.equal(backup.tables.sessions, undefined, 'login sessions are excluded from a store backup')
 })
 
 test('the assistant executes a real change from the panel', async () => {

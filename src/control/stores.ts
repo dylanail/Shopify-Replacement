@@ -18,6 +18,8 @@ export type StoreEnvironment = {
 export type Store = {
   id: string
   ownerId: string
+  /** Top-level asset shape. Funnels get a conversion path; stores get a catalog storefront. */
+  kind: 'store' | 'funnel'
   name: string
   slug: string
   currency: string
@@ -41,9 +43,11 @@ export const DEFAULT_THEME: Theme = {
 }
 
 function rowToStore(row: Row): Store {
+  const build = json<{ shape?: string }>(row.build, {})
   return {
     id: row.id as string,
     ownerId: row.owner_id as string,
+    kind: build.shape === 'funnel' ? 'funnel' : 'store',
     name: row.name as string,
     slug: row.slug as string,
     currency: row.currency as string,
@@ -60,7 +64,7 @@ function rowToStore(row: Row): Store {
 export function createStore(
   db: Db,
   ownerId: string,
-  input: { name: string; prompt?: string; currency?: string; referenceImage?: string; referenceUrl?: string },
+  input: { name: string; kind?: Store['kind']; prompt?: string; currency?: string; referenceImage?: string; referenceUrl?: string },
 ): Store {
   const storeId = id('store')
   const timestamp = now()
@@ -77,6 +81,7 @@ export function createStore(
       models: {},
       reference_image: input.referenceImage ?? '',
       reference_url: input.referenceUrl ?? '',
+      ...(input.kind ? { build: { shape: input.kind } } : {}),
       created_at: timestamp,
     })
     for (const kind of ['draft', 'live'] as const) {
@@ -215,16 +220,17 @@ export function rollback(db: Db, storeId: string): StoreEnvironment {
  */
 export function publishState(db: Db, storeId: string): { label: string; ready: boolean; reason: string } {
   const store = getStore(db, storeId)
-  if (!store) return { label: 'Publish store', ready: false, reason: 'No store' }
+  if (!store) return { label: 'Publish asset', ready: false, reason: 'No asset' }
+  const noun = store.kind === 'funnel' ? 'funnel' : 'store'
   const products = db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", storeId)?.c ?? 0
-  if (!products) return { label: 'Add a product to publish', ready: false, reason: 'A live store needs at least one published product.' }
+  if (!products) return { label: 'Add a product to publish', ready: false, reason: `A live ${noun} needs at least one published product.` }
   const draft = environment(db, storeId, 'draft')
   const live = environment(db, storeId, 'live')
-  if (store.status !== 'live') return { label: 'Publish store', ready: true, reason: 'Your storefront goes live at its address.' }
+  if (store.status !== 'live') return { label: `Publish ${noun}`, ready: true, reason: `Your ${noun} goes live at its address.` }
   if (JSON.stringify(draft.theme) !== JSON.stringify(live.theme)) {
     return { label: 'Publish changes', ready: true, reason: 'The draft has edits that are not live yet.' }
   }
-  return { label: 'Store is live', ready: false, reason: `Live since ${live.publishedAt?.slice(0, 10) ?? 'today'}.` }
+  return { label: `${noun === 'store' ? 'Store' : 'Funnel'} is live`, ready: false, reason: `Live since ${live.publishedAt?.slice(0, 10) ?? 'today'}.` }
 }
 
 /* -------------------------------------------------------------------- domains */

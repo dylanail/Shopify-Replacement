@@ -153,7 +153,7 @@ export function tierFor(bundle: Bundle, quantity: number): BundleTier | null {
  * on the surrounding form, and its data attributes let the buy button show
  * the tier total without a round trip.
  */
-export function renderBundleWidget(bundle: Bundle, product: Product, currency: string, opts: { variantPriceCents?: number } = {}): string {
+export function renderBundleWidget(bundle: Bundle, product: Product, currency: string, opts: { variantPriceCents?: number; locale?: string } = {}): string {
   const unit = opts.variantPriceCents ?? Math.min(...product.variants.map((variant) => variant.priceCents))
   const style = bundle.style
   // One tier is pre-selected: the first one carrying a badge (that is what the
@@ -167,10 +167,10 @@ export function renderBundleWidget(bundle: Bundle, product: Product, currency: s
     const perks = [tier.freeShipping ? 'Free shipping' : '', tier.giftVariantId ? `+ ${tier.giftLabel || 'free gift'}` : ''].filter(Boolean)
     const checked = index === preselect ? 'checked' : ''
     return `<label class="tier${tier.badge ? ' tier--hi' : ''}">
-      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency))}" ${checked}>
+      <input type="radio" name="quantity" value="${tier.quantity}" data-total="${escapeHtml(format(total, currency, opts.locale))}" ${checked}>
       <span class="tier-main"><span class="tier-label">${escapeHtml(tier.label)}${tier.discountPercent ? ` <em>Save ${tier.discountPercent}%</em>` : ''}</span>
         ${perks.length ? `<span class="tier-perks">${perks.map((perk) => escapeHtml(perk)).join(' · ')}</span>` : ''}</span>
-      <span class="tier-price"><b>${escapeHtml(format(total, currency))}</b>${style.showCompare !== false && tier.discountPercent ? `<s>${escapeHtml(format(full, currency))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small>${escapeHtml(format(perUnit, currency))} each</small>` : ''}</span>
+      <span class="tier-price"><b>${escapeHtml(format(total, currency, opts.locale))}</b>${style.showCompare !== false && tier.discountPercent ? `<s>${escapeHtml(format(full, currency, opts.locale))}</s>` : ''}${style.showPerUnit !== false && tier.quantity > 1 ? `<small>${escapeHtml(format(perUnit, currency, opts.locale))} each</small>` : ''}</span>
       ${tier.badge ? `<span class="tier-badge">${escapeHtml(tier.badge)}</span>` : ''}</label>`
   })
   return `<div class="bundle bundle--${escapeHtml(style.layout ?? 'stacked')}" style="${style.accent ? `--bundle-accent:${escapeHtml(style.accent)};` : ''}${style.radius ? `--bundle-radius:${escapeHtml(style.radius)};` : ''}">

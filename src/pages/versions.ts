@@ -5,7 +5,7 @@ import type { Product } from '../domain/types.ts'
 import type { Store } from '../control/stores.ts'
 import { readBrief } from '../agent/copy.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, authorBlocks, formatById, readDirection, writeAdvertorial, writePdp } from '../agent/directions.ts'
-import { modelFor } from '../agent/models.ts'
+import { catalog, modelFor, parseChoice } from '../agent/models.ts'
 import { latestResearch, rulesResearch } from '../agent/research.ts'
 import { directionFor, getAvatar, listAvatars } from '../agent/avatars.ts'
 import { createPage, getPage, listPages, updatePage, type Page } from './store.ts'
@@ -28,6 +28,8 @@ export type VersionRequest = {
   avatarId?: string
   count?: number
   publish?: boolean
+  /** Optional one-run override; the store's Pages model remains the default. */
+  model?: string
 }
 
 export async function generateVersions(db: Db, store: Store, request: VersionRequest): Promise<Page[]> {
@@ -37,9 +39,9 @@ export async function generateVersions(db: Db, store: Store, request: VersionReq
   const research = latestResearch(db, store.id) ?? rulesResearch(brief)
   const avatar = request.avatarId === 'none' ? null : request.avatarId ? getAvatar(db, store.id, request.avatarId) : listAvatars(db, store.id).find((entry) => entry.selected) ?? null
   const direction = directionFor(request.direction ?? '', avatar)
-  const catalog = request.kind === 'pdp' ? PDP_FORMATS : ADVERTORIAL_FORMATS
   const wanted = request.formats?.length ? request.formats : suggestFormats(request.kind, direction).slice(0, request.count ?? 3)
-  const model = modelFor(db, store.id, 'pages')
+  const requested = parseChoice(request.model)
+  const model = requested && catalog().some((entry) => entry.available && entry.provider === requested.provider && entry.model === requested.model) ? requested : modelFor(db, store.id, 'pages')
   const created: Page[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId, request.kind)
@@ -60,7 +62,6 @@ export async function generateVersions(db: Db, store: Store, request: VersionReq
       }),
     )
   }
-  void catalog
   return created
 }
 

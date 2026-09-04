@@ -9,6 +9,7 @@ import { directionFrom, listCompetitors } from '../agent/angles.ts'
 import { imageModels, PRESETS } from '../agent/images.ts'
 import { readBrief } from '../agent/copy.ts'
 import { latestResearch } from '../agent/research.ts'
+import { catalog } from '../agent/models.ts'
 
 /**
  * The growth pages: ads, domains, avatars, competitor angles, image re-shoots.
@@ -40,6 +41,10 @@ function productOptions(ctx: Ctx, selected = ''): string {
   return listProducts(ctx.db, ctx.store.id, { limit: 200 })
     .map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === selected ? 'selected' : ''}>${escapeHtml(product.title)}</option>`)
     .join('')
+}
+
+function textModelOptions(): string {
+  return `<option value="">Store default</option>${catalog().map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}`
 }
 
 export function avatarOptions(ctx: Ctx, selected = ''): string {
@@ -90,6 +95,7 @@ export async function adsPage(ctx: Ctx, query: { q?: string; country?: string })
     <form method="post" action="/admin/ads/draft" class="card"><h2>Draft ads</h2>
       <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="productId">${productOptions(ctx)}</select></div>
         <div class="field" style="flex:1"><label>Platform</label><select name="platform">${PLATFORMS.map((platform) => `<option value="${platform.id}">${escapeHtml(platform.name)}</option>`).join('')}</select></div></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
       <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${AD_FORMATS.map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.id}"> ${escapeHtml(format.name)}</label>`).join('')}</div></div>
       <div class="row"><div class="field" style="flex:2"><label>Avatar — who this is written to</label><select name="avatarId">${avatarOptions(ctx)}</select></div><div class="field" style="flex:1"><label>How many</label><input name="count" value="3"></div></div>
       <div class="field"><label>Direction — free-form. "urgent", "premium", "for coaches", "focus on the repair guarantee", "say \"built to order\"".</label><textarea name="direction" rows="2" placeholder="Blunt, for people who have bought the cheap ones twice, focus on the wrist, say &quot;repaired for life&quot;"></textarea></div>

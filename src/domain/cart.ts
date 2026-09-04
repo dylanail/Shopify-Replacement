@@ -3,7 +3,7 @@ import { id } from '../lib/ids.ts'
 import { bundleFor, tierFor } from './bundles.ts'
 import { getProduct, getVariant } from './catalog.ts'
 import { applyPromotions } from './promotions.ts'
-import { defaultRegion, getRegion, rateFor } from './regions.ts'
+import { convertCents, defaultRegion, getRegion, rateFor } from './regions.ts'
 import type { Address, LineItem, Totals } from './types.ts'
 
 export type CheckoutDraft = { email?: string; name?: string; phone?: string; address?: Address; marketing?: boolean }
@@ -45,10 +45,10 @@ export function getCart(db: Db, storeId: string, cartId: string): Cart | null {
   return row ? rowToCart(row) : null
 }
 
-export function createCart(db: Db, storeId: string): Cart {
+export function createCart(db: Db, storeId: string, regionId?: string): Cart {
   const cartId = id('cart')
   const timestamp = now()
-  const region = defaultRegion(db, storeId)
+  const region = regionId ? getRegion(db, storeId, regionId) : defaultRegion(db, storeId)
   db.insert('carts', {
     id: cartId,
     store_id: storeId,
@@ -61,6 +61,14 @@ export function createCart(db: Db, storeId: string): Cart {
     updated_at: timestamp,
   })
   return getCart(db, storeId, cartId) as Cart
+}
+
+export function setCartRegion(db: Db, storeId: string, cartId: string, regionId: string): Cart {
+  const cart = getCart(db, storeId, cartId)
+  const region = getRegion(db, storeId, regionId)
+  if (!cart || !region) throw new Error('No such cart or region')
+  db.update('carts', cart.id, { region_id: region.id, shipping_option_id: '', updated_at: now() })
+  return getCart(db, storeId, cart.id) as Cart
 }
 
 export function addToCart(db: Db, storeId: string, cartId: string, variantId: string, quantity = 1, source?: string): Cart {
@@ -167,10 +175,14 @@ export function applyCode(db: Db, storeId: string, cartId: string, code: string)
 export function totals(db: Db, storeId: string, cart: Cart, opts: { isFirstOrder?: boolean } = {}): Totals {
   const region = cart.regionId ? getRegion(db, storeId, cart.regionId) : defaultRegion(db, storeId)
   const currency = region?.currency ?? 'USD'
-  const subtotalCents = cart.items.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
-  const promo = applyPromotions(db, storeId, cart.items, {
+  const sourceCurrency = db.one<{ currency: string }>('SELECT currency FROM stores WHERE id = ?', storeId)?.currency ?? 'USD'
+  const localizedItems = cart.items.map((item) => ({ ...item, unitCents: convertCents(item.unitCents, region, sourceCurrency) }))
+  const subtotalCents = localizedItems.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
+  const promo = applyPromotions(db, storeId, localizedItems, {
     code: cart.discountCode,
     subtotalCents,
+    regionId: region?.id,
+    currencyRate: convertCents(100, region, sourceCurrency) / 100,
     ...(opts.isFirstOrder === undefined ? {} : { isFirstOrder: opts.isFirstOrder }),
   })
   const discounted = Math.max(0, subtotalCents - promo.discountCents)

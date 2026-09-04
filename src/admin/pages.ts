@@ -8,12 +8,11 @@ import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
 import { listRegions } from '../domain/regions.ts'
 import { environment, type Store } from '../control/stores.ts'
-import { listTeam } from '../control/auth.ts'
-import { listAudit } from '../control/todos.ts'
+import { listAudit, listTodos } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
 import { listInstalled } from '../control/plugins.ts'
 import { catalog, resolvedModels } from '../agent/models.ts'
-import { BENCHMARK, funnel, kpis, liveVisitors, recentEvents, revenueSeries } from '../analytics/events.ts'
+import { attributionReport, BENCHMARK, funnel, kpis, liveVisitors, recentEvents, revenueSeries } from '../analytics/events.ts'
 import { listSends } from '../email/send.ts'
 import { TEMPLATES } from '../email/templates.ts'
 import { listSeoPages } from '../seo/schema.ts'
@@ -26,19 +25,29 @@ import { getInstalled, hasCredentials } from '../control/plugins.ts'
 import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
+import { listExperiments, type Experiment } from '../analytics/experiments.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
-import { renderArtifact } from './shell.ts'
+import { renderArtifact, uiIcon, type IconName } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
 import { listCustomBlocks } from '../pages/custom-blocks.ts'
-import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
+import { seventeenTrackConfigured } from '../shipping/seventeen-track.ts'
+import { domainsFor } from '../control/domains.ts'
+import { listFlows, recentFlowDeliveries } from '../email/flows.ts'
+import { serverEventSummary } from '../analytics/server-events.ts'
+import { listAssistantQueue } from '../agent/queue.ts'
+import { listStoreMedia, storeCoverImage } from '../control/media.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
 
 const pct = (value: number) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+
+function textModelOptions(): string {
+  return `<option value="">Store default</option>${catalog().map((entry) => `<option value="${entry.provider}:${escapeHtml(entry.model)}" ${entry.available ? '' : 'disabled'}>${escapeHtml(entry.name)}${entry.available ? '' : ' (no key)'}</option>`).join('')}`
+}
 
 function kpiRow(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d') {
   const stats = kpis(ctx.db, ctx.store.id, range)
@@ -65,42 +74,92 @@ function flash(ctx: Ctx): string {
 /* ------------------------------------------------------------------ dashboard */
 
 export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string {
-  const series = revenueSeries(ctx.db, ctx.store.id, 14)
-  const peak = Math.max(1, ...series.map((point) => point.revenue))
-  const orders = listOrders(ctx.db, ctx.store.id, { limit: 6 })
+  const noun = ctx.store.kind === 'funnel' ? 'Funnel' : 'Store'
+  const days = range === '24h' ? 2 : range === '7d' ? 7 : range === '30d' ? 30 : 90
+  const series = revenueSeries(ctx.db, ctx.store.id, days)
+  const stats = kpis(ctx.db, ctx.store.id, range)
+  const profit = profitReport(ctx.db, ctx.store.id, days)
+  const stages = funnel(ctx.db, ctx.store.id, range)
+  const live = liveVisitors(ctx.db, ctx.store.id, 30) as Array<{ city: string; country: string; path: string }>
+  const orders = listOrders(ctx.db, ctx.store.id, { limit: 8 })
+  const allOrders = listOrders(ctx.db, ctx.store.id, { limit: 500 })
   const low = lowStock(ctx.db, ctx.store.id, 5) as Array<{ product_title: string; title: string; inventory: number }>
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 1000, includeHidden: true })
+  const runningExperiments = listExperiments(ctx.db, ctx.store.id).filter((entry) => ['running', 'ready', 'paused'].includes(entry.status))
+  const todos = listTodos(ctx.db, ctx.store.id).filter((entry) => entry.status !== 'done').slice(0, 4)
+  const pendingOrders = allOrders.filter((order) => order.status !== 'cancelled' && order.fulfillmentStatus === 'unfulfilled').length
+  const tiles: Array<[string, string, number, IconName]> = [
+    ['Total sales', format(stats.revenueCents, ctx.store.currency), stats.deltas.revenueCents ?? 0, 'profit'],
+    ['Orders', String(stats.orders), stats.deltas.orders ?? 0, 'orders'],
+    ['Visitors', String(stats.sessions), stats.deltas.sessions ?? 0, 'customers'],
+    ['Conversion rate', `${(stats.conversionRate * 100).toFixed(2)}%`, stats.deltas.conversionRate ?? 0, 'funnel'],
+    ['Average order', format(stats.aovCents, ctx.store.currency), stats.deltas.aovCents ?? 0, 'analytics'],
+  ]
   return `${flash(ctx)}
-  <div class="head">
-    <div><h1 class="serif">Hello ${escapeHtml(ctx.userName)}, <em>welcome back.</em></h1>
-      <p class="muted" style="margin:.3rem 0 0">${escapeHtml(ctx.store.brand.slogan ?? ctx.store.name)}</p></div>
-    <form method="get" class="row"><select name="range" onchange="this.form.submit()">
+  <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? `${noun} is live` : `Draft ${noun.toLowerCase()}`}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
+      <p class="muted">${escapeHtml(ctx.store.name)} · ${products.filter((product) => product.status === 'published').length} published products</p></div>
+    <div class="dash-actions"><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/funnels' : '/admin/store'}">${ctx.store.kind === 'funnel' ? 'Edit funnel flow' : 'Customize store'}</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View ${noun.toLowerCase()} ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
       ${(['24h', '7d', '30d', '90d'] as const).map((option) => `<option value="${option}" ${option === range ? 'selected' : ''}>Last ${option}</option>`).join('')}
-    </select></form>
-  </div>
-  ${kpiRow(ctx, range)}
-  <div class="grid2">
-    <div>
-      <div class="preview">
-        <div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div>
-        <iframe src="${escapeHtml(ctx.storeUrl)}" title="Live storefront preview" loading="lazy"></iframe>
-      </div>
-    </div>
-    <div>
-      <div class="card"><h2>Revenue, 14 days</h2>
-        <div class="spark" style="margin-top:.7rem">${series.map((point) => `<i style="height:${Math.max(2, (point.revenue / peak) * 44)}px" title="${point.day}: ${format(point.revenue, ctx.store.currency)}"></i>`).join('')}</div>
-        <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">${series[0]?.day} → ${series.at(-1)?.day}</p>
-      </div>
-      <div class="card"><h2>Recent orders</h2>
-        <table class="data" style="margin-top:.5rem">${orders.length ? orders
-          .map((order) => `<tr><td><a href="/admin/orders/${escapeHtml(order.id)}">#${order.displayId}</a></td>
-            <td class="muted">${escapeHtml(order.email)}</td><td>${format(order.totalCents, order.currency)}</td>
-            <td><span class="tag ${order.fulfillmentStatus === 'unfulfilled' ? 'warn' : 'ok'}">${order.fulfillmentStatus}</span></td></tr>`)
-          .join('') : '<tr><td class="muted">No orders yet.</td></tr>'}</table>
-      </div>
-      ${low.length ? `<div class="card"><h2>Running low</h2>
-        <table class="data" style="margin-top:.5rem">${low.slice(0, 5).map((row) => `<tr><td>${escapeHtml(row.product_title)}</td><td class="muted">${escapeHtml(row.title)}</td><td>${row.inventory}</td></tr>`).join('')}</table></div>` : ''}
-    </div>
-  </div>`
+    </select></form></div></div>
+  <div class="commerce-kpis">${tiles.map(([label, value, delta, icon]) => `<div class="metric-card"><div class="label"><span>${label}</span>${uiIcon(icon, 16)}</div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
+  <div class="dashboard-grid"><div class="card dash-card"><div class="dash-card-head"><div><h2>Total sales</h2><div class="dash-total">${format(stats.revenueCents, ctx.store.currency)}</div><div class="muted" style="font-size:11px">${stats.orders} orders · net profit ${format(profit.profitCents, ctx.store.currency)}</div></div><a class="btn" href="/admin/analytics">View report</a></div>${salesChart(series)}<div class="chart-labels"><span>${series[0]?.day ?? ''}</span><span>${series[Math.floor(series.length / 2)]?.day ?? ''}</span><span>${series.at(-1)?.day ?? ''}</span></div></div>
+    <div class="card dash-card pulse-card"><div class="eyebrow" style="color:#bcd4f2">Store pulse</div><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:.75rem"><div><div class="pulse-number">${live.length}</div><div class="muted">visitors right now</div></div>${uiIcon('analytics', 23)}</div><div class="pulse-list"><a href="/admin/orders"><span>Orders to fulfill</span><strong>${pendingOrders}</strong></a><a href="/admin/cro"><span>Active experiments</span><strong>${runningExperiments.length}</strong></a><a href="/admin/products"><span>Low-stock variants</span><strong>${low.length}</strong></a></div></div></div>
+  <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><div><h2>Conversion funnel</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">From first visit through purchase</p></div><a class="btn" href="/admin/cro">Run an experiment</a></div><div class="funnel-compact">${stages.map((stage) => `<div class="funnel-line"><span>${escapeHtml(stage.stage)}</span><div class="track"><i style="width:${Math.max(stage.count ? 2 : 0, stage.share * 100)}%"></i></div><strong>${stage.count}</strong></div>`).join('')}</div></div>
+    <div class="card dash-card"><div class="dash-card-head"><h2>Next things to do</h2><a href="/admin/build" class="muted" style="font-size:11px">See plan</a></div><div class="pulse-list" style="margin-top:.55rem">${todos.length ? todos.map((todo) => `<a href="/admin${escapeHtml(todo.href)}" style="background:#fafafa;color:var(--ink);border-color:var(--line)"><span>${escapeHtml(todo.label)}</span><strong>→</strong></a>`).join('') : '<div class="dash-empty">Setup is clear. Keep an eye on orders and experiments.</div>'}</div></div></div>
+  <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><h2>Recent orders</h2><a class="btn" href="/admin/orders">View all</a></div><div class="order-list">${orders.length ? orders.slice(0, 6).map((order) => `<a class="order-item" href="/admin/orders/${escapeHtml(order.id)}"><span class="order-badge">#${order.displayId}</span><span><strong>${escapeHtml(order.email)}</strong><small>${order.items.length} item${order.items.length === 1 ? '' : 's'} · ${order.createdAt.slice(0, 10)}</small></span><span style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong><small>${escapeHtml(order.fulfillmentStatus)}</small></span></a>`).join('') : '<div class="dash-empty">No orders yet. Your first one will appear here.</div>'}</div></div>
+    <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products">${uiIcon('products', 17)}<strong>Add product</strong></a><a href="/admin/pages">${uiIcon('pages', 17)}<strong>Build page</strong></a><a href="/admin/ads">${uiIcon('ads', 17)}<strong>Draft ads</strong></a><a href="/admin/cro">${uiIcon('experiment', 17)}<strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
+  <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>${noun} preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} ${noun.toLowerCase()}.</p></div><a class="btn" href="${ctx.store.kind === 'funnel' ? '/admin/pages' : '/admin/store'}">Open builder</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="${noun} preview" loading="lazy"></iframe></div></div>`
+}
+
+function salesChart(series: Array<{ day: string; revenue: number; orders: number }>): string {
+  const width = 760
+  const height = 170
+  const pad = 8
+  const peak = Math.max(1, ...series.map((point) => point.revenue))
+  const points = series.map((point, index) => {
+    const x = pad + (index / Math.max(1, series.length - 1)) * (width - pad * 2)
+    const y = height - pad - (point.revenue / peak) * (height - pad * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  const firstX = points[0]?.split(',')[0] ?? String(pad)
+  const lastX = points.at(-1)?.split(',')[0] ?? String(width - pad)
+  return `<svg class="sales-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Sales over time"><defs><linearGradient id="sales-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8fd9" stop-opacity=".28"/><stop offset="1" stop-color="#5b8fd9" stop-opacity="0"/></linearGradient></defs>${[32, 72, 112, 152].map((y) => `<line class="gridline" x1="0" y1="${y}" x2="${width}" y2="${y}"/>`).join('')}<path class="area" d="M ${firstX} ${height} L ${points.join(' L ')} L ${lastX} ${height} Z"/><polyline class="line" points="${points.join(' ')}"/></svg>`
+}
+
+/* --------------------------------------------------------------- experiments */
+
+export function experimentsPage(ctx: Ctx): string {
+  const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
+  const experiments = listExperiments(ctx.db, ctx.store.id)
+  const productById = new Map(products.map((product) => [product.id, product]))
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">Autonomous CRO</div><h1 class="serif">Experiments</h1>
+    <p class="muted" style="margin:.25rem 0 0;max-width:720px">Stable visitor assignment, Bayesian decisions, and guardrails against small-sample winners. A winner can promote itself; every promotion keeps the exact previous traffic split for rollback.</p></div></div>
+  <div class="grid2"><div>
+    ${experiments.length ? experiments.map((experiment) => experimentCard(ctx, experiment, productById.get(experiment.surface.slice(4))?.handle)).join('') : `<div class="card cro-empty"><div class="cro-orb">◒</div><h2>No experiments running</h2><p class="muted">Generate a few product-page angles below. Traffic stays on the same version for each visitor, and Amboras waits for enough purchases before choosing.</p></div>`}
+  </div><div>
+    <form method="post" action="/admin/cro/generate" class="card cro-launch"><div class="eyebrow">New experiment</div><h2>Generate and test page angles</h2>
+      <div class="field" style="margin-top:.8rem"><label>Product</label><select name="productId" required><option value="">Choose a product</option>${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')}</select></div>
+      <div class="field"><label>Hypothesis</label><textarea name="hypothesis" rows="3" placeholder="A benefit-led page will convert better than a story-led page."></textarea></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
+      <div class="row"><div class="field" style="flex:1"><label>Versions</label><select name="count"><option value="2">2 versions</option><option value="3" selected>3 versions</option><option value="4">4 versions</option></select></div>
+        <div class="field" style="flex:1"><label>Minimum views / version</label><input type="number" name="minViews" value="75" min="25" step="25"></div></div>
+      <label class="row cro-check"><input type="checkbox" name="autoPromote" value="true" checked><span><strong>Auto-promote a winner</strong><small>Only after ≥95% probability to win, the minimum traffic, and enough purchases.</small></span></label>
+      <button class="btn primary" type="submit" ${products.length ? '' : 'disabled'}>Generate versions &amp; start test</button>
+      ${products.length ? '' : '<p class="muted" style="font-size:12px">Publish a product first.</p>'}</form>
+    <div class="card"><h2>How decisions work</h2><div class="cro-rule"><b>1</b><span><strong>Split</strong><small>Visitors are deterministically assigned, so they never bounce between page angles.</small></span></div><div class="cro-rule"><b>2</b><span><strong>Learn</strong><small>Each purchase updates a Beta-Bernoulli posterior instead of trusting a noisy point estimate.</small></span></div><div class="cro-rule"><b>3</b><span><strong>Promote or roll back</strong><small>The winner gets 100% traffic. One click restores the exact prior weights.</small></span></div></div>
+  </div></div>`
+}
+
+function experimentCard(ctx: Ctx, experiment: Experiment, productHandle?: string): string {
+  const rows = experiment.results.variants ?? []
+  const winner = rows.find((entry) => entry.pageId === experiment.results.winnerId)
+  const statusClass = experiment.status === 'promoted' ? 'ok' : experiment.status === 'ready' ? 'warn' : experiment.status === 'rolled_back' ? '' : 'live'
+  return `<div class="card cro-card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><span class="tag ${statusClass}">${experiment.status.replace('_', ' ')}</span><h2 style="margin-top:.5rem">${escapeHtml(experiment.name)}</h2><p class="muted" style="font-size:12px;margin:.2rem 0 0">${escapeHtml(experiment.hypothesis)}</p></div><div class="cro-actions">
+    ${['running', 'ready', 'paused'].includes(experiment.status) ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/evaluate"><button class="btn" type="submit">Recalculate</button></form><form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/pause"><button class="btn" type="submit">${experiment.status === 'paused' ? 'Resume' : 'Pause'}</button></form>` : ''}
+    ${experiment.status === 'ready' && winner ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/promote"><button class="btn primary" type="submit">Promote winner</button></form>` : ''}
+    ${experiment.status === 'promoted' ? `<form method="post" action="/admin/cro/${escapeHtml(experiment.id)}/rollback"><button class="btn" type="submit">Roll back</button></form>` : ''}</div></div>
+    ${rows.length ? `<div class="cro-variants">${rows.map((row) => `<div class="cro-variant ${row.pageId === experiment.results.winnerId ? 'leader' : ''}"><div class="row" style="justify-content:space-between"><strong>${escapeHtml(row.title.replace(/^[^—]+—\s*/, ''))}</strong><span>${(row.probabilityBest * 100).toFixed(1)}% to win</span></div><div class="prob"><i style="width:${Math.max(1, row.probabilityBest * 100)}%"></i></div><div class="cro-metrics"><span><b>${row.views}</b> visits</span><span><b>${row.purchases}</b> orders</span><span><b>${(row.conversion * 100).toFixed(1)}%</b> CVR</span><span class="${row.upliftVsControl >= 0 ? 'up' : 'down'}"><b>${pct(row.upliftVsControl)}</b> vs control</span></div>${productHandle ? `<a href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(productHandle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">Preview ↗</a>` : ''}</div>`).join('')}</div>` : `<p class="muted" style="font-size:12px;margin-top:.8rem">No observations yet. Recalculate after traffic arrives.</p>`}
+    <div class="cro-foot"><span>${escapeHtml(experiment.results.reason ?? `Waiting for ${experiment.results.minViews} views per version.`)}</span>${winner ? `<strong>Leader: ${escapeHtml(winner.title.replace(/^[^—]+—\s*/, ''))}</strong>` : ''}</div></div>`
 }
 
 /* ------------------------------------------------------------------- products */
@@ -235,6 +294,7 @@ function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
         <div class="field" style="flex:1"><label>How many (if no formats picked)</label><input name="count" value="3"></div></div>
       <div class="field"><label>Formats (leave empty to let the direction choose)</label><div class="row" style="gap:.4rem .8rem;font-size:12px">${[...PDP_FORMATS.map((format) => ({ ...format, group: 'pdp' })), ...ADVERTORIAL_FORMATS.map((format) => ({ ...format, group: 'advertorial' }))].map((format) => `<label class="row" style="gap:.3rem" title="${escapeHtml(format.description)}"><input type="checkbox" name="formats" value="${format.group}:${format.id}"> ${escapeHtml(format.name)} <span class="muted">(${format.group})</span></label>`).join('')}</div></div>
       <div class="field"><label>Avatar — fills audience, angle and tone the direction leaves blank</label><select name="avatarId">${avatarOptions(ctx)}</select></div>
+      <div class="field"><label>Text model for this generation</label><select name="model">${textModelOptions()}</select></div>
       <div class="field"><label>Direction — free-form. Tone words are read (urgent, premium, warm, clinical, playful, blunt); "quoted phrases" must appear; "for gift buyers" sets the audience; "focus on durability" sets the angle.</label><textarea name="direction" rows="2" placeholder="Premium and understated, for people who train seriously, focus on the repair guarantee"></textarea></div>
       <label class="row" style="font-size:12px;margin-bottom:.6rem"><input type="checkbox" name="publish" value="true"> Publish immediately</label>
       <button class="btn primary" type="submit">Generate</button></form></div>`
@@ -322,11 +382,20 @@ export function collectionsPage(ctx: Ctx): string {
 
 export function promotionsPage(ctx: Ctx): string {
   const promotions = listPromotions(ctx.db, ctx.store.id)
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Promotions</h1></div>
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 200 })
+  const regions = listRegions(ctx.db, ctx.store.id)
+  const productIds = products.map((product) => `${product.title}: ${product.id}`).join(' · ')
+  return `${flash(ctx)}<div class="head"><div><h1>Discounts</h1><p class="muted" style="margin:.25rem 0 0">Codes, automatic offers, cross-product BOGO, mix-and-match and fixed-price bundles.</p></div></div>
+  <details class="card create-panel"><summary><strong>Create promotion</strong><span class="muted">Advanced rules</span></summary><form method="post" action="/admin/promotions" style="margin-top:1rem">
+    <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="title" required placeholder="Build your own kit"></div><div class="field" style="flex:1"><label>Type</label><select name="kind"><option value="percentage">Percentage off</option><option value="fixed">Fixed amount off</option><option value="free_shipping">Free shipping</option><option value="bogo">Buy X, get Y</option><option value="mix_match">Mix and match</option><option value="fixed_bundle">Fixed-price bundle</option><option value="tiered">Quantity tiers</option></select></div><div class="field" style="width:120px"><label>Value</label><input type="number" min="0" name="value" value="10"></div></div>
+    <div class="row"><div class="field" style="flex:1"><label>Code (blank for automatic)</label><input name="code" placeholder="KIT20"></div><label class="check"><input type="checkbox" name="automatic" value="true"> Automatic</label><label class="check"><input type="checkbox" name="combinable" value="true"> Can combine</label><label class="check"><input type="checkbox" name="firstOrderOnly" value="true"> First order only</label></div>
+    <div class="row"><div class="field" style="flex:1"><label>Eligible product IDs</label><input name="productIds" placeholder="Comma separated"></div><div class="field" style="flex:1"><label>Buy product IDs</label><input name="buyProductIds" placeholder="For cross-product BOGO"></div><div class="field" style="flex:1"><label>Get product IDs</label><input name="getProductIds" placeholder="Reward products"></div></div>
+    <div class="row"><div class="field"><label>Minimum subtotal</label><input type="number" min="0" name="minSubtotalCents" placeholder="10000"></div><div class="field"><label>Minimum quantity</label><input type="number" min="0" name="minQuantity"></div><div class="field"><label>Buy qty</label><input type="number" min="1" name="buyQuantity"></div><div class="field"><label>Get qty</label><input type="number" min="1" name="getQuantity"></div><div class="field"><label>Distinct products</label><input type="number" min="1" name="requiredDistinctProducts"></div><div class="field"><label>Bundle price</label><input type="number" min="0" name="bundlePriceCents"></div><div class="field"><label>Use limit</label><input type="number" min="1" name="maxUses"></div><div class="field"><label>Market</label><select name="regionId"><option value="">All markets</option>${regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.name)}</option>`).join('')}</select></div></div>
+    <p class="muted" style="font-size:11px">Product reference: ${escapeHtml(productIds || 'Add products first.')}</p><button class="btn primary" type="submit">Create promotion</button></form></details>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Promotion</th><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Used</th><th></th></tr></thead><tbody>
   ${promotions.length ? promotions.map((promotion) => `<tr><td>${escapeHtml(promotion.title)}</td>
     <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
-    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : `${promotion.value}%`}</td>
+    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'fixed_bundle' ? format(promotion.rules.bundlePriceCents ?? promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : promotion.kind === 'tiered' ? `${promotion.rules.tiers?.length ?? 0} tiers` : `${promotion.value}%`}</td>
     <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
     <td style="text-align:right">${promotion.status === 'active' ? `<form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/disable"><button class="btn">Disable</button></form>` : ''}</td></tr>`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
@@ -340,8 +409,10 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
   const visitors = liveVisitors(ctx.db, ctx.store.id) as Array<{ city: string; country: string; path: string; last_seen: string }>
   const events = recentEvents(ctx.db, ctx.store.id, 14) as Array<{ type: string; path: string; amount_cents: number; city: string; created_at: string }>
   const purchase = stages.at(-1)?.share ?? 0
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Analytics</h1>
-    <p class="muted" style="margin:.25rem 0 0">First-party. No cookie, no pixel, no third party — sessions are an HMAC of address and agent that rotates daily.</p></div>
+  const attribution = attributionReport(ctx.db, ctx.store.id, range, 'last')
+  const serverEvents = serverEventSummary(ctx.db, ctx.store.id)
+  return `${flash(ctx)}<div class="head"><div><h1>Analytics</h1>
+    <p class="muted" style="margin:.25rem 0 0">First-party sessions, last-touch revenue attribution and server-event delivery health.</p></div>
     <form method="get"><select name="range" onchange="this.form.submit()">${(['24h', '7d', '30d', '90d'] as const)
       .map((option) => `<option ${option === range ? 'selected' : ''}>${option}</option>`)
       .join('')}</select></form></div>
@@ -363,6 +434,8 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
       <td>${event.amount_cents ? format(event.amount_cents, ctx.store.currency) : '—'}</td><td class="muted">${escapeHtml(event.city || '—')}</td>
       <td class="muted">${event.created_at.slice(11, 19)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1.2rem">No traffic recorded yet.</td></tr>'}
     </tbody></table></div>
+  <div class="grid2" id="attribution"><div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Revenue by last touch</h2><p class="muted" style="font-size:11px;margin:.2rem 0 0">UTMs, click IDs and referrers captured on the storefront.</p></div><table class="data"><thead><tr><th>Channel</th><th>Campaign</th><th>Orders</th><th>Revenue</th><th>ROAS</th></tr></thead><tbody>${attribution.map((row) => `<tr><td><strong>${escapeHtml(row.channel)}</strong></td><td class="muted">${escapeHtml(row.campaign)}</td><td>${row.orders}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td>${row.roas === null ? '—' : `${row.roas}×`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1rem">Attribution appears with the next order.</td></tr>'}</tbody></table></div>
+    <div class="card"><h2>Server-side event delivery</h2><p class="muted" style="font-size:11.5px">Meta CAPI and TikTok Events API are retried from a durable outbox.</p>${serverEvents.map((row) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.55rem 0"><span><strong>${escapeHtml(row.provider)}</strong> · ${escapeHtml(row.status)}</span><span class="tag ${row.status === 'sent' ? 'ok' : row.status === 'failed' ? 'bad' : 'warn'}">${row.count}</span></div>`).join('') || '<div class="notice" style="margin-top:.8rem">Connect a pixel and server token in Settings to start delivery.</div>'}</div></div>
   ${behaviourCard(ctx, range)}`
 }
 
@@ -441,7 +514,13 @@ export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): st
 export function marketingPage(ctx: Ctx): string {
   const sends = listSends(ctx.db, ctx.store.id, 12) as Array<{ id: string; template: string; recipient: string; subject: string; status: string }>
   const pages = listSeoPages(ctx.db, ctx.store.id) as Array<{ path: string; title: string; description: string; keyword: string }>
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Email &amp; search</h1></div>
+  const flows = listFlows(ctx.db, ctx.store.id)
+  const deliveries = recentFlowDeliveries(ctx.db, ctx.store.id, 12)
+  return `${flash(ctx)}<div class="head"><div><h1>Marketing</h1><p class="muted" style="margin:.25rem 0 0">Lifecycle flows, customer messaging and search visibility.</p></div></div>
+  <div class="section-title"><div><h2>Automations</h2><p class="muted">Consent-aware and idempotent: each trigger sends once.</p></div></div>
+  <div class="flow-grid">${flows.map((flow) => `<details class="card flow-card"><summary><span class="flow-icon">${flow.trigger === 'welcome' ? '01' : flow.trigger === 'abandoned_cart' ? '02' : flow.trigger === 'post_purchase' ? '03' : '04'}</span><span><strong>${escapeHtml(flow.name)}</strong><small>${escapeHtml(flow.trigger.replaceAll('_', ' '))} · ${flow.delayHours ? `${flow.delayHours}h delay` : 'immediately'}</small></span><span class="tag ${flow.status === 'active' ? 'ok' : ''}">${flow.status}</span></summary>
+    <form method="post" action="/admin/marketing/flows/${escapeHtml(flow.id)}" style="margin-top:1rem"><input type="hidden" name="name" value="${escapeHtml(flow.name)}"><div class="row"><div class="field" style="width:110px"><label>Delay hours</label><input type="number" min="0" name="delayHours" value="${flow.delayHours}"></div><div class="field" style="flex:1"><label>Status</label><select name="status"><option value="active" ${flow.status === 'active' ? 'selected' : ''}>Active</option><option value="paused" ${flow.status === 'paused' ? 'selected' : ''}>Paused</option></select></div></div><div class="field"><label>Subject</label><input name="subject" value="${escapeHtml(flow.subject)}" required></div><div class="field"><label>Email body</label><textarea name="body" rows="6" required>${escapeHtml(flow.body)}</textarea></div><div class="row"><button class="btn primary" type="submit">Save flow</button><span class="muted" style="font-size:11px">${flow.sentCount} sent</span></div></form>
+    <form method="post" action="/admin/marketing/flows/${escapeHtml(flow.id)}/run" style="margin-top:.5rem"><button class="btn" type="submit">Run eligible customers now</button></form></details>`).join('')}</div>
   <div class="grid2"><div>
     <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Send log</h2></div>
       <table class="data"><thead><tr><th>Template</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
@@ -457,6 +536,7 @@ export function marketingPage(ctx: Ctx): string {
         || '<tr><td colspan="4" class="muted" style="padding:1.2rem">No pages tracked yet.</td></tr>'}</tbody></table></div>
   </div>
   <div>
+    <div class="card"><h2>Flow activity</h2>${deliveries.map((delivery) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.45rem 0"><span><strong style="font-size:12px">${escapeHtml(delivery.flow_name)}</strong><small class="muted" style="display:block">${escapeHtml(delivery.recipient)}</small></span><span class="tag ${delivery.status === 'sent' ? 'ok' : delivery.status === 'failed' ? 'bad' : ''}">${delivery.status}</span></div>`).join('') || '<p class="muted" style="font-size:12px">No flow messages yet.</p>'}</div>
     <div class="card"><h2>Transactional templates</h2>
       ${TEMPLATES.map((template) => `<div class="row" style="justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--line)">
         <span style="font-size:12.5px">${escapeHtml(template.name)}</span>
@@ -528,35 +608,40 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
 
 export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
-  const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
+  const domains = domainsFor(ctx.db, ctx.store.id)
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     ${modelsCard(ctx)}
-    <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
-      ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
-        || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
-    <div class="card"><h2>Regions and shipping</h2>
-      ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
-        <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
-        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency)}` : ''}</div>`).join('')}
-      </div>`).join('')}</div>
-    <div class="card"><h2>Team</h2>
-      <form method="post" action="/admin/team" class="row" style="margin:.6rem 0">
-        <input name="email" type="email" placeholder="teammate@example.com" style="flex:1">
-        <select name="role" style="width:110px"><option>member</option><option>admin</option></select>
-        <button class="btn primary">Invite</button></form>
-      ${team.map((member) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.4rem 0">
-        <span>${escapeHtml(member.email)}</span><span class="tag">${escapeHtml(member.role)} · ${escapeHtml(member.status)}</span></div>`).join('')
-        || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
+    ${pixelsCard(ctx)}
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h2>Tracking &amp; backup</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Customer tracking pages use cached 17TRACK carrier events. Export a complete store backup whenever you want.</p></div><span class="tag ${seventeenTrackConfigured() ? 'ok' : 'warn'}">17TRACK ${seventeenTrackConfigured() ? 'connected' : 'needs key'}</span></div>
+      <div class="row" style="margin-top:.8rem"><a class="btn primary" href="/admin/settings/export">Download JSON backup</a><span class="muted" style="font-size:11.5px">Products, orders, pages, analytics, experiments and settings; login sessions excluded.</span></div>
+      ${seventeenTrackConfigured() ? '' : '<p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Set AMBORAS_17TRACK_API_KEY on the server. Carrier links and estimated delivery still work without it.</p>'}</div>
+    <div class="card"><h2>Markets, languages &amp; currencies</h2><p class="muted" style="font-size:12px">Product prices are stored in ${escapeHtml(ctx.store.currency)} and converted at checkout with the rate you control.</p>
+      ${regions.map((region) => `<details style="border-top:1px solid var(--line);padding:.6rem 0"><summary class="row" style="justify-content:space-between;cursor:pointer"><span><strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.locale)} · ${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span></span><span class="tag ${region.isDefault ? 'ok' : ''}">${region.isDefault ? 'default' : `× ${region.exchangeRate}`}</span></summary><form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" value="${escapeHtml(region.name)}"></div><div class="field"><label>Countries</label><input name="countries" value="${escapeHtml(region.countries.join(', '))}"></div><div class="field"><label>Locale</label><input name="locale" value="${escapeHtml(region.locale)}"></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="${escapeHtml(region.currency)}"></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" min="0.000001" value="${region.exchangeRate}"></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="${region.taxRate * 100}"></div></div><label class="check"><input type="checkbox" name="isDefault" value="true" ${region.isDefault ? 'checked' : ''}> Default market</label><button class="btn primary" type="submit">Save market</button></form>
+        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency, region.locale)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency, region.locale)}` : ''}</div>`).join('')}<form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}/shipping" class="row" style="margin-top:.65rem"><div class="field" style="flex:1;margin:0"><label>Shipping option</label><input name="name" placeholder="Standard shipping" required></div><div class="field" style="width:110px;margin:0"><label>Charge</label><input type="number" min="0" name="amountCents" placeholder="900" required></div><div class="field" style="width:120px;margin:0"><label>Free over</label><input type="number" min="0" name="freeAboveCents" placeholder="20000"></div><button class="btn" type="submit">Add rate</button></form></details>`).join('')}
+      <details class="create-panel" style="margin-top:.5rem"><summary><strong>Add market</strong></summary><form method="post" action="/admin/settings/regions" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" placeholder="Europe" required></div><div class="field"><label>Countries</label><input name="countries" placeholder="DE, FR, ES" required></div><div class="field"><label>Locale</label><input name="locale" value="de-DE" required></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="EUR" required></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" value="0.92" required></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="0"></div></div><button class="btn primary" type="submit">Add market</button></form></details></div>
   </div>
   <div>
+    ${domains.length ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Existing domains</h2><a class="btn" href="/admin/domains">Manage</a></div>${domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span></div>`).join('')}</div>` : ''}
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
         <span class="tag ${entry.actor_type === 'agent' ? 'warn' : ''}">${escapeHtml(entry.actor_type)}</span>
         ${escapeHtml(entry.action)} <span class="muted">${entry.created_at.slice(11, 19)}</span></div>`).join('')}</div>
   </div></div>`
+}
+
+function pixelsCard(ctx: Ctx): string {
+  const pixels = [
+    { id: 'ga4', name: 'Google Analytics 4', key: 'measurementId', label: 'Measurement ID', placeholder: 'G-ABC123', current: getInstalled(ctx.db, ctx.store.id, 'ga4')?.settings.measurementId, server: false },
+    { id: 'meta-pixel', name: 'Meta Pixel + CAPI', key: 'pixelId', label: 'Pixel ID', placeholder: '123456789012345', current: getInstalled(ctx.db, ctx.store.id, 'meta-pixel')?.settings.pixelId, server: true },
+    { id: 'tiktok-pixel', name: 'TikTok Pixel + Events API', key: 'pixelId', label: 'Pixel ID', placeholder: 'CABC123456789', current: getInstalled(ctx.db, ctx.store.id, 'tiktok-pixel')?.settings.pixelId, server: true },
+  ]
+  return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Customer event pixels &amp; server APIs</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Browser pixels plus retried server events. Meta and TikTok share purchase event IDs with the browser for deduplication.</p></div><span class="tag">${pixels.filter((pixel) => pixel.current).length}/3 connected</span></div>${pixels.map((pixel) => {
+    const serverConnected = pixel.server && hasCredentials(ctx.db, ctx.store.id, pixel.id)
+    return `<form method="post" action="/admin/settings/pixels/${pixel.id}" style="border-top:1px solid var(--line);padding:.7rem 0"><div class="row" style="align-items:flex-end"><div style="width:170px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current && (!pixel.server || serverConnected) ? 'ok' : pixel.current ? 'warn' : ''}" style="margin-top:.25rem">${pixel.current ? pixel.server ? serverConnected ? 'browser + server' : 'browser only' : 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div>${pixel.server ? `<div class="field" style="flex:1;margin:0"><label>Server API token</label><input type="password" name="accessToken" value="" placeholder="${serverConnected ? 'Saved — leave blank to keep' : 'Paste access token'}"></div>` : ''}<button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></div></form>`
+  }).join('')}</div>`
 }
 
 /** Which model writes what for this store. */
@@ -599,6 +684,7 @@ export function profitPage(ctx: Ctx, days: number): string {
 
 export function funnelsPage(ctx: Ctx): string {
   const funnels = listFunnels(ctx.db, ctx.store.id)
+  const standalone = ctx.store.kind === 'funnel'
   const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 100 })
   const pages = listPages(ctx.db, ctx.store.id)
   const variantOptions = (selected?: string) => `<option value="">— pick automatically —</option>` + products.flatMap((product) => product.variants.map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === selected ? 'selected' : ''}>${escapeHtml(product.title)} — ${escapeHtml(variant.title)} (${format(variant.priceCents, ctx.store.currency)})</option>`)).join('')
@@ -623,7 +709,8 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${standalone ? 'Funnel asset' : 'Store campaign'}</div><h1 class="serif">${standalone ? 'Funnel flow' : 'Sales funnels'}</h1><p class="muted" style="margin:.25rem 0 0">${standalone ? 'A focused Funnelish-style conversion path, separate from a catalog store.' : 'Optional conversion paths attached to this full store. For a standalone Funnelish build, create a Funnel from All Assets.'} Each content step opens in the same AI page builder.</p></div><a class="btn primary" href="/admin/pages">Build a funnel page</a></div>
+  <div class="funnel-path" aria-label="Funnel path"><div><span>1</span><b>Ad traffic</b><small>Campaign link</small></div><i>→</i><div><span>2</span><b>Front door</b><small>Advertorial or quiz</small></div><i>→</i><div><span>3</span><b>PDP / sales page</b><small>The offer and proof</small></div><i>→</i><div><span>4</span><b>Checkout</b><small>Order bump</small></div><i>→</i><div><span>5</span><b>Post-purchase</b><small>Upsell · downsell · thanks</small></div></div>
   <div class="grid2"><div>${funnels.map((funnel) => form(funnel)).join('') || '<div class="card"><p class="muted">No funnels yet. Create one on the right; the seed store has one already if you re-seed.</p></div>'}</div><div>${form()}${funnelTestCard(ctx)}</div></div>`
 }
 
@@ -633,8 +720,9 @@ export function pagesPage(ctx: Ctx): string {
   const pages = listPages(ctx.db, ctx.store.id)
   const products = listProducts(ctx.db, ctx.store.id, { status: 'published', limit: 50 })
   const productOptions = products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.title)}</option>`).join('')
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Pages &amp; funnels</h1>
-    <p class="muted" style="margin:.25rem 0 0">Landing pages, advertorials, offers — built from blocks, written as HTML, or cloned from a page you point at.</p></div></div>
+  const funnel = ctx.store.kind === 'funnel'
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${funnel ? 'Funnel asset' : 'Store asset'}</div><h1 class="serif">${funnel ? 'Funnel pages' : 'Store pages'}</h1>
+    <p class="muted" style="margin:.25rem 0 0">${funnel ? 'Build the advertorial or quiz, sales page, PDP and checkout path as separate editable steps.' : 'Build the home, editorial, campaign and information pages around the full catalog storefront.'} Every page can use blocks, HTML or a cloned reference.</p></div></div>
   <div class="grid3" style="margin-bottom:1.2rem">
     <form method="post" action="/admin/pages/new" class="card"><h2>Start from a template</h2>
       <div class="field" style="margin-top:.6rem"><label>Template</label><select name="template">${PAGE_TEMPLATES.map((template) => `<option value="${escapeHtml(template.key)}" title="${escapeHtml(template.description)}">${escapeHtml(template.name)}</option>`).join('')}</select></div>
@@ -718,7 +806,7 @@ export function paymentsPage(ctx: Ctx): string {
   const connected = Boolean(stripe && hasCredentials(ctx.db, ctx.store.id, 'stripe'))
   const webhookUrl = `${ctx.storeUrl.startsWith('http') ? ctx.storeUrl : '{your store address}'}/webhooks/stripe`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Payments</h1>
-    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes to your Stripe account; the platform fee is billed separately.</p></div>
+    <p class="muted" style="margin:.25rem 0 0">One-page checkout with express buttons, Apple Pay, Google Pay, Link and cards through Stripe. Money goes directly to your Stripe account; Amboras adds no platform fee.</p></div>
     <span class="tag ${connected ? 'ok' : 'warn'}">${connected ? 'Stripe connected' : 'Demo mode — orders place without a charge'}</span></div>
   <div class="grid2"><form method="post" action="/admin/plugins/stripe/settings" class="card"><h2>Stripe keys</h2>
     <div class="field" style="margin-top:.6rem"><label>Publishable key</label><input name="publishableKey" value="${escapeHtml(String(stripe?.settings.publishableKey ?? ''))}" placeholder="pk_live_…" required></div>
@@ -740,27 +828,48 @@ export function paymentsPage(ctx: Ctx): string {
   </div></div>`
 }
 
-/* --------------------------------------------------------------- stores hub */
+/* --------------------------------------------------------------- assets hub */
 
 export function storesPage(ctx: Ctx, stores: Store[]): string {
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Your stores</h1>
-    <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}. Each one is its own catalog, customers, orders, brand and address.</p></div>
-    <a class="btn primary" href="/onboarding">+ Start a new store</a></div>
-  <div class="grid3">${stores.map((store) => {
+  const storeCount = stores.filter((store) => store.kind === 'store').length
+  const funnelCount = stores.length - storeCount
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  return `${flash(ctx)}<div class="head"><div><h1 class="serif">All assets</h1>
+    <p class="muted" style="margin:.25rem 0 0">${storeCount} store${storeCount === 1 ? '' : 's'} · ${funnelCount} funnel${funnelCount === 1 ? '' : 's'}. Stores are full catalogs; funnels are focused conversion paths.</p></div>
+    <a class="btn primary" href="#new">+ New asset</a></div>
+  <div class="asset-tabs"><button class="on" type="button" data-filter="all">All ${stores.length}</button><button type="button" data-filter="store">Stores ${storeCount}</button><button type="button" data-filter="funnel">Funnels ${funnelCount}</button></div>
+  <div class="asset-grid" id="asset-grid">${stores.map((store) => {
     const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
-    const sales = salesSummary(ctx.db, store.id, 30)
-    return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
-      <div class="row" style="justify-content:space-between;align-items:flex-start">
-        <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
-          <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
-        <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
-      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)}</div>
-      <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
-      <div class="row" style="margin-top:.4rem">
-        <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
-        <a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">Storefront ↗</a></div>
-    </div>`
-  }).join('')}</div>`
+    const pages = ctx.db.one<{ c: number }>('SELECT COUNT(*) c FROM pages WHERE store_id = ?', store.id)?.c ?? 0
+    const todayRevenue = ctx.db.one<{ revenue: number | null }>("SELECT SUM(COALESCE(base_total_cents, total_cents)) revenue FROM orders WHERE store_id = ? AND created_at >= ? AND status != 'cancelled'", store.id, todayStart.toISOString())?.revenue ?? 0
+    const month = salesSummary(ctx.db, store.id, 30)
+    const cover = storeCoverImage(ctx.db, store.id)
+    return `<article class="asset-card" data-kind="${store.kind}">
+      <a class="asset-cover" href="/admin/switch?storeId=${escapeHtml(store.id)}">${cover ? `<img src="${escapeHtml(cover)}" alt="">` : `<span>${uiIcon(store.kind === 'funnel' ? 'funnel' : 'store', 30)}</span>`}<em>${store.kind}</em></a>
+      <div class="asset-body"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2>${escapeHtml(store.name)}</h2><p>${escapeHtml(store.brand.slogan || store.prompt.slice(0, 90) || `Blank ${store.kind}`)}</p></div><span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
+        <div class="asset-facts"><span>${products} product${products === 1 ? '' : 's'}</span><span>${pages} page${pages === 1 ? '' : 's'}</span></div>
+        <div class="asset-metrics"><div><small>Today</small><strong>${format(todayRevenue, store.currency)}</strong></div><div><small>30 days</small><strong>${format(month.revenueCents, store.currency)}</strong><em>${month.orders} order${month.orders === 1 ? '' : 's'}</em></div></div>
+        <div class="row"><a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open current' : 'Open'}</a><a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">View ↗</a></div></div>
+    </article>`
+  }).join('')}</div>
+  <section id="new" class="section-title" style="margin-top:1.5rem"><div><h2>Create an asset</h2><p class="muted">Start clean, run the full AI build, or clone the front end from one link.</p></div></section>
+  <div class="grid2 asset-create"><form method="post" action="/admin/assets/import" class="card"><div class="row" style="justify-content:space-between"><h2>Clone from a link</h2><span class="tag">fastest</span></div><p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Creates a separate store or funnel, copies the page and image assets locally, and opens it for HTML or block editing. Source scripts and pixels are removed.</p>
+    <div class="field"><label>Store or funnel URL</label><input name="url" type="url" required placeholder="https://example.com"></div><div class="row"><div class="field" style="flex:1"><label>Name (optional)</label><input name="name" placeholder="Use the page title"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn primary" type="submit" onclick="this.textContent='Cloning…'">Clone and open</button></form>
+  <div><form method="post" action="/admin/assets/create" class="card"><h2>Start blank</h2><div class="row" style="margin-top:.7rem"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="New brand"></div><div class="field" style="width:150px"><label>Asset type</label><select name="kind"><option value="store">Full store</option><option value="funnel">Funnel</option></select></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="USD" maxlength="3"></div></div><button class="btn" type="submit">Create blank asset</button></form><div class="card"><h2>AI build from a brief</h2><p class="muted" style="font-size:12px;margin:.3rem 0 .7rem">Research, brand, products, imagery and the appropriate store or funnel page plan.</p><a class="btn" href="/onboarding">Start a new store or funnel with AI</a></div></div></div>
+  <script>(function(){var buttons=document.querySelectorAll('.asset-tabs button');var cards=document.querySelectorAll('.asset-card');buttons.forEach(function(button){button.addEventListener('click',function(){buttons.forEach(function(item){item.classList.remove('on')});button.classList.add('on');cards.forEach(function(card){card.hidden=button.dataset.filter!=='all'&&card.dataset.kind!==button.dataset.filter})})})})()</script>`
+}
+
+/* --------------------------------------------------------------- media */
+
+export function mediaPage(ctx: Ctx): string {
+  const assets = listStoreMedia(ctx.db, ctx.store.id)
+  const local = assets.filter((asset) => asset.url.startsWith('/_uploads/')).length
+  const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${flash(ctx)}<div class="head"><div><div class="eyebrow">${ctx.store.kind} asset</div><h1 class="serif">Media</h1><p class="muted" style="margin:.25rem 0 0">Every image used by ${escapeHtml(ctx.store.name)} — uploads, generated scenes, cloned pages, products, variants, collections and page blocks.</p></div><span class="tag">${assets.length} images · ${local} locally owned</span></div>
+  <form method="post" action="/admin/media/upload" enctype="multipart/form-data" class="card media-upload"><div><h2>Add an image</h2><p class="muted">Saved to this ${ctx.store.kind}'s library and ready to paste into any builder field.</p></div><input type="file" name="image" accept="image/*" required><button class="btn primary" type="submit">Upload</button></form>
+  ${assets.length ? `<div class="media-grid">${assets.map((asset) => `<figure class="media-card"><a href="${escapeHtml(asset.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(asset.url)}" alt="${escapeHtml(asset.label)}" loading="lazy"></a><figcaption><div><strong>${escapeHtml(asset.label)}</strong><span>${escapeHtml(asset.source)}${size(asset.bytes) ? ` · ${size(asset.bytes)}` : ''}</span></div><button class="btn" type="button" data-copy="${escapeHtml(asset.url)}">Copy URL</button></figcaption></figure>`).join('')}</div>` : '<div class="card cro-empty"><div class="cro-orb">'+uiIcon('image', 24)+'</div><h2>No images yet</h2><p class="muted">Upload the first product photo, clone a reference, or generate imagery from the Assistant.</p></div>'}
+  <script>document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){navigator.clipboard.writeText(button.dataset.copy);button.textContent='Copied';setTimeout(function(){button.textContent='Copy URL'},1200)})})</script>`
 }
 
 /* ------------------------------------------------------------- research page */
@@ -815,15 +924,19 @@ export function researchPage(ctx: Ctx): string {
 export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
   const runs = listRuns(ctx.db, ctx.store.id, 8)
   const counts = toolCountsByArea()
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Assistant</h1>
+  const queue = listAssistantQueue(ctx.db, ctx.store.id, 20)
+  return `${flash(ctx)}<div class="head"><div><h1>Assistant</h1>
     <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated against its schema and audited; it edits the draft, and publishing is yours.</p></div></div>
   <div class="grid2"><div>
+    <form class="card" method="post" action="/admin/ask" id="ai-composer"><div class="eyebrow">Ask Amboras</div><input type="hidden" name="page" value="ai"><textarea id="ai-ask" name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">Requests run in order, so you can queue the next job while one is working.</span><div class="row"><button class="btn" id="ai-voice" type="button">${uiIcon('mic', 15)} Dictate</button><button class="btn primary" type="submit">${uiIcon('send', 14)} Queue request</button></div></div></form>
+    <script>(function(){var button=document.getElementById('ai-voice');var Speech=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Speech){button.disabled=true;button.title='Voice input is not supported in this browser';return}button.addEventListener('click',function(){var r=new Speech();r.lang='en-US';button.textContent='Listening…';r.onresult=function(e){var box=document.getElementById('ai-ask');box.value=(box.value+' '+e.results[0][0].transcript).trim()};r.onend=function(){button.textContent='Dictate'};r.onerror=r.onend;r.start()})})();</script>
+    ${queue.length ? `<div class="card"><h2>Request queue</h2>${queue.map((request) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.55rem 0"><span style="min-width:0"><strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${escapeHtml(request.text)}</strong><small class="muted">${request.createdAt.slice(11, 19)} · ${escapeHtml(request.page || 'global')}</small></span><span class="row"><span class="tag ${request.status === 'completed' ? 'ok' : request.status === 'failed' ? 'bad' : request.status === 'running' ? 'warn' : ''}">${request.status}</span>${request.status === 'queued' ? `<form method="post" action="/admin/assistant/queue/${escapeHtml(request.id)}/cancel"><button class="btn" type="submit">Cancel</button></form>` : ''}</span></div>`).join('')}</div>` : ''}
     <div class="card" style="max-height:56vh;overflow:auto">
       ${messages.length ? messages.map((message) => `<div style="margin-bottom:1rem">
         <div class="eyebrow">${message.role === 'user' ? 'You' : 'Assistant'}${message.page ? ` · ${escapeHtml(message.page)}` : ''}</div>
         <div style="margin-top:.3rem;white-space:pre-wrap">${escapeHtml(message.content)}</div>
         ${message.artifacts.map(renderArtifact).join('')}</div>`).join('')
-        : '<p class="muted">Nothing yet. The panel on the right is the same conversation.</p>'}</div>
+        : '<p class="muted">Nothing yet. Start with a plain-English request above.</p>'}${messages.length >= 60 ? `<a class="btn" href="/admin/ai?before=${encodeURIComponent(messages[0]?.createdAt ?? '')}">Load older messages</a>` : ''}</div>
     <div class="card"><h2>Prompt library</h2>
       <div class="row" style="margin-top:.5rem">${PROMPT_LIBRARY.map((prompt) => `<button class="btn" type="button" onclick="askThis(${escapeHtml(JSON.stringify(prompt))})">${escapeHtml(prompt)}</button>`).join('')}</div></div>
   </div>

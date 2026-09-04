@@ -5,12 +5,15 @@ import { logger } from './lib/log.ts'
 import { renderSvg } from './agent/images.ts'
 import { readUpload } from './lib/uploads.ts'
 import { recoverRuns } from './agent/runtime.ts'
-import { sweepAbandonedCarts } from './email/abandoned.ts'
+import { sweepMarketingFlows } from './email/flows.ts'
+import { dispatchServerEvents } from './analytics/server-events.ts'
+import { drainAssistantQueue, recoverAssistantQueue } from './agent/queue.ts'
 import './agent/tools/index.ts'
 import { adminRouter, NoStores } from './admin/routes.ts'
 import { redirectFor, storeFromSlug, storefrontRouter } from './storefront/routes.ts'
 import { storeForHost, type Store } from './control/stores.ts'
 import { tlsAllowed } from './control/domains.ts'
+import { evaluateRunningExperiments } from './analytics/experiments.ts'
 
 const log = logger('server')
 const PORT = Number(process.env.PORT ?? 4100)
@@ -130,10 +133,14 @@ const server = createServer(async (req, res) => {
 
 const db = getDb()
 recoverRuns(db)
-// Abandoned carts are swept every ten minutes; the four-hour wait is the
-// window the review-app crowd settled on.
+recoverAssistantQueue(db)
 const origin = process.env.AMBORAS_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
-setInterval(() => void sweepAbandonedCarts(db, { hours: 4, origin }).catch(() => undefined), 10 * 60_000).unref()
+setInterval(() => void sweepMarketingFlows(db, { origin }).catch(() => undefined), 5 * 60_000).unref()
+setInterval(() => void dispatchServerEvents(db).catch(() => undefined), 15_000).unref()
+setInterval(() => void drainAssistantQueue(db).catch(() => undefined), 1_000).unref()
+// Experiment decisions are cheap, local reads. Running them beside lifecycle
+// flows keeps CRO autonomous without adding another process to a personal tool.
+setInterval(() => evaluateRunningExperiments(db), 10 * 60_000).unref()
 server.listen(PORT, () => {
   log.info(`amboras on http://localhost:${PORT}`)
   log.info(ROOT_DOMAIN ? `storefronts on *.${ROOT_DOMAIN}` : 'storefronts on /preview/:slug (set AMBORAS_STOREFRONT_HOST for subdomains)')

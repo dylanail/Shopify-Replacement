@@ -12,7 +12,7 @@ import { latestResearch, rulesResearch, type Research } from './research.ts'
 import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
 import type { Direction } from './directions.ts'
-import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
+import { catalog, completeJson, describe, modelFor, parseChoice, S, type ModelChoice } from './models.ts'
 import { knowledge } from './knowledge.ts'
 
 const log = logger('ads')
@@ -314,6 +314,8 @@ export type DraftRequest = {
   direction?: string
   avatarId?: string
   count?: number
+  /** Optional one-run override; the store's Ads model remains the default. */
+  model?: string
 }
 
 export function suggestAdFormats(platform: AdPlatform, direction: Direction): string[] {
@@ -340,11 +342,13 @@ export async function draftAds(db: Db, store: Store, request: DraftRequest): Pro
   const platform = request.platform ?? 'meta'
   const probe = adInput(db, store, product, { ...request, platform, format: formatById('static') })
   const wanted = request.formats?.length ? request.formats : suggestAdFormats(platform, probe.direction).slice(0, request.count ?? 3)
+  const requested = parseChoice(request.model)
+  const model = requested && catalog().some((entry) => entry.available && entry.provider === requested.provider && entry.model === requested.model) ? requested : modelFor(db, store.id, 'ads')
   const created: Ad[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId)
     const input = { ...probe, format }
-    const body = await authorAd(modelFor(db, store.id, 'ads'), writeAd(input), input)
+    const body = await authorAd(model, writeAd(input), input)
     created.push(
       saveAd(db, store.id, {
         productId: product.id,

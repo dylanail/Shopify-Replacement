@@ -8,6 +8,7 @@ import { companionsFor } from '../analytics/events.ts'
 import { listPages } from '../pages/store.ts'
 import * as view from './render.ts'
 import type { StoreView } from './render.ts'
+import { defaultRegion, listRegions } from '../domain/regions.ts'
 
 /**
  * The site health report: accessibility and speed, measured on the pages as
@@ -143,7 +144,7 @@ export function auditHtml(html: string, input: { path: string; title?: string; b
 /** Renders the home page, the first three product pages and every published built page as a visitor would get them, and audits each. */
 export function auditStore(db: Db, store: Store): { pages: PageAudit[]; score: number } {
   const env = environment(db, store.id, 'draft')
-  const current: StoreView = { db, store, env, base: `/preview/${store.slug}`, preview: false, cart: null, totals: null }
+  const current: StoreView = { db, store, env, base: `/preview/${store.slug}`, preview: false, cart: null, totals: null, region: defaultRegion(db, store.id), regions: listRegions(db, store.id) }
   const products = listProducts(db, store.id, { status: 'published', limit: 3 })
   const brand = { ...(store.brand.primary ? { primary: store.brand.primary } : {}), ...(store.brand.paper ? { paper: store.brand.paper } : {}), ...(store.brand.ink ? { ink: store.brand.ink } : {}) }
   const pages: PageAudit[] = []

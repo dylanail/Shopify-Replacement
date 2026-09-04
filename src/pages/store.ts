@@ -7,6 +7,7 @@ import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '..
 import type { Store } from '../control/stores.ts'
 import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
 import { customDefinitions } from './custom-blocks.ts'
+import { minorDigits } from '../lib/money.ts'
 
 export type Page = {
   id: string
@@ -497,9 +498,18 @@ export function pageTemplate(key: string): PageTemplate {
 
 /* ------------------------------------------------------------- rendering */
 
-export function blockContextFor(db: Db, store: Store, base: string): BlockContext {
-  const products = listProducts(db, store.id, { status: 'published', limit: 60 })
-  const currency = store.currency
+export function blockContextFor(db: Db, store: Store, base: string, localized?: { currency: string; exchangeRate: number; locale?: string }): BlockContext {
+  const rawProducts = listProducts(db, store.id, { status: 'published', limit: 60 })
+  const rate = localized ? localized.exchangeRate * (10 ** minorDigits(localized.currency)) / (10 ** minorDigits(store.currency)) : 1
+  const products = rawProducts.map((product) => ({
+    ...product,
+    variants: product.variants.map((variant) => ({
+      ...variant,
+      priceCents: Math.round(variant.priceCents * rate),
+      compareAtCents: variant.compareAtCents === null ? null : Math.round(variant.compareAtCents * rate),
+    })),
+  }))
+  const currency = localized?.currency ?? store.currency
   return {
     storeName: store.name,
     base,
@@ -528,7 +538,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
     bundles: products
       .map((product) => {
         const bundle = bundleFor(db, store.id, product.id)
-        return bundle ? { productId: product.id, html: renderBundleWidget(bundle, product, currency) } : null
+        return bundle ? { productId: product.id, html: renderBundleWidget(bundle, product, currency, { locale: localized?.locale }) } : null
       })
       .filter((entry): entry is { productId: string; html: string } => entry !== null),
   }

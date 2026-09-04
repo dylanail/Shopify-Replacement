@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { id } from './ids.ts'
 import type { UploadedFile } from './http.ts'
@@ -24,6 +24,8 @@ export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
 export class UploadError extends Error {}
 
+export type StoredUpload = { url: string; type: string; bytes: number; uploadedAt: string }
+
 export function saveUpload(file: UploadedFile, storeId: string): { url: string; path: string; type: string } {
   const ext = TYPES[file.type.toLowerCase()]
   if (!ext) throw new UploadError(`Images only — ${file.type || 'that file'} is not one`)
@@ -45,6 +47,41 @@ export function readUpload(urlPath: string): { data: Buffer; type: string } | nu
   const ext = (match[2] as string).split('.').pop() ?? ''
   const type = Object.entries(TYPES).find(([, value]) => value === ext)?.[0] ?? 'application/octet-stream'
   return { data: readFileSync(path), type }
+}
+
+/** Every locally-owned image for one asset, including clones and model output. */
+export function listUploads(storeId: string): StoredUpload[] {
+  if (!/^[a-z0-9_]+$/.test(storeId)) return []
+  const dir = join(ROOT, storeId)
+  if (!existsSync(dir)) return []
+  const uploads: StoredUpload[] = []
+  for (const name of readdirSync(dir)) {
+    if (!/^up_[a-z0-9]+\.[a-z]+$/.test(name)) continue
+    try {
+      const stats = statSync(join(dir, name))
+      const ext = name.split('.').pop() ?? ''
+      const type = Object.entries(TYPES).find(([, value]) => value === ext)?.[0]
+      if (type && stats.isFile()) uploads.push({ url: `/_uploads/${storeId}/${name}`, type, bytes: stats.size, uploadedAt: stats.mtime.toISOString() })
+    } catch { /* a file removed during the scan simply disappears from the library */ }
+  }
+  return uploads.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+}
+
+/** Move images cloned under a temporary id into the asset that now owns them. */
+export function relocateUploads(fromStoreId: string, toStoreId: string): number {
+  if (!/^[a-z0-9_]+$/.test(fromStoreId) || !/^[a-z0-9_]+$/.test(toStoreId)) throw new UploadError('Invalid asset id')
+  const from = join(ROOT, fromStoreId)
+  if (!existsSync(from)) return 0
+  const to = join(ROOT, toStoreId)
+  mkdirSync(to, { recursive: true })
+  let moved = 0
+  for (const name of readdirSync(from)) {
+    if (!/^up_[a-z0-9]+\.[a-z]+$/.test(name)) continue
+    renameSync(join(from, name), join(to, name))
+    moved++
+  }
+  try { rmdirSync(from) } catch { /* leave a non-empty temporary directory alone */ }
+  return moved
 }
 
 /** Turns an upload URL back into a data URI, for embedding in generated SVG. */

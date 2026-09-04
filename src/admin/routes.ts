@@ -1,5 +1,5 @@
 import { getDb } from '../lib/db.ts'
-import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
+import { badRequest, forbidden, html, notFound, Raw, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
 import { endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
 import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
@@ -12,10 +12,11 @@ import { catalog, modelFor, parseChoice, TASKS, type Task } from '../agent/model
 import { listTodos, recordAudit, refreshTodos, seedTodos } from '../control/todos.ts'
 import { createCollection, listProducts, updateProduct, updateVariant } from '../domain/catalog.ts'
 import { fulfillOrder, refundOrder } from '../domain/orders.ts'
-import { setPromotionStatus } from '../domain/promotions.ts'
+import { createPromotion, setPromotionStatus } from '../domain/promotions.ts'
 import { moderate } from '../domain/reviews.ts'
 import { getSend } from '../email/send.ts'
-import { ask, history } from '../agent/chat.ts'
+import { history } from '../agent/chat.ts'
+import { cancelAssistantRequest, drainAssistantQueue, enqueueAssistantRequest, listAssistantQueue } from '../agent/queue.ts'
 import { execute } from '../agent/registry.ts'
 import { saveUpload, UploadError } from '../lib/uploads.ts'
 import { createPage, deletePage, duplicatePage, getPage, pageTemplate, updatePage } from '../pages/store.ts'
@@ -30,6 +31,7 @@ import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.t
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
 import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
 import { generateVersions, setVersionWeight } from '../pages/versions.ts'
+import { analyzeExperiment, pauseExperiment, promoteExperiment, rollbackExperiment, startPdpExperiment } from '../analytics/experiments.ts'
 import { sendEmail, orderContext } from '../email/send.ts'
 import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
@@ -48,6 +50,11 @@ import { customCatalog, customDefinitions, deleteCustomBlock, upsertCustomBlock 
 import type { CustomField } from '../pages/blocks.ts'
 import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
+import { registerOrderTracking } from '../shipping/seventeen-track.ts'
+import { exportStore } from '../control/export.ts'
+import { addShippingOption, createRegion, getRegion, updateRegion } from '../domain/regions.ts'
+import { listFlows, runFlow, updateFlow } from '../email/flows.ts'
+import { createBlankAsset, importAssetFromUrl } from '../control/assets.ts'
 
 const STORE_COOKIE = 'amboras_store'
 
@@ -79,6 +86,7 @@ function page(ctx: Ctx, current: Session, active: string, title: string, body: s
       body,
       todos: listTodos(db, current.store.id),
       messages: history(db, current.store.id, 20),
+      queue: listAssistantQueue(db, current.store.id, 8),
       publish: publishState(db, current.store.id),
       userName: current.user.name || current.user.email.split('@')[0] || 'there',
       storeUrl: storeUrl(ctx, current.store),
@@ -195,7 +203,9 @@ export function adminRouter(): Router {
     setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
     const mode = modeById(String(body.mode ?? 'own-product')) ?? modeById('own-product')
     if (mode) setBuildMode(db(), result.store.id, mode.id)
-    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
+    if (body.shape === 'store' || body.shape === 'funnel') setSiteShape(db(), result.store.id, { shape: String(body.shape) })
+    const kind = body.shape === 'funnel' ? 'funnel' : 'store'
+    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built as a ${kind} — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
   })
 
   /* ------------------------------------------------------------------ pages */
@@ -206,9 +216,128 @@ export function adminRouter(): Router {
     return page(ctx, current, 'dashboard', 'Dashboard', pages.dashboard(ctxFor(current, ctx), range(ctx)))
   })
 
+  router.get('/admin/cro', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'cro', 'Experiments', pages.experimentsPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/cro/generate', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const count = Math.min(4, Math.max(2, Number(body.count ?? 3) || 3))
+      const generated = await generateVersions(db(), current.store, {
+        productId: String(body.productId ?? ''),
+        kind: 'pdp',
+        count,
+        publish: true,
+        ...(body.model ? { model: String(body.model) } : {}),
+      })
+      const experiment = startPdpExperiment(db(), current.store.id, {
+        productId: String(body.productId ?? ''),
+        pageIds: generated.map((entry) => entry.id),
+        hypothesis: String(body.hypothesis ?? ''),
+        autoPromote: body.autoPromote === 'true',
+        minViews: Number(body.minViews ?? 75),
+      })
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'start_experiment', target: experiment.id, diff: { productId: body.productId, pages: generated.map((entry) => entry.id), autoPromote: experiment.results.autoPromote } })
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`Test started across ${generated.length} page angles. Amboras will wait for real evidence before choosing.`)}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not start the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/evaluate', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = analyzeExperiment(db(), current.store.id, ctx.params.id as string)
+      return redirect(`/admin/cro?flash=${encodeURIComponent(experiment.status === 'promoted' ? 'The evidence threshold was met, so the winner was promoted.' : experiment.results.reason ?? 'Evidence recalculated.')}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not evaluate the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/pause', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = pauseExperiment(db(), current.store.id, ctx.params.id as string)
+      return redirect(`/admin/cro?flash=${encodeURIComponent(experiment.status === 'paused' ? 'Automatic decisions paused; the traffic split stays in place.' : 'Automatic decisions resumed.')}`)
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not change the experiment'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/promote', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = promoteExperiment(db(), current.store.id, ctx.params.id as string)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'promote_experiment', target: experiment.id, diff: { winnerId: experiment.results.winnerId } })
+      return redirect('/admin/cro?flash=' + encodeURIComponent('Winner promoted to 100% of traffic. The prior split is saved for rollback.'))
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not promote the winner'}`)}`)
+    }
+  })
+
+  router.post('/admin/cro/:id/rollback', (ctx) => {
+    const current = session(ctx)
+    try {
+      const experiment = rollbackExperiment(db(), current.store.id, ctx.params.id as string)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'rollback_experiment', target: experiment.id, diff: { restored: experiment.results.previousWeights } })
+      return redirect('/admin/cro?flash=' + encodeURIComponent('Previous traffic weights restored exactly.'))
+    } catch (error) {
+      return redirect(`/admin/cro?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not roll back'}`)}`)
+    }
+  })
+
   router.get('/admin/stores', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'stores', 'Your stores', pages.storesPage(ctxFor(current, ctx), current.stores))
+    return page(ctx, current, 'stores', 'All assets', pages.storesPage(ctxFor(current, ctx), current.stores))
+  })
+
+  router.post('/admin/assets/create', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const kind = body.kind === 'funnel' ? 'funnel' : 'store'
+      const asset = createBlankAsset(db(), current.user.id, { name: String(body.name ?? ''), kind, currency: String(body.currency ?? 'USD') })
+      setCookie(ctx.res, STORE_COOKIE, asset.id, { maxAge: 60 * 60 * 24 * 365 })
+      recordAudit(db(), { storeId: asset.id, actorType: 'user', actorId: current.user.id, action: 'create_asset', target: asset.id, diff: { kind } })
+      return redirect(`/admin?flash=${encodeURIComponent(`${asset.name} is ready as a blank ${kind}.`)}`)
+    } catch (error) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not create the asset'}`)}`)
+    }
+  })
+
+  router.post('/admin/assets/import', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const kind = body.kind === 'funnel' ? 'funnel' : 'store'
+      const imported = await importAssetFromUrl(db(), current.user.id, { url: String(body.url ?? ''), name: String(body.name ?? ''), kind, currency: String(body.currency ?? 'USD') })
+      setCookie(ctx.res, STORE_COOKIE, imported.store.id, { maxAge: 60 * 60 * 24 * 365 })
+      recordAudit(db(), { storeId: imported.store.id, actorType: 'user', actorId: current.user.id, action: 'clone_asset', target: imported.clone.sourceUrl, diff: { kind, pageId: imported.page.id, stylesheets: imported.clone.stylesheets, images: imported.clone.imagesLocalized } })
+      return redirect(`/admin/pages/${imported.page.id}/edit?flash=${encodeURIComponent(`Cloned ${imported.pages.length} page${imported.pages.length === 1 ? '' : 's'} into a new ${kind}. ${imported.clone.stylesheets} stylesheets and ${imported.clone.imagesLocalized} images were copied; use Convert to blocks when you want structural editing.`)}`)
+    } catch (error) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent(`!Could not clone that asset: ${error instanceof Error ? error.message : 'unknown error'}`)}`)
+    }
+  })
+
+  router.get('/admin/media', (ctx) => {
+    const current = session(ctx)
+    return page(ctx, current, 'media', 'Media', pages.mediaPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/media/upload', async (ctx) => {
+    const current = session(ctx)
+    const files = await ctx.files()
+    if (!files.image) return redirect('/admin/media?flash=' + encodeURIComponent('!Choose an image first.'))
+    try {
+      const saved = saveUpload(files.image, current.store.id)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'upload_media', target: saved.url, diff: { type: saved.type, bytes: files.image.data.length } })
+      return redirect('/admin/media?flash=' + encodeURIComponent('Image added to this asset.'))
+    } catch (error) {
+      return redirect(`/admin/media?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Upload failed'}`)}`)
+    }
   })
 
   router.get('/admin/research', (ctx) => {
@@ -263,7 +392,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/pages', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'pages', 'Pages & funnels', pages.pagesPage(ctxFor(current, ctx)))
+    return page(ctx, current, 'pages', current.store.kind === 'funnel' ? 'Funnel pages' : 'Store pages', pages.pagesPage(ctxFor(current, ctx)))
   })
 
   router.post('/admin/pages/new', async (ctx) => {
@@ -471,7 +600,7 @@ export function adminRouter(): Router {
     const kind = body.kind === 'advertorial' ? 'advertorial' : 'pdp'
     const formats = picked.filter((entry) => entry.startsWith(`${kind}:`)).map((entry) => entry.split(':')[1] as string)
     try {
-      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true' })
+      const pages = await generateVersions(db(), current.store, { productId: ctx.params.id as string, kind, formats, direction: String(body.direction ?? ''), avatarId: String(body.avatarId ?? ''), count: Number(body.count ?? 3) || 3, publish: body.publish === 'true', ...(body.model ? { model: String(body.model) } : {}) })
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'generate_versions', target: ctx.params.id as string, diff: { kind, formats, direction: body.direction, pages: pages.map((page) => page.id) } })
       return back(ctx, `Generated ${pages.length} ${kind === 'pdp' ? 'product page version' : 'advertorial'}${pages.length === 1 ? '' : 's'}: ${pages.map((page) => page.format).join(', ')}.`)
     } catch (error) {
@@ -493,6 +622,7 @@ export function adminRouter(): Router {
     const order = recordSupplierOrder(db(), current.store.id, ctx.params.id as string, { supplier: String(body.supplier ?? ''), orderId: String(body.orderId ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), ...(body.tracking ? { tracking: String(body.tracking) } : {}), ...(body.carrier ? { carrier: String(body.carrier) } : {}) })
     if (body.tracking) {
       const shipment = order.fulfillments.at(-1)
+      void registerOrderTracking(db(), current.store.id, order).catch(() => undefined)
       void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
     }
     return back(ctx, body.tracking ? 'Saved and marked shipped; the customer has the tracking link.' : 'Supplier order saved.')
@@ -586,7 +716,7 @@ export function adminRouter(): Router {
 
   router.get('/admin/ai', (ctx) => {
     const current = session(ctx)
-    return page(ctx, current, 'ai', 'Assistant', pages.aiPage(ctxFor(current, ctx), history(db(), current.store.id, 60)))
+    return page(ctx, current, 'ai', 'Assistant', pages.aiPage(ctxFor(current, ctx), history(db(), current.store.id, 60, ctx.query.get('before') ?? undefined)))
   })
 
   router.get('/admin/products', (ctx) => {
@@ -635,7 +765,8 @@ export function adminRouter(): Router {
   router.post('/admin/orders/:id/fulfill', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    fulfillOrder(db(), current.store.id, ctx.params.id as string, { provider: 'manual', tracking: String(body.tracking ?? '') })
+    const order = fulfillOrder(db(), current.store.id, ctx.params.id as string, { provider: 'manual', tracking: String(body.tracking ?? '') })
+    if (body.tracking) void registerOrderTracking(db(), current.store.id, order).catch(() => undefined)
     return back(ctx, 'Marked fulfilled.')
   })
 
@@ -683,6 +814,35 @@ export function adminRouter(): Router {
     const current = session(ctx)
     setPromotionStatus(db(), current.store.id, ctx.params.id as string, 'disabled')
     return back(ctx, 'Promotion disabled.')
+  })
+
+  router.post('/admin/promotions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const requestedKind = String(body.kind ?? 'percentage')
+    const allowedKinds: Array<Parameters<typeof createPromotion>[2]['kind']> = ['percentage', 'fixed', 'free_shipping', 'bundle', 'tiered', 'bogo', 'mix_match', 'fixed_bundle']
+    if (!allowedKinds.includes(requestedKind as Parameters<typeof createPromotion>[2]['kind'])) return badRequest('Unsupported promotion type.')
+    const kind = requestedKind as Parameters<typeof createPromotion>[2]['kind']
+    const productIds = String(body.productIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    const buyProductIds = String(body.buyProductIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    const getProductIds = String(body.getProductIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    createPromotion(db(), current.store.id, {
+      title: String(body.title ?? 'New promotion'), kind,
+      value: Math.max(0, Number(body.value ?? 0)), code: String(body.code ?? ''), automatic: body.automatic === 'true',
+      rules: {
+        ...(productIds.length ? { productIds } : {}), ...(buyProductIds.length ? { buyProductIds } : {}), ...(getProductIds.length ? { getProductIds } : {}),
+        ...(body.minSubtotalCents ? { minSubtotalCents: Number(body.minSubtotalCents) } : {}),
+        ...(body.minQuantity ? { minQuantity: Number(body.minQuantity) } : {}),
+        ...(body.buyQuantity ? { buyQuantity: Number(body.buyQuantity) } : {}),
+        ...(body.getQuantity ? { getQuantity: Number(body.getQuantity) } : {}),
+        ...(body.requiredDistinctProducts ? { requiredDistinctProducts: Number(body.requiredDistinctProducts) } : {}),
+        ...(body.bundlePriceCents ? { bundlePriceCents: Number(body.bundlePriceCents) } : {}),
+        ...(body.maxUses ? { maxUses: Number(body.maxUses) } : {}),
+        ...(body.regionId ? { regionIds: [String(body.regionId)] } : {}),
+        priority: Number(body.priority ?? 0), combinable: body.combinable === 'true', firstOrderOnly: body.firstOrderOnly === 'true',
+      },
+    })
+    return back(ctx, 'Promotion created.')
   })
 
   router.get('/admin/analytics', (ctx) => {
@@ -787,6 +947,85 @@ export function adminRouter(): Router {
     return page(ctx, current, 'settings', 'Settings', pages.settingsPage(ctxFor(current, ctx)))
   })
 
+  router.post('/admin/settings/regions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    createRegion(db(), current.store.id, {
+      name: String(body.name ?? 'Region'), currency: String(body.currency ?? current.store.currency),
+      locale: String(body.locale ?? 'en-US'), exchangeRate: Number(body.exchangeRate ?? 1),
+      countries: String(body.countries ?? '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean),
+      taxRate: Number(body.taxRate ?? 0) / 100,
+    })
+    return back(ctx, 'Market added.')
+  })
+
+  router.post('/admin/settings/regions/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    updateRegion(db(), current.store.id, ctx.params.id as string, {
+      name: String(body.name ?? ''), currency: String(body.currency ?? current.store.currency), locale: String(body.locale ?? 'en-US'),
+      exchangeRate: Number(body.exchangeRate ?? 1), countries: String(body.countries ?? '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean),
+      taxRate: Number(body.taxRate ?? 0) / 100, isDefault: body.isDefault === 'true',
+    })
+    return back(ctx, 'Market saved.')
+  })
+
+  router.post('/admin/settings/regions/:id/shipping', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const region = getRegion(db(), current.store.id, ctx.params.id as string)
+    if (!region) throw notFound('No such market')
+    addShippingOption(db(), region.id, {
+      name: String(body.name ?? 'Standard shipping'), amountCents: Math.max(0, Number(body.amountCents ?? 0)),
+      freeAboveCents: body.freeAboveCents ? Math.max(0, Number(body.freeAboveCents)) : null,
+    })
+    return back(ctx, 'Shipping option added.')
+  })
+
+  router.post('/admin/marketing/flows/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    updateFlow(db(), current.store.id, ctx.params.id as string, {
+      name: String(body.name ?? ''), delayHours: Number(body.delayHours ?? 0), subject: String(body.subject ?? ''),
+      body: String(body.body ?? ''), status: body.status === 'paused' ? 'paused' : 'active',
+    })
+    return back(ctx, 'Flow saved.')
+  })
+
+  router.post('/admin/marketing/flows/:id/run', async (ctx) => {
+    const current = session(ctx)
+    const flow = listFlows(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!flow) throw notFound('No such flow')
+    const sent = await runFlow(db(), flow, process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin)
+    return back(ctx, sent ? `Sent ${sent} message${sent === 1 ? '' : 's'}.` : 'No eligible unsent customers right now.')
+  })
+
+  router.get('/admin/settings/export', (ctx) => {
+    const current = session(ctx)
+    const backup = exportStore(db(), current.store.id)
+    const filename = `${current.store.slug}-amboras-backup-${backup.exportedAt.slice(0, 10)}.json`
+    recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'export_store', target: current.store.id, diff: { filename } })
+    return new Raw(JSON.stringify(backup, null, 2), 'application/json; charset=utf-8', {
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+    })
+  })
+
+  router.post('/admin/settings/pixels/:id', async (ctx) => {
+    const current = session(ctx)
+    const pixel = ctx.params.id as string
+    if (!['ga4', 'meta-pixel', 'tiktok-pixel'].includes(pixel)) throw notFound('No such pixel')
+    const body = await ctx.body()
+    try {
+      install(db(), current.store.id, pixel, body)
+      invalidateStorefrontConfig(current.store.id)
+      recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'connect_pixel', target: pixel, diff: { connected: true } })
+      return redirect('/admin/settings?flash=' + encodeURIComponent(`${pixel === 'ga4' ? 'GA4' : pixel === 'meta-pixel' ? 'Meta Pixel' : 'TikTok Pixel'} connected. It will fire only on the live storefront.`))
+    } catch (error) {
+      return redirect(`/admin/settings?flash=${encodeURIComponent(`!${error instanceof Error ? error.message : 'Could not connect the pixel'}`)}`)
+    }
+  })
+
   router.get('/admin/domains', (ctx) => {
     const current = session(ctx)
     return page(ctx, current, 'domains', 'Domains', growth.domainsPage(ctxFor(current, ctx)))
@@ -847,7 +1086,7 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const formats = (Array.isArray(body.formats) ? body.formats : body.formats ? [body.formats] : []) as string[]
     try {
-      const ads = await draftAds(db(), current.store, { productId: String(body.productId ?? ''), platform: String(body.platform ?? 'meta') as AdPlatform, formats, direction: String(body.direction ?? ''), ...(body.avatarId ? { avatarId: String(body.avatarId) } : {}), count: Number(body.count ?? 3) || 3 })
+      const ads = await draftAds(db(), current.store, { productId: String(body.productId ?? ''), platform: String(body.platform ?? 'meta') as AdPlatform, formats, direction: String(body.direction ?? ''), ...(body.avatarId ? { avatarId: String(body.avatarId) } : {}), count: Number(body.count ?? 3) || 3, ...(body.model ? { model: String(body.model) } : {}) })
       recordAudit(db(), { storeId: current.store.id, actorType: 'user', actorId: current.user.id, action: 'draft_ads', target: String(body.productId ?? ''), diff: { formats: ads.map((ad) => ad.format), direction: body.direction } })
       return redirect(`/admin/ads?flash=${encodeURIComponent(`Drafted ${ads.length} ad${ads.length === 1 ? '' : 's'}: ${ads.map((ad) => ad.format).join(', ')}.`)}`)
     } catch (error) {
@@ -1345,13 +1584,20 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const text = String(body.text ?? '').trim()
     if (!text) return back(ctx)
-    const result = await ask(db(), {
+    const request = enqueueAssistantRequest(db(), {
       storeId: current.store.id,
       userId: current.user.id,
       text,
       page: String(body.page ?? ''),
     })
-    return back(ctx, result.failures.length ? `!${result.failures[0]}` : undefined)
+    queueMicrotask(() => void drainAssistantQueue(db(), current.store.id).catch(() => undefined))
+    return back(ctx, `Request ${request.id.slice(-6)} queued.`)
+  })
+
+  router.post('/admin/assistant/queue/:id/cancel', (ctx) => {
+    const current = session(ctx)
+    const cancelled = cancelAssistantRequest(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, cancelled ? 'Queued request cancelled.' : '!Only waiting requests can be cancelled.')
   })
 
   /** The live activity stream behind the rail dots. */
