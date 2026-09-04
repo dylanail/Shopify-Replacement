@@ -648,6 +648,21 @@ test('a store can define its own blocks, and the model can add sections the cata
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [{ key: 'width', type: 'string' }], template: '<p>{{width}}</p>' }), /reserved/)
   assert.throws(() => customDefinition({ type: 'custom-strip', name: 'x', fields: [], template: '<script>alert(1)</script>' }), /no <script>/)
 
+  // The rule was checked against the template's own text, so a raw field
+  // carried one in behind it: the check saw nothing and the page got the
+  // script. It is enforced on what was rendered now.
+  const raw = customDefinition({ type: 'custom-raw', name: 'Raw', fields: [{ key: 'html', type: 'string', multiline: true }], template: '<div>{{{html}}}</div>' })
+  const smuggled = raw.render({ html: '<p>fine</p><script>alert(1)</script>' }, context, { id: 'r', type: 'custom-raw', settings: {} })
+  assert.match(smuggled, /<p>fine<\/p>/)
+  assert.ok(!/<script/i.test(smuggled), 'a script that came in through a raw field does not reach the page')
+
+  // A script or a style ends at the first closing tag in its text, not the one
+  // the author meant: one inside the body used to take the rest of the page.
+  const code = blockDefinition('custom-code')!.render({ js: 'var a = "</script><img onerror=x>";', css: 'a{}</style><b>' }, context, { id: 'c', type: 'custom-code', settings: {} })
+  assert.match(code, /<\\\/script/, 'the closing tag inside the script is escaped')
+  assert.equal(code.match(/<\/script>/g)?.length, 1, 'so the block still closes exactly once')
+  assert.equal(code.match(/<\/style>/g)?.length, 1, 'and the style closes exactly once too — what is left inside it is text, not markup')
+
   // Stored, it renders through the same path as the catalog and shows in the editor palette under Custom.
   const block = upsertCustomBlock(db, store.id, { name: 'Ingredient strip', description: 'A row of ingredient chips with a percentage each', fields: [{ key: 'headline', type: 'string', default: 'What is in it' }, { key: 'items', type: 'string', multiline: true, default: 'Amla|100%' }], template: '<h2 class="head">{{headline}}</h2><div class="cols">{{#each items}}<div class="col"><h3>{{0}}</h3><p>{{1}}</p></div>{{/each}}</div>', css: '.chip{color:red}', source: 'model' })
   assert.equal(block.type, 'custom-ingredient-strip')

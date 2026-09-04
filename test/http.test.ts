@@ -20,6 +20,7 @@ process.env.AMBORAS_STOREFRONT_HOST = ''
 process.env.AMBORAS_PUBLIC_ORIGIN = ''
 process.env.AMBORAS_ADMIN_HOST = ''
 
+const { useStripeTransport } = await import('../src/payments/stripe.ts')
 const { server } = await import('../src/main.ts')
 await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())))
 const address = server.address()
@@ -751,4 +752,44 @@ test('opening a store from the hub can land on a page other than the dashboard, 
   assert.equal(away.location, '/admin', 'a switch cannot be turned into an open redirect')
   const protocolRelative = await call('/admin/switch?to=%2F%2Felsewhere.example%2Fadmin')
   assert.equal(protocolRelative.location, '/admin')
+})
+
+test('a shopper who edits the checkout gets the same payment intent re-priced, not a new one each time', async () => {
+  // The page asks for an intent on render and on every edit to the form. Each
+  // ask opened a new PaymentIntent and a new Stripe Customer, so one shopper
+  // who typed an email, changed the quantity and came back left five of each
+  // behind — five abandoned checkouts by five people, as far as Stripe knew.
+  const posts: Array<{ path: string; body: Record<string, string> }> = []
+  useStripeTransport(async (path, init) => {
+    const body = Object.fromEntries(new URLSearchParams(init.body ?? ''))
+    if (init.method === 'POST') posts.push({ path, body })
+    if (path.startsWith('/v1/customers')) return { ok: true, status: 200, json: async () => ({ id: 'cus_1' }) }
+    const amount = Number(body.amount ?? 0) || 4900
+    return { ok: true, status: 200, json: async () => ({ id: 'pi_reused', status: 'requires_payment_method', client_secret: 'pi_reused_secret', amount, currency: 'usd', customer: body.customer ?? null }) }
+  })
+  assert.match(flashOf((await call('/admin/plugins/stripe/settings', { form: { publishableKey: 'pk_test_abc', secretKey: 'sk_test_xyz', captureMode: 'automatic' } })).location), /Saved/)
+  // Stripe is connected on whichever store the admin is currently on.
+  const shop = /\/s\/([a-z0-9-]+)/.exec((await call('/admin')).text)?.[1] ?? ''
+  assert.ok(shop)
+
+  const collection = await call(`/s/${shop}/collections/all`)
+  const handle = /\/products\/([a-z0-9-]+)/.exec(collection.text)?.[1] ?? ''
+  const variantId = /id="pdp-variant" value="(var_[a-z0-9]+)"/.exec((await call(`/s/${shop}/products/${handle}`)).text)?.[1] ?? ''
+  await call(`/s/${shop}/cart/add`, { form: { variantId, quantity: '1' } })
+
+  const first = JSON.parse((await call(`/s/${shop}/checkout/intent`, { json: {} })).text) as { intentId?: string; error?: string }
+  assert.equal(first.error, undefined)
+  assert.equal(first.intentId, 'pi_reused')
+  await call(`/s/${shop}/cart/add`, { form: { variantId, quantity: '1' } })
+  const second = JSON.parse((await call(`/s/${shop}/checkout/intent`, { json: {} })).text) as { intentId?: string }
+  assert.equal(second.intentId, 'pi_reused')
+
+  const created = posts.filter((post) => post.path === '/v1/payment_intents')
+  const updated = posts.filter((post) => post.path === '/v1/payment_intents/pi_reused')
+  assert.equal(created.length, 1, 'one intent is opened for the cart')
+  assert.equal(updated.length, 1, 'and the second ask re-prices it')
+  assert.ok(Number(updated[0]?.body.amount) > Number(created[0]?.body.amount), 'at the new total')
+
+  useStripeTransport(null)
+  await call('/admin/plugins/stripe/uninstall', { form: {} })
 })

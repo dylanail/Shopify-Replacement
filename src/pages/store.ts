@@ -5,7 +5,7 @@ import { listProducts } from '../domain/catalog.ts'
 import { listReviews } from '../domain/reviews.ts'
 import { deliveryEstimate, listQuestions, recentPurchases, viewersNow } from '../domain/ops.ts'
 import type { Store } from '../control/stores.ts'
-import { BLOCK_RUNTIME, blockDefinition, defaultsFor, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
+import { BLOCK_RUNTIME, blockDefinition, defaultsFor, inlineScript, renderBlocks, type BlockContext, type BlockDefinition, type BlockInstance } from './blocks.ts'
 import { customDefinitions } from './custom-blocks.ts'
 
 export type Page = {
@@ -537,7 +537,7 @@ export function blockContextFor(db: Db, store: Store, base: string): BlockContex
 /** The blocks, the runtime, and the script of every custom block the page uses, once each. */
 export function renderPageBody(page: Page, context: BlockContext): string {
   const used = new Set(page.blocks.map((block) => block.type))
-  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${definition.js}\n})();</script>`)
+  const scripts = (context.custom ?? []).filter((definition) => definition.js && used.has(definition.type)).map((definition) => `<script data-custom-js="${definition.type}">(function(){\n${inlineScript(definition.js)}\n})();</script>`)
   return `${renderBlocks(page.blocks, context)}<script>${BLOCK_RUNTIME}</script>${scripts.join('')}`
 }
 

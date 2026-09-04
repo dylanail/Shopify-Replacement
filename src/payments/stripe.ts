@@ -19,6 +19,8 @@ export type StripeClient = {
   paymentIntents: {
     create: (input: { amountCents: number; currency: string; customerId?: string; metadata?: Record<string, string>; saveForLater?: boolean; receiptEmail?: string }) => Promise<PaymentIntent>
     retrieve: (id: string) => Promise<PaymentIntent>
+    /** Re-price the intent a shopper is already looking at, rather than opening another one. */
+    update: (id: string, input: { amountCents?: number; customerId?: string; saveForLater?: boolean; receiptEmail?: string }) => Promise<PaymentIntent>
     /** The one-click upsell: charge a saved method with the customer away. */
     chargeOffSession: (input: { amountCents: number; currency: string; customerId: string; paymentMethodId: string; metadata?: Record<string, string> }) => Promise<PaymentIntent>
   }
@@ -86,6 +88,13 @@ export function stripeClient(secretKey: string, transport: StripeTransport = def
           ...(input.metadata ? { metadata: input.metadata } : {}),
         }),
       retrieve: (id) => call<PaymentIntent>('GET', `/v1/payment_intents/${encodeURIComponent(id)}`),
+      update: (id, input) =>
+        call<PaymentIntent>('POST', `/v1/payment_intents/${encodeURIComponent(id)}`, {
+          ...(input.amountCents === undefined ? {} : { amount: input.amountCents }),
+          ...(input.customerId ? { customer: input.customerId } : {}),
+          ...(input.saveForLater ? { setup_future_usage: 'off_session' } : {}),
+          ...(input.receiptEmail ? { receipt_email: input.receiptEmail } : {}),
+        }),
       chargeOffSession: (input) =>
         call<PaymentIntent>('POST', '/v1/payment_intents', {
           amount: input.amountCents,

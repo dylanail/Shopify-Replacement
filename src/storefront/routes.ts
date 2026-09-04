@@ -518,18 +518,36 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const amounts = totals(current.db, current.store.id, cart)
     const draft = cart.checkout
     try {
-      let customerId = ''
-      if (draft.email && stripe.config.captureMode !== 'manual') {
+      // The page asks for an intent on every render and on every edit to the
+      // form, and this opened a new PaymentIntent and a new Stripe Customer
+      // each time: a shopper who typed their email, changed the quantity and
+      // came back left five intents and five customers behind, and Stripe's
+      // dashboard read as five abandoned checkouts by five people. The intent
+      // a shopper is already looking at is re-priced instead. Only one still
+      // waiting for payment can be: a succeeded intent belongs to an order.
+      const REUSABLE = new Set(['requires_payment_method', 'requires_confirmation', 'requires_action'])
+      const started = cart.paymentIntentId
+        ? await stripe.client.paymentIntents.retrieve(cart.paymentIntentId).catch(() => null)
+        : null
+      const reusable = started && REUSABLE.has(started.status) ? started : null
+      let customerId = reusable?.customer ?? ''
+      if (!customerId && draft.email && stripe.config.captureMode !== 'manual') {
         customerId = (await stripe.client.customers.create({ email: draft.email, ...(draft.name ? { name: draft.name } : {}) })).id
       }
-      const intent = await stripe.client.paymentIntents.create({
-        amountCents: amounts.totalCents,
-        currency: amounts.currency,
-        ...(customerId ? { customerId } : {}),
-        saveForLater: Boolean(customerId),
-        ...(draft.email ? { receiptEmail: draft.email } : {}),
-        metadata: { storeId: current.store.id, cartId: cart.id },
-      })
+      const intent = reusable
+        ? await stripe.client.paymentIntents.update(reusable.id, {
+            amountCents: amounts.totalCents,
+            ...(customerId && !reusable.customer ? { customerId, saveForLater: true } : {}),
+            ...(draft.email ? { receiptEmail: draft.email } : {}),
+          })
+        : await stripe.client.paymentIntents.create({
+            amountCents: amounts.totalCents,
+            currency: amounts.currency,
+            ...(customerId ? { customerId } : {}),
+            saveForLater: Boolean(customerId),
+            ...(draft.email ? { receiptEmail: draft.email } : {}),
+            metadata: { storeId: current.store.id, cartId: cart.id },
+          })
       attachPaymentIntent(current.db, current.store.id, cart.id, intent.id)
       return { clientSecret: intent.client_secret, intentId: intent.id, publishableKey: stripe.config.publishableKey }
     } catch (error) {

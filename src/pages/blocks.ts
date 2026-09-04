@@ -1141,7 +1141,7 @@ export const BLOCKS: BlockDefinition[] = [
     icon: '{}',
     description: 'CSS and script for this page only.',
     schema: { css: { type: 'string', label: 'CSS', multiline: true, default: '' }, js: { type: 'string', label: 'JavaScript', multiline: true, default: '' } },
-    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${String(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${String(settings.js)}</script>` : ''}`,
+    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${inlineStyle(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${inlineScript(settings.js)}</script>` : ''}`,
   },
 ]
 
@@ -1171,6 +1171,32 @@ export type CustomBlockInput = { type: string; name: string; description?: strin
  *   {{product.title}} {{product.image}} {{product.price}} {{product.handle}} {{product.subtitle}}
  *      the product a `productId` setting names, else the first one
  */
+/**
+ * A script or a style element ends at the first closing tag in its text, not
+ * at the one the template meant. `</script>` inside a block's own script broke
+ * out of it and everything after was parsed as markup — the browser's rule,
+ * not a preference — so a stray closing tag in a snippet someone pasted took
+ * the rest of the page with it.
+ */
+export function inlineScript(js: unknown): string {
+  return String(js ?? '').replace(/<\/script/gi, '<\\/script')
+}
+
+export function inlineStyle(css: unknown): string {
+  return String(css ?? '').replace(/<\/style/gi, '')
+}
+
+/**
+ * The rule is "no <script> in a block template; put it in the js field, which
+ * runs once per page". It was checked against the template's own text, and a
+ * template can carry one in through a raw `{{{field}}}` — the check saw
+ * nothing and the page got the script. Enforcing it on what was rendered
+ * covers both, and covers a tag assembled out of two halves besides.
+ */
+function withoutScripts(html: string): string {
+  return html.replace(/<script\b[\s\S]*?<\/script\s*>/gi, '').replace(/<\/?script\b[^>]*>/gi, '')
+}
+
 export function renderTemplate(template: string, settings: Record<string, unknown>, context: BlockContext): string {
   const product = productFor(context, settings.productId)
   const scope: Record<string, unknown> = {
@@ -1202,7 +1228,7 @@ export function renderTemplate(template: string, settings: Record<string, unknow
         })
         .join(''),
     )
-  return vars(ifs(eaches(template), {}), {})
+  return withoutScripts(vars(ifs(eaches(template), {}), {}))
 }
 
 const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000, js: 20_000 }
@@ -1243,7 +1269,7 @@ export function customDefinition(input: CustomBlockInput): BlockDefinition {
     icon: (input.icon ?? '✚').slice(0, 4) || '✚',
     description: (input.description ?? '').trim() || 'A block this store defined for itself.',
     schema: { ...(usesProduct ? { productId: { type: 'string', label: 'Product', default: '' } } : {}), ...schema, ...COMMON },
-    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${css}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
+    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${inlineStyle(css)}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
   }
 }
 
