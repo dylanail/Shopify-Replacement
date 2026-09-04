@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { deflateSync } from 'node:zlib'
 import { fresh } from './helpers.ts'
-import { createStore, environment, setTheme } from '../src/control/stores.ts'
+import { createStore, environment, getStore, publish, setTheme, updateStore } from '../src/control/stores.ts'
 import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { listTodos, refreshTodos, seedTodos } from '../src/control/todos.ts'
@@ -444,6 +444,22 @@ test('the health audit finds what a screen reader and a slow phone would', () =>
   const { db, store } = shop()
   const report = auditStore(db, store)
   assert.ok(report.pages.length >= 2, 'home and the product page were rendered')
+  // An unpublished store has only a draft, and the report says so rather than
+  // implying it graded what customers see.
+  assert.equal(report.environment, 'draft')
+
+  // Once it is live, the report is about the live environment: the draft can
+  // carry colours and a theme nobody has published, and grading those means
+  // reporting a contrast failure no visitor could hit while missing a real one.
+  updateStore(db, store.id, { brand: { primary: '#7a4a2b', paper: '#faf7f3', ink: '#1c1a17' } })
+  publish(db, store.id)
+  updateStore(db, store.id, { brand: { primary: '#ffff00', paper: '#ffffff', ink: '#cccccc' } })
+  const live = auditStore(db, getStore(db, store.id)!)
+  assert.equal(live.environment, 'live')
+  assert.ok(!live.pages.some((page) => page.issues.some((issue) => issue.check === 'contrast')), 'the unpublished draft palette is not what customers see')
+  const draft = auditStore(db, getStore(db, store.id)!, { environment: 'draft' })
+  assert.equal(draft.environment, 'draft', 'the draft can still be asked for by name')
+  assert.ok(draft.pages.some((page) => page.issues.some((issue) => issue.check === 'contrast')), 'and grading it reports the palette being worked on')
   for (const page of report.pages) {
     assert.ok(!page.issues.some((issue) => ['lang', 'landmark', 'alt', 'skip-link', 'viewport', 'focus', 'h1'].includes(issue.check)), `${page.path} has no basic accessibility failure: ${JSON.stringify(page.issues)}`)
     assert.ok(page.gzipBytes < 120_000, `${page.path} is light on the wire`)

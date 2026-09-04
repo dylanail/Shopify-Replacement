@@ -219,7 +219,7 @@ export const planTools: Tool[] = defineTools([
       if (!store) throw new Error('No store')
       const report = auditStore(ctx.db, store)
       const issues = report.pages.flatMap((page) => page.issues.map((issue) => [page.path, issue.severity, issue.detail]))
-      return { summary: `Site score ${report.score}/100 across ${report.pages.length} pages; ${issues.length} findings.`, data: report, artifacts: [{ type: 'table', columns: ['Page', 'Severity', 'Finding'], rows: issues.slice(0, 20) }, { type: 'link', href: '/admin/store?health=1#health', label: 'Full report' }] }
+      return { summary: `Site score ${report.score}/100 across ${report.pages.length} pages of the ${report.environment === 'live' ? 'live site' : 'unpublished draft'}; ${issues.length} findings.`, data: report, artifacts: [{ type: 'table', columns: ['Page', 'Severity', 'Finding'], rows: issues.slice(0, 20) }, { type: 'link', href: '/admin/store?health=1#health', label: 'Full report' }] }
     },
   },
 ])

@@ -236,6 +236,19 @@ test('avatars are suggested from research, edited by hand, and read into a direc
   assert.equal(amateur.source, 'research')
   assert.equal(shortWho(amateur), 'serious amateurs')
 
+  // One is on, not all of them. Every writer takes the first selected avatar,
+  // so a set where everything is selected picks whichever row came back first
+  // and the merchant never made the choice at all.
+  const on = avatars.filter((avatar) => avatar.selected)
+  assert.equal(on.length, 1, 'the core avatar is the one being written to')
+  assert.equal(on[0]?.share, Math.max(...avatars.map((avatar) => avatar.share)), 'and it is the largest share')
+
+  // A store that has already chosen keeps its choice when research is re-read.
+  saveAvatar(db, store.id, { id: on[0]!.id, name: on[0]!.name, selected: false })
+  saveAvatar(db, store.id, { id: amateur.id, name: amateur.name, selected: true })
+  await suggestAvatars(db, store.id)
+  assert.deepEqual(listAvatars(db, store.id).filter((avatar) => avatar.selected).map((avatar) => avatar.id), [amateur.id], 'a second run adds, it does not re-pick')
+
   // Edits survive a re-suggest.
   saveAvatar(db, store.id, { id: amateur.id, name: amateur.name, angle: 'padding that protects a partner', tone: 'blunt' })
   await suggestAvatars(db, store.id)
@@ -326,7 +339,7 @@ test('a blocked site says so and offers the paste route; a fetched one is read',
   assert.equal(pastedWins.headline, 'Pasted')
 })
 
-test('a competitor is folded into the research as a named competitor, triggers, proof to match and an avatar', async () => {
+test('a competitor is folded in as a competitor and an avatar, and never as the store\'s own claims', async () => {
   const { db, store, product } = await seeded()
   const before = latestResearch(db, store.id)!
   const record = saveCompetitor(db, store.id, { productId: product.id, angle: { ...extractAngle(COMPETITOR_HTML, 'https://fightco.example.com/p'), take: 'Foam, not horsehair; the wrist lock is velcro under the laces.' } })
@@ -335,8 +348,14 @@ test('a competitor is folded into the research as a named competitor, triggers, 
   assert.equal(competitor.priceBand, '$89.00–$149.00')
   assert.match(competitor.weakness, /velcro under the laces/)
   assert.match(competitor.angle, /scarcity/)
-  assert.ok(research.triggers.includes('Why 12,000+ boxers switched to ProGlove'))
-  assert.ok(research.proofPoints.some((point) => /Match or beat: 90-day money-back guarantee/.test(point)))
+  // Proof points are printed on pages as trust lines and pull-quotes, and
+  // triggers are what the copy writers turn into sentences. A competitor's
+  // guarantee folded into either put a promise this merchant never made — in
+  // the competitor's wording — on the merchant's own product page.
+  assert.deepEqual(research.triggers, before.triggers, 'their hooks are not this store\'s reasons to buy')
+  assert.deepEqual(research.proofPoints, before.proofPoints, 'and their guarantee is not this store\'s claim')
+  assert.ok(research.sourceNotes.some((note) => /FightCo promises: .*90-day money-back guarantee/.test(note)), 'what they promise is on file as theirs')
+  assert.ok(research.sourceNotes.some((note) => /not to reuse.*Why 12,000\+ boxers switched/.test(note)), 'and so are their hooks')
   assert.equal(latestResearch(db, store.id)!.competitors.length, before.competitors.length + 1, 'a new research record is on file')
   assert.ok(listAvatars(db, store.id).some((avatar) => avatar.source === 'competitor' && avatar.who === 'serious boxers'))
 })

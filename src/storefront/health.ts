@@ -140,12 +140,25 @@ export function auditHtml(html: string, input: { path: string; title?: string; b
   }
 }
 
-/** Renders the home page, the first three product pages and every published built page as a visitor would get them, and audits each. */
-export function auditStore(db: Db, store: Store): { pages: PageAudit[]; score: number } {
-  const env = environment(db, store.id, 'draft')
-  const current: StoreView = { db, store, env, base: `/preview/${store.slug}`, preview: false, cart: null, totals: null }
+/**
+ * Renders the home page, the first three product pages and every published
+ * built page as a visitor would get them, and audits each.
+ *
+ * "As a visitor would get them" means the live environment on a live store.
+ * The report always rendered the draft, so it graded the theme and the colours
+ * the merchant was still working on rather than the ones customers were
+ * looking at — a contrast failure could be reported that no visitor could see,
+ * and a real one on the live site could be missed. A store that has never
+ * published has only a draft, and that is what is audited, said plainly.
+ */
+export function auditStore(db: Db, store: Store, opts: { environment?: 'draft' | 'live' } = {}): { pages: PageAudit[]; score: number; environment: 'draft' | 'live' } {
+  const kind = opts.environment ?? (store.status === 'live' ? 'live' : 'draft')
+  const env = environment(db, store.id, kind)
+  // The brand belongs to the environment, same as the storefront reads it.
+  const audited = kind === 'live' && Object.keys(env.brand).length ? { ...store, brand: env.brand } : store
+  const current: StoreView = { db, store: audited, env, base: kind === 'live' ? `/s/${store.slug}` : `/preview/${store.slug}`, preview: false, cart: null, totals: null }
   const products = listProducts(db, store.id, { status: 'published', limit: 3 })
-  const brand = { ...(store.brand.primary ? { primary: store.brand.primary } : {}), ...(store.brand.paper ? { paper: store.brand.paper } : {}), ...(store.brand.ink ? { ink: store.brand.ink } : {}) }
+  const brand = { ...(audited.brand.primary ? { primary: audited.brand.primary } : {}), ...(audited.brand.paper ? { paper: audited.brand.paper } : {}), ...(audited.brand.ink ? { ink: audited.brand.ink } : {}) }
   const pages: PageAudit[] = []
   const safely = (path: string, title: string, render: () => string) => {
     try {
@@ -162,5 +175,5 @@ export function auditStore(db: Db, store: Store): { pages: PageAudit[]; score: n
     safely(`/pages/${page.handle}`, page.title, () => (page.mode === 'html' ? view.htmlPage(current, page) : view.blockPage(current, page)))
   }
   const score = pages.length ? Math.round(pages.reduce((sum, page) => sum + page.score, 0) / pages.length) : 0
-  return { pages, score }
+  return { pages, score, environment: kind }
 }
