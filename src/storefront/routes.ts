@@ -115,7 +115,15 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const sessionKey = current.preview ? '' : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? '') })
     const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, sessionKey)
     record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
-    if (version && version.productId === product.id) return html(view.blockPage(current, version))
+    if (version && version.productId === product.id) {
+      return html(
+        view.blockPage(current, version, {
+          title: product.seo.title || `${product.title} — ${current.store.name}`,
+          description: product.seo.description || product.subtitle || product.title,
+          canonical: `${current.base}/products/${product.handle}`,
+        }),
+      )
+    }
     const stats = statsFor(current.db, current.store.id, product.id)
     const reviews = listReviews(current.db, current.store.id, { productId: product.id, status: 'approved', limit: 12 })
     const companions = companionsFor(current.db, current.store.id, product.id, 2)

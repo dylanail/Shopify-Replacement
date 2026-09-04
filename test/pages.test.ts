@@ -8,7 +8,7 @@ import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } fr
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
 import { createStore, environment } from '../src/control/stores.ts'
 import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
-import { productPage } from '../src/storefront/render.ts'
+import { blockPage, productPage } from '../src/storefront/render.ts'
 import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
@@ -415,4 +415,28 @@ test('a block setting the owner cleared stays cleared', () => {
     !cleared.includes(found.fallback),
     `deleting ${found.definition.type}.${found.key} must not bring "${found.fallback}" back at render`,
   )
+})
+
+test('a split-test version served at the product URL is that product, to a crawler', () => {
+  const { db, store, glove } = shop()
+  const version = createPage(db, store.id, {
+    title: 'The Glove — benefit-led · Coach Mara (premium, focus on the wrist)',
+    kind: 'product',
+    role: 'pdp',
+    productId: glove.id,
+    status: 'published',
+    weight: 100,
+    blocks: [newBlock('headline', { text: 'Buy it' })],
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const asItself = blockPage(view as never, version)
+  assert.match(asItself, /Coach Mara/, 'at its own address it is the version')
+
+  const asProduct = blockPage(view as never, version, {
+    title: `${glove.title} — ${store.name}`,
+    description: glove.subtitle || glove.title,
+    canonical: `/s/${store.slug}/products/${glove.handle}`,
+  })
+  assert.ok(!/Coach Mara/.test(asProduct), 'at the product address the operator\'s internal name is not the title')
+  assert.match(asProduct, new RegExp(`rel="canonical" href="[^"]*/products/${glove.handle}"`), 'and the canonical is the product, not a page nobody links to')
 })

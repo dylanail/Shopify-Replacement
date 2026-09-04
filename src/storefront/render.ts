@@ -16,6 +16,7 @@ import { deliveryEstimate, viewersNow, listQuestions, type TrackingView } from '
 import { getProduct } from '../domain/catalog.ts'
 import { legalFor } from './legal.ts'
 import { stripeFor } from '../payments/stripe.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
 import { funnelNextFor, type ResolvedBump, type ResolvedOffer } from '../domain/funnels.ts'
 import type { Store, StoreEnvironment } from '../control/stores.ts'
 import { breadcrumbJsonLd, jsonLdTag, metaTags, productJsonLd } from '../seo/schema.ts'
@@ -103,15 +104,21 @@ ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
  * and the cart, and on none of the advertorials, offer pages or PDP versions
  * an ad actually lands on.
  */
-export function blockPage(view: StoreView, page: Page): string {
+export function blockPage(view: StoreView, page: Page, servedAs?: { title: string; description: string; canonical: string }): string {
   const next = funnelNextFor(view.db, view.store.id, page.id)
   const context = { ...blockContextFor(view.db, view.store, view.base), ...(next ? { funnelNext: `${view.base}${next}` } : {}) }
+  // `servedAs` is the page's identity when it stands in for something else. A
+  // split-test version rendered at /products/:handle used to publish the
+  // operator's internal page name — "The Sparring Glove — benefit-led · Coach
+  // Mara (premium, focus on the wrist)" — as its <title>, and point its
+  // canonical at /pages/<version handle>, telling every crawler the product's
+  // own URL was a duplicate of a page nobody links to.
   return layout(view, {
-    title: page.seo.title || `${page.title} — ${view.store.name}`,
-    description: page.seo.description || page.title,
+    title: servedAs?.title || page.seo.title || `${page.title} — ${view.store.name}`,
+    description: servedAs?.description || page.seo.description || page.title,
     body: renderPageBody(page, context),
     ...(page.seo.image ? { image: page.seo.image } : {}),
-    canonical: `${view.base}/pages/${page.handle}`,
+    canonical: servedAs?.canonical ?? `${view.base}/pages/${page.handle}`,
     bare: true,
     head: page.headHtml,
   })
@@ -429,12 +436,11 @@ function conversionSections(view: StoreView, product: Product, content: Product[
  */
 export function absolute(view: StoreView, path: string): string {
   if (!path || /^[a-z]+:/i.test(path) || path.startsWith('//')) return path
-  const hosted = view.db
-    .all<{ hostname: string }>("SELECT hostname FROM domains WHERE store_id = ? AND status = 'verified' AND mode = 'host' ORDER BY created_at LIMIT 1", view.store.id)
-    .at(0)
-  const root = process.env.AMBORAS_STOREFRONT_HOST
-  const origin = hosted ? `https://${hosted.hostname}` : root ? `https://${view.store.slug}.${root}` : (process.env.AMBORAS_PUBLIC_ORIGIN ?? '')
-  if (!origin) return path
+  // publicStoreUrl already answers "where is this store", custom domain first,
+  // and it always answers with something absolute — which is the whole point
+  // of these two tags.
+  const home = publicStoreUrl(view.db, view.store)
+  const origin = view.base && home.endsWith(view.base) ? home.slice(0, -view.base.length) : home
   return `${origin}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
