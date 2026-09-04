@@ -26,7 +26,8 @@ export type Run = {
   storeId: string
   kind: 'chat' | 'onboarding' | 'automation'
   prompt: string
-  status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  /** `partial` is some steps done and some failed — it used to be filed as `completed`, green. */
+  status: 'queued' | 'running' | 'paused' | 'completed' | 'partial' | 'failed' | 'cancelled'
   page: string
   sessionId: string | null
   cursor: number
@@ -261,7 +262,17 @@ export async function runToCompletion(db: Db, runId: string, ctx: Omit<ToolConte
   )
 
   const final = getRun(db, runId) as Run
-  const status = final.status === 'cancelled' || final.status === 'paused' ? final.status : failures.length && !results.length ? 'failed' : 'completed'
+  // A run that produced one product and failed nine steps is not a success.
+  // It used to be filed as 'completed' and rendered green, which is how an
+  // onboarding that mostly failed looked like one that worked.
+  const status =
+    final.status === 'cancelled' || final.status === 'paused'
+      ? final.status
+      : failures.length
+        ? results.length
+          ? 'partial'
+          : 'failed'
+        : 'completed'
   db.run('UPDATE agent_runs SET status = ?, error = ?, cursor = ?, updated_at = ? WHERE id = ?', status, failures.join('; '), final.steps.length, now(), runId)
   emitActivity({
     storeId: run.storeId,

@@ -55,6 +55,26 @@ async function call(path: string, init: { method?: string; form?: Record<string,
 
 let slug = ''
 
+/**
+ * Onboarding is detached: the POST redirects to a page that polls. This walks
+ * that for the tests — start the build, poll until it settles, follow it.
+ */
+async function build(form: Record<string, string>) {
+  const started = await call('/onboarding', { form })
+  assert.match(started.location, /^\/onboarding\/building\?t=/, 'the build is watched, not waited on')
+  const ticket = new URL(started.location, base).searchParams.get('t') ?? ''
+  const watching = await call(started.location)
+  assert.match(watching.text, /onboarding\/status\?t=/, 'the page polls for the stage rather than holding the request open')
+  assert.match(watching.text, /Names the brand and picks a palette/, 'and lists what is happening')
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const status = JSON.parse((await call(`/onboarding/status?t=${encodeURIComponent(ticket)}`)).text) as { state: string; next?: string; error?: string }
+    if (status.state === 'done') return { location: status.next ?? '/admin' }
+    if (status.state === 'failed') throw new Error(`build failed: ${status.error}`)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('build did not finish')
+}
+
 test('the root is the admin, and login and register are served', async () => {
   assert.equal((await call('/')).status, 302)
   assert.equal((await call('/')).location, '/admin')
@@ -75,12 +95,11 @@ test('registering lands on onboarding, and one sentence builds a store', async (
   assert.equal(registered.location, '/onboarding')
   assert.match((await call('/onboarding')).text, /What are you selling/)
 
+
   const short = await call('/onboarding', { form: { prompt: 'shoes' } })
   assert.match(short.location, /error=/, 'a two-word prompt is refused rather than guessed at')
 
-  const built = await call('/onboarding', {
-    form: { prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City' },
-  })
+  const built = await build({ prompt: 'A hand-stitched boxing gear store called Ironjaw & Co, heritage leather atelier in Mexico City' })
   assert.match(built.location, /^\/admin\?flash=/)
   assert.match(decodeURIComponent(built.location), /Ironjaw & Co is built/)
 
@@ -320,7 +339,15 @@ test('a second store can be started from the admin, with a photo, and both show 
   assert.match(hub.text, /orders(&nbsp;| )\/(&nbsp;| )30d/, 'the hub says whether each store is a business yet')
   assert.ok(!/class="rail"/.test(hub.text), 'the hub is the account, not one store: no store rail around it')
 
-  const built = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
+  const started = await upload('/onboarding', { prompt: 'A clinical skincare brand called Marrow Lab with three products' }, { field: 'photo', name: 'serum.png', type: 'image/png', data: PNG })
+  const ticket = new URL(started.location, base).searchParams.get('t') ?? ''
+  assert.ok(ticket, 'a multipart build is watched too')
+  let built = { location: '' }
+  for (let attempt = 0; attempt < 200 && !built.location; attempt++) {
+    const status = JSON.parse((await call(`/onboarding/status?t=${encodeURIComponent(ticket)}`)).text) as { state: string; next?: string }
+    if (status.state === 'done') built = { location: status.next ?? '' }
+    else await new Promise((resolve) => setTimeout(resolve, 50))
+  }
   assert.match(decodeURIComponent(built.location), /Marrow Lab is built/)
 
   const dashboard = await call('/admin')

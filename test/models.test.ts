@@ -13,6 +13,7 @@ import { readCompetitor } from '../src/agent/angles.ts'
 import { listProducts } from '../src/domain/catalog.ts'
 import { listPromotions } from '../src/domain/promotions.ts'
 import { saveAnswers } from '../src/control/build.ts'
+import { seedDefaultRegion } from '../src/domain/regions.ts'
 
 /**
  * The model path, exercised end to end against a fake network: the request
@@ -307,5 +308,49 @@ test('the eight buyer answers reach the research step they are collected for', a
     assert.match(sent, /Shift nurses in their thirties/, 'what the owner told the build about their buyer is in the research prompt')
     assert.match(sent, /left them groggy/)
     assert.match(sent, /does not know/, 'and so is what they said they do not know, which is what research is for')
+  })
+})
+
+test('the assistant answers from what the tools returned, not before they ran', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Answers Co', prompt: 'a boxing gear store' })
+  seedDefaultRegion(db, store.id, 'USD')
+
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-test' }, async () => {
+    let call = 0
+    const net = fakeNetwork(() => {
+      call++
+      // First call: the plan, with a tool call and a preamble written blind.
+      if (call === 1) {
+        return anthropicText('', {
+          stop_reason: 'tool_use',
+          content: [
+            { type: 'text', text: 'Let me look.' },
+            { type: 'tool_use', id: 'tu_1', name: 'create_product', input: { title: 'The Wrap', priceCents: 1800 } },
+          ],
+        })
+      }
+      // Second call: the answer, written with the result in hand.
+      return anthropicText('The Wrap is in the catalog at $18.00.')
+    })
+
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'add the wrap for $18' })
+    assert.equal(result.assistant.content, 'The Wrap is in the catalog at $18.00.')
+
+    // The last call is the answering turn: it carries what the tools returned.
+    const last = JSON.stringify(net.calls.at(-1)!.body)
+    assert.match(last, /What the tools returned/, 'the tool results go back to the model')
+    assert.match(last, /The Wrap/)
+    assert.ok(net.calls.length > 1, 'which means more than the one planning call')
+  })
+})
+
+test('with no model the assistant still answers, from the tools own summaries', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Rules Co', prompt: 'a boxing gear store' })
+  seedDefaultRegion(db, store.id, 'USD')
+  await withEnv({}, async () => {
+    const result = await ask(db, { storeId: store.id, userId: user.id, text: 'Create a 15% discount on code SPRING15' })
+    assert.match(result.assistant.content, /SPRING15/)
   })
 })

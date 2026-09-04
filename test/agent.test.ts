@@ -87,7 +87,7 @@ test('branches in a run execute concurrently and failures do not take the run do
     ],
   })
   const outcome = await runToCompletion(db, run.id, { actor: { type: 'agent', id: user.id } })
-  assert.equal(outcome.run.status, 'completed')
+  assert.equal(outcome.run.status, 'partial', 'some done and some failed is not a success')
   assert.equal(outcome.results.length, 3)
   assert.equal(outcome.failures.length, 1)
   assert.equal(listProducts(db, store.id, {}).length, 2)

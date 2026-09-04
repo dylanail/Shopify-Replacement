@@ -34,10 +34,10 @@ import { generateVersions, setVersionWeight } from '../pages/versions.ts'
 import { sendEmail, orderContext } from '../email/send.ts'
 import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
-import { onboard } from '../agent/onboarding.ts'
+import { buildTicket, startOnboarding } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
 import { shell } from './shell.ts'
-import { authPage, onboardingPage } from './auth-pages.ts'
+import { authPage, buildingPage, onboardingPage } from './auth-pages.ts'
 import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
@@ -52,6 +52,8 @@ import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
 const STORE_COOKIE = 'amboras_store'
+/** The build mode chosen on the onboarding form, held until its build finishes. */
+const pendingMode = new Map<string, string>()
 /** An invite token held between clicking the link and having an account. */
 const INVITE_COOKIE = 'amboras_invite'
 
@@ -244,16 +246,41 @@ export function adminRouter(): Router {
       if (error instanceof UploadError) return redirect(`/onboarding?error=${encodeURIComponent(error.message)}`)
       throw error
     }
-    const result = await onboard(db(), {
+    const ticket = startOnboarding(db(), {
       ownerId: user.id,
       prompt,
       ...(referenceImage ? { referenceImage } : {}),
       ...(siteUrl ? { referenceUrl: siteUrl } : {}),
     })
-    setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
-    const mode = modeById(String(body.mode ?? 'own-product')) ?? modeById('own-product')
-    if (mode) setBuildMode(db(), result.store.id, mode.id)
-    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
+    pendingMode.set(ticket.id, String(body.mode ?? 'own-product'))
+    return redirect(`/onboarding/building?t=${encodeURIComponent(ticket.id)}`)
+  })
+
+  /** The build, watched rather than waited on. */
+  router.get('/onboarding/building', (ctx) => {
+    const user = requireUser(db(), ctx)
+    const ticket = buildTicket(ctx.query.get('t') ?? '', user.id)
+    if (!ticket) return redirect('/onboarding')
+    return html(buildingPage(ticket))
+  })
+
+  router.get('/onboarding/status', (ctx) => {
+    const user = requireUser(db(), ctx)
+    const ticket = buildTicket(ctx.query.get('t') ?? '', user.id)
+    if (!ticket) return { state: 'failed', error: 'That build is not in flight any more.' }
+    if (ticket.state === 'done' && ticket.storeId) {
+      const mode = modeById(pendingMode.get(ticket.id) ?? 'own-product') ?? modeById('own-product')
+      if (mode) setBuildMode(db(), ticket.storeId, mode.id)
+      pendingMode.delete(ticket.id)
+      setCookie(ctx.res, STORE_COOKIE, ticket.storeId, { maxAge: 60 * 60 * 24 * 365 })
+      // The flash says what actually happened, including what did not: it used
+      // to claim success whether or not the steps had failed.
+      const note = ticket.failures.length
+        ? `${ticket.storeName} is built, but ${ticket.failures.length} step${ticket.failures.length === 1 ? '' : 's'} failed: ${ticket.failures.slice(0, 2).join('; ')}. The Build page has the order of work from here.`
+        : `${ticket.storeName} is built — ${ticket.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`
+      return { state: 'done', stage: ticket.stage, next: `/admin?flash=${encodeURIComponent(note)}` }
+    }
+    return { state: ticket.state, stage: ticket.stage, error: ticket.error }
   })
 
   /* ------------------------------------------------------------------ pages */

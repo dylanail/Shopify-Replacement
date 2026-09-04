@@ -885,7 +885,7 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
     <div class="card"><h2>Recent runs</h2>
       ${runs.map((run) => `<div style="border-top:1px solid var(--line);padding:.5rem 0">
         <div class="row" style="justify-content:space-between"><span style="font-size:12.5px">${escapeHtml(run.prompt.slice(0, 60))}</span>
-          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}</span></div>
+          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}${run.status === 'partial' && run.error ? ` · ${escapeHtml(run.error.split(';').length)} failed` : ''}</span></div>
         <div class="muted" style="font-size:11.5px">${run.steps.map((step) => `${escapeHtml(step.tool)}${step.status === 'failed' ? ' ✗' : ''}`).join(' · ')}</div></div>`).join('')
         || '<p class="muted" style="font-size:12px">No runs yet.</p>'}</div>
   </div></div>`

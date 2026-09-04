@@ -61,6 +61,45 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
     <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
 }
 
+/**
+ * The build, while it is happening.
+ *
+ * Onboarding used to run inside the POST: a spinning tab for minutes, a
+ * gateway error behind any proxy with a timeout, and a flash claiming success
+ * whether or not the steps had failed. This page is what the POST redirects
+ * to; it polls and says which of the five stages is running.
+ */
+export function buildingPage(ticket: { id: string; stage: string; storeName: string }): string {
+  return frame('Building your store', `
+    <h1>${ticket.storeName ? escapeHtml(ticket.storeName) : 'Building it now'}</h1>
+    <p class="lead" id="stage">${escapeHtml(ticket.stage)}</p>
+    <div class="steps" id="steps">
+      <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
+      <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
+      <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
+      <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
+      <div><i></i><span>Builds the storefront and hands you the address</span></div>
+    </div>
+    <p class="alt" id="note">This takes a minute or two. You can leave this page open.</p>
+    <script>
+    (function(){
+      var stage = document.getElementById('stage'), note = document.getElementById('note');
+      function poll(){
+        fetch('/onboarding/status?t=${encodeURIComponent(ticket.id)}', { headers: { accept: 'application/json' } })
+          .then(function(r){ return r.json() })
+          .then(function(s){
+            if (s.stage) stage.textContent = s.stage;
+            if (s.state === 'done') { window.location = s.next; return }
+            if (s.state === 'failed') { note.textContent = s.error || 'That did not work. Try again with a little more detail.'; return }
+            setTimeout(poll, 1500);
+          })
+          .catch(function(){ setTimeout(poll, 3000) });
+      }
+      setTimeout(poll, 1200);
+    })();
+    </script>`)
+}
+
 export function onboardingPage(name: string, error: string | null, storeCount = 0): string {
   return frame('Build your store', `
     <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${storeCount ? `← Your stores (${storeCount})` : '← Your account'}</a></p>
