@@ -12,6 +12,7 @@ import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
 import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
 import { publicStoreUrl } from '../lib/urls.ts'
+import { id as visitorId } from '../lib/ids.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
@@ -29,7 +30,27 @@ import * as view from './render.ts'
 import type { CheckoutInput, StoreView } from './render.ts'
 
 const CART_COOKIE = 'amboras_cart'
+const VISITOR_COOKIE = 'amboras_v'
 const log = logger('checkout')
+
+/**
+ * The durable visitor id, set on the first storefront request and kept for a
+ * year. Split tests are assigned from this rather than from the analytics
+ * session: the session key is a fingerprint of address, agent and today's
+ * date, so assigning from it re-rolled a returning visitor at midnight, and
+ * again every time a phone moved between wifi and cell — which is often
+ * enough that a two-day test was measuring the coin flip as much as the page.
+ */
+function visitorFor(ctx: Ctx): string {
+  const existing = ctx.cookies[VISITOR_COOKIE]
+  if (existing) return existing
+  const fresh = visitorId('v')
+  // Written back onto the request too, so a handler that asks twice — the
+  // version to render, then the session to record it against — gets one id.
+  ctx.cookies[VISITOR_COOKIE] = fresh
+  setCookie(ctx.res, VISITOR_COOKIE, fresh, { maxAge: 60 * 60 * 24 * 365 })
+  return fresh
+}
 
 /**
  * The storefront is served for a store resolved from the host (or from a
@@ -77,6 +98,7 @@ function record(ctx: Ctx, current: StoreView, type: Parameters<typeof track>[3],
   const session = analyticsSession(current.db, current.store.id, {
     ip: ctx.ip,
     userAgent: String(ctx.req.headers['user-agent'] ?? ''),
+    visitor: visitorFor(ctx),
     referrer: String(ctx.req.headers.referer ?? ''),
   })
   track(current.db, current.store.id, session, type, { path: ctx.url.pathname, ...detail })
@@ -119,8 +141,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product || product.status !== 'published') throw notFound('No such product')
-    const sessionKey = current.preview ? '' : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? '') })
-    const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, sessionKey)
+    const visitor = current.preview ? '' : visitorFor(ctx)
+    const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, visitor)
     record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
     if (version && version.productId === product.id) {
       return html(
@@ -415,8 +437,11 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/go/:group', (ctx) => {
     const current = open(ctx)
     const group = ctx.params.group as string
-    const sessionId = current.preview ? `preview-${Date.now()}` : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''), referrer: String(ctx.req.headers.referer ?? '') })
-    const funnel = pickFunnel(current.db, current.store.id, group, sessionId)
+    const visitor = current.preview ? `preview-${Date.now()}` : visitorFor(ctx)
+    const sessionId = current.preview
+      ? visitor
+      : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''), visitor, referrer: String(ctx.req.headers.referer ?? '') })
+    const funnel = pickFunnel(current.db, current.store.id, group, visitor)
     if (!funnel) throw notFound('No funnel is running under that name')
     if (!current.preview) track(current.db, current.store.id, sessionId, 'funnel.enter', { path: ctx.url.pathname, meta: { funnelId: funnel.id, group } })
     return redirect(`${current.base}${funnelEntry(current.db, current.store.id, funnel)}`)

@@ -195,6 +195,24 @@ test('the generated storefront serves a home page, a PDP and its structured data
   assert.match((await call(`/s/${slug}/llms.txt`)).text, /## What we sell/)
 })
 
+test('the storefront gives a visitor a durable id and keeps it when the address changes', async () => {
+  // Split tests are assigned from this id. The analytics fingerprint it used
+  // to be assigned from folds in the date and the address, so a returning
+  // visitor was re-rolled at midnight and every time a phone changed network.
+  const first = await fetch(`${base}/s/${slug}/`, { redirect: 'manual' })
+  const issued = first.headers.getSetCookie().find((cookie) => cookie.startsWith('amboras_v='))
+  assert.ok(issued, 'a first visit is given a visitor id')
+  assert.match(issued, /Max-Age=31536000/, 'and keeps it for a year, not for the browser session')
+  assert.match(issued, /HttpOnly/)
+  const value = issued.slice('amboras_v='.length).split(';')[0] ?? ''
+
+  const again = await fetch(`${base}/s/${slug}/`, { headers: { cookie: `amboras_v=${value}`, 'x-forwarded-for': '203.0.113.44' }, redirect: 'manual' })
+  assert.ok(
+    !again.headers.getSetCookie().some((cookie) => cookie.startsWith('amboras_v=')),
+    'the same visitor from a different address is not issued a new one',
+  )
+})
+
 test('a visitor can buy something, and the order shows up in the admin', async () => {
   const collection = await call(`/s/${slug}/collections/all`)
   const handle = /\/products\/([a-z0-9-]+)/.exec(collection.text)?.[1] ?? ''
@@ -275,6 +293,48 @@ test('a checkout laid out from blocks becomes the store\'s checkout once publish
 
   const suggested = await call('/admin/pages/suggest', { form: { goal: 'checkout' } })
   assert.match(suggested.location, /\/admin\/pages\/page_[a-z0-9]+\/edit/, 'the layout suggester knows the checkout as a goal')
+})
+
+test('a block the store defined can be read back, edited, and outlives its own removal on a page', async () => {
+  const defined = await call('/admin/blocks', {
+    form: { name: 'Ingredient strip', description: 'Chips with a percentage each', icon: '✚', fields: 'headline|Headline|string|What is in it', template: '<h2 class="head">{{headline}}</h2>', css: '.chip{color:#c00}' },
+  })
+  assert.match(flashOf(defined.location), /saved as custom-ingredient-strip/)
+
+  // The card used to list a name and a Remove button: what the block actually
+  // was — its template, its fields, the CSS — was unreadable once saved, so
+  // changing one word meant writing the whole thing again.
+  const listed = await call('/admin/pages')
+  assert.match(listed.text, /&lt;h2 class=&quot;head&quot;&gt;\{\{headline\}\}/, 'the stored template comes back in a form')
+  assert.match(listed.text, /headline\|Headline\|string\|What is in it/, 'and so do its fields')
+  assert.match(listed.text, /\.chip\{color:#c00\}/)
+
+  const edited = await call('/admin/blocks', {
+    form: { name: 'Ingredient strip', type: 'custom-ingredient-strip', icon: '✚', description: 'Chips with a percentage each', fields: 'headline|Headline|string|What is in it', template: '<h2 class="head">{{headline}} — every one</h2>', css: '.chip{color:#c00}' },
+  })
+  assert.match(flashOf(edited.location), /saved as custom-ingredient-strip/)
+  const after = await call('/admin/pages')
+  assert.match(after.text, /— every one/, 'saving the same type replaces it')
+  assert.equal(after.text.split('custom-ingredient-strip</code>').length - 1, 1, 'and does not leave a second copy behind')
+
+  // A page carrying the block, and then the block removed underneath it. The
+  // save used to be refused for an unknown type, so the page could not be
+  // edited at all — least of all to take the orphan off it.
+  const page = await call('/admin/pages/new', { form: { template: 'advertorial', title: 'Ingredients' } })
+  const pageId = /\/admin\/pages\/(page_[a-z0-9]+)\/edit/.exec(page.location)?.[1] ?? ''
+  assert.ok(pageId)
+  const withBlock = [{ id: 'blk_ing', type: 'custom-ingredient-strip', settings: { headline: 'What is in it' } }]
+  assert.match((await call(`/admin/pages/${pageId}/save`, { json: { title: 'Ingredients', mode: 'blocks', blocks: withBlock, status: 'draft' } })).text, /"ok": ?true/)
+
+  await call('/admin/blocks/custom-ingredient-strip/delete', { form: {} })
+  const orphaned = await call(`/admin/pages/${pageId}/save`, { json: { title: 'Ingredients, edited', mode: 'blocks', blocks: withBlock, status: 'draft' } })
+  assert.match(orphaned.text, /"ok": ?true/, 'the page still saves with the orphan on it')
+  const emptied = await call(`/admin/pages/${pageId}/save`, { json: { title: 'Ingredients, edited', mode: 'blocks', blocks: [], status: 'draft' } })
+  assert.match(emptied.text, /"ok": ?true/)
+  const stillRefused = await call(`/admin/pages/${pageId}/save`, { json: { title: 'Ingredients', mode: 'blocks', blocks: [{ type: 'custom-invented-just-now', settings: {} }], status: 'draft' } })
+  assert.match(stillRefused.text, /Unknown block type/, 'a type that was never on the page is still refused')
+
+  await call(`/admin/pages/${pageId}/delete`, { form: {} })
 })
 
 test('publishing a store with nothing new to publish is refused, not a version bump for nothing', async () => {

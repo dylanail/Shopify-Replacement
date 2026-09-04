@@ -185,16 +185,17 @@ export function resolveOffer(db: Db, storeId: string, offer: Offer | undefined, 
 
 /**
  * A funnel split test. Every funnel in a group with a weight above zero is in
- * it; a visitor arriving at /go/:group is assigned one by a hash of their
- * session and the group, so they see the same funnel every time, and the
- * entry is an event so each funnel's sessions can be followed to the cart
- * and the order.
+ * it; a visitor arriving at /go/:group is assigned one by a hash of the
+ * storefront's visitor cookie and the group, so they see the same funnel every
+ * time — the analytics session would have re-rolled them at midnight — and the
+ * entry is an event so each funnel's sessions can be followed to the cart and
+ * the order.
  */
-export function pickFunnel(db: Db, storeId: string, group: string, sessionKey: string): Funnel | null {
+export function pickFunnel(db: Db, storeId: string, group: string, visitorKey: string): Funnel | null {
   const live = listFunnels(db, storeId).filter((funnel) => funnel.testGroup === group && funnel.status === 'active' && funnel.weight > 0)
   if (!live.length) return null
   const total = live.reduce((sum, funnel) => sum + funnel.weight, 0)
-  const hash = parseInt(createHash('sha256').update(`${sessionKey}|${group}`).digest('hex').slice(0, 8), 16)
+  const hash = parseInt(createHash('sha256').update(`${visitorKey}|${group}`).digest('hex').slice(0, 8), 16)
   let point = hash % total
   for (const funnel of live) {
     point -= funnel.weight

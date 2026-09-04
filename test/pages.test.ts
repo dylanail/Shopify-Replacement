@@ -372,6 +372,41 @@ test('the assistant can build a page and a bundle', async () => {
   assert.ok(blockDefinition('bundle-offer'))
 })
 
+test('the assistant can read a page back and edit the blocks on it', async () => {
+  // It could add blocks and never touch them again: no way to see what was on
+  // a page, change a headline, reorder it or take a section off. The only edit
+  // available was building the page a second time.
+  const { db, store, user, glove } = shop()
+  const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
+  const created = await execute('create_page', { template: 'advertorial', productId: glove.id }, ctx)
+  const pageId = (created.data as { id: string }).id
+  await execute('add_block', { pageId, type: 'countdown', settings: { text: 'Ends in' } }, ctx)
+
+  const read = await execute('read_page', { pageId }, ctx)
+  const blocks = (read.data as { blocks: Array<{ position: number; id: string; type: string; settings: Record<string, unknown> }> }).blocks
+  assert.equal(blocks.at(-1)?.type, 'countdown')
+  assert.equal(blocks.at(-1)?.settings.text, 'Ends in')
+  assert.equal(blocks[0]?.position, 0, 'every block comes back with the position the edit tools address it by')
+
+  const countdown = blocks.at(-1)!
+  await execute('update_block', { pageId, blockId: countdown.id, settings: { text: 'Ends tonight' } }, ctx)
+  const edited = getPage(db, store.id, pageId)!.blocks.find((block) => block.id === countdown.id)
+  assert.equal(edited?.settings.text, 'Ends tonight')
+  assert.ok(Object.keys(edited?.settings ?? {}).length > 1, 'a partial update merges rather than replacing the settings')
+
+  await execute('move_block', { pageId, blockId: countdown.id, to: 0 }, ctx)
+  assert.equal(getPage(db, store.id, pageId)?.blocks[0]?.id, countdown.id)
+
+  const before = getPage(db, store.id, pageId)!.blocks.length
+  await execute('remove_block', { pageId, position: 0 }, ctx)
+  const after = getPage(db, store.id, pageId)!.blocks
+  assert.equal(after.length, before - 1)
+  assert.ok(!after.some((block) => block.id === countdown.id))
+
+  await assert.rejects(execute('update_block', { pageId, blockId: 'blk_nope', settings: {} }, ctx), /read_page/)
+  await assert.rejects(execute('remove_block', { pageId, position: 99 }, ctx), /read_page/)
+})
+
 test('the buybox promises only what the store has actually configured', () => {
   const { db, user } = fresh()
   const store = createStore(db, user.id, { name: 'Bare', prompt: 'bare' })

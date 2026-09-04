@@ -26,13 +26,23 @@ export const BEHAVIOUR_EVENTS: EventType[] = ['scroll', 'section.view', 'cta.cli
 /**
  * First-party analytics.
  *
- * No cookie, no pixel, no SDK. A visitor is identified by an HMAC of ip, user
- * agent and the current day — stable enough to count a session, useless as a
- * cross-site identifier, and it rotates itself at midnight.
+ * No pixel, no SDK, no third party. A session is one visitor for one day: the
+ * key is an HMAC of the storefront's own visitor id and the date where the
+ * browser sent one back, and of ip and user agent where it did not — a first
+ * request, or a client that keeps no cookies. Either way it rotates at
+ * midnight and is useless as a cross-site identifier.
+ *
+ * The visitor id matters beyond tidiness. Two people behind one office address
+ * on the same browser version were a single session; one person on a phone
+ * that changed network mid-visit was two.
  */
-export function sessionFor(db: Db, storeId: string, input: { ip: string; userAgent: string; referrer?: string; country?: string; city?: string }): string {
+export function sessionFor(
+  db: Db,
+  storeId: string,
+  input: { ip: string; userAgent: string; visitor?: string; referrer?: string; country?: string; city?: string },
+): string {
   const day = new Date().toISOString().slice(0, 10)
-  const key = fingerprint(input.ip, input.userAgent, day)
+  const key = input.visitor ? fingerprint('visitor', input.visitor, day) : fingerprint(input.ip, input.userAgent, day)
   const existing = db.one<{ id: string }>('SELECT id FROM sessions_analytics WHERE store_id = ? AND fingerprint = ?', storeId, key)
   if (existing) {
     db.update('sessions_analytics', existing.id, { last_seen: now() })

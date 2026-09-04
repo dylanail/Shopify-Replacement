@@ -31,7 +31,7 @@ import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
-import { listCustomBlocks } from '../pages/custom-blocks.ts'
+import { listCustomBlocks, type CustomBlock } from '../pages/custom-blocks.ts'
 import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 
@@ -734,21 +734,40 @@ export function pagesPage(ctx: Ctx): string {
   </tbody></table></div>`
 }
 
-/** The blocks this store defined for itself, and the form to define one. The model can do the same through create_block. */
+/**
+ * The blocks this store defined for itself, and the form to define one. The
+ * model can do the same through create_block.
+ *
+ * Every block opens onto the same form, filled in with what is stored: the
+ * template, the CSS, the script and the fields. Saving posts the same type
+ * back, which replaces it. Before this the card listed a name and a Remove
+ * button, so a block written by the assistant — or by you, last month — could
+ * be deleted and written again from scratch, and nothing else.
+ */
 function customBlocksCard(ctx: Ctx): string {
   const blocks = listCustomBlocks(ctx.db, ctx.store.id)
   return `<div class="card" id="blocks" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Your own blocks</h2><span class="muted" style="font-size:12px">${blocks.length ? `${blocks.length} defined` : 'None yet'} · when no block in the catalog does the job, define one; the assistant can too</span></div>
-    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'}</div></td>
-      <td style="width:6rem;text-align:right"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block?')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
-    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>
-    <form method="post" action="/admin/blocks" style="margin-top:.6rem">
-      <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="Ingredient strip"></div><div class="field" style="flex:1"><label>Type (optional, custom-…)</label><input name="type" placeholder="custom-ingredient-strip"></div><div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="✚"></div></div>
-      <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" placeholder="A row of ingredient chips with a percentage each"></div>
-      <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|"></textarea></div>
-      <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;"></textarea></div>
-      <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2"></textarea></div>
-      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2"></textarea></div>
-      <button class="btn primary" type="submit">Save the block</button></form></details></div>`
+    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'} · edited ${escapeHtml(block.updatedAt.slice(0, 10))}</div>
+      <details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer;font-size:12px">Edit it</summary>${blockForm(block)}</details></td>
+      <td style="width:6rem;text-align:right;vertical-align:top"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block? Pages that use it keep the section until you take it off them.')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
+    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>${blockForm()}</details></div>`
+}
+
+/** One block's definition as a form. With a block it edits that block; without one it defines a new one. */
+function blockForm(block?: CustomBlock): string {
+  const fieldLines = (block?.fields ?? [])
+    .map((field) => [field.key, field.label ?? field.key, field.multiline ? 'text' : field.type, field.default === undefined ? '' : String(field.default)].join('|').replace(/\|+$/, ''))
+    .join('\n')
+  return `<form method="post" action="/admin/blocks" style="margin-top:.6rem">
+      <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required value="${escapeHtml(block?.name ?? '')}" placeholder="Ingredient strip"></div>
+        <div class="field" style="flex:1"><label>Type${block ? '' : ' (optional, custom-…)'}</label><input name="type" value="${escapeHtml(block?.type ?? '')}" ${block ? 'readonly' : ''} placeholder="custom-ingredient-strip"></div>
+        <div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="${escapeHtml(block?.icon ?? '✚')}"></div></div>
+      <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" value="${escapeHtml(block?.description ?? '')}" placeholder="A row of ingredient chips with a percentage each"></div>
+      <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|">${escapeHtml(fieldLines)}</textarea></div>
+      <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;">${escapeHtml(block?.template ?? '')}</textarea></div>
+      <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2">${escapeHtml(block?.css ?? '')}</textarea></div>
+      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2">${escapeHtml(block?.js ?? '')}</textarea></div>
+      <button class="btn primary" type="submit">${block ? 'Save changes' : 'Save the block'}</button></form>`
 }
 
 /* --------------------------------------------------------------- bundles */

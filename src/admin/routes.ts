@@ -477,7 +477,12 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
     const custom = new Set(customDefinitions(db(), current.store.id).map((definition) => definition.type))
-    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type))
+    // A type the page already carries is allowed through even when nothing
+    // defines it any more — a custom block that was removed leaves orphans,
+    // and refusing the save meant the page could not be edited at all, least
+    // of all to take the orphan off it. New types still have to exist.
+    const carried = new Set((getPage(db(), current.store.id, ctx.params.id as string)?.blocks ?? []).map((block) => block.type))
+    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type) && !carried.has(block.type))
     if (unknown) return { error: `Unknown block type ${unknown.type}` }
     const seo = (body.seo ?? {}) as Record<string, unknown>
     const updated = updatePage(db(), current.store.id, ctx.params.id as string, {

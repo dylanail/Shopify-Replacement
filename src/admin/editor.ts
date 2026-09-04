@@ -203,6 +203,23 @@ function script(): string {
     if (state.selected === null || !state.blocks[state.selected]) { props.innerHTML = '<p class="muted">Select a block to edit it.</p>'; $('props-title').textContent = 'Settings'; return }
     var b = state.blocks[state.selected], d = defs[b.type]; $('props-title').textContent = d ? d.name : b.type;
     var html = '';
+    /* A block whose type is gone — a custom block someone removed, or a page
+       carried over from a build that had it. The panel used to throw here and
+       take the whole settings pane with it, so the one thing the merchant
+       wanted to do (take it off the page) was the one thing they could not.
+       Its settings are still editable as JSON, and the page still saves. */
+    if (!d) {
+      props.innerHTML = '<p class="muted">The block type <code>' + esc(b.type) + '</code> is not defined on this store any more. Its settings are below as JSON — the page keeps them, and they come back if you define the type again.</p>'
+        + '<div class="f"><label>Settings (JSON)</label><textarea data-raw rows="8">' + esc(JSON.stringify(b.settings || {}, null, 2)) + '</textarea><span class="help">Nothing renders where this block is until the type exists.</span></div>'
+        + '<div class="row"><button type="button" class="btn small" data-act="dup">Duplicate</button><button type="button" class="btn small danger" data-act="del">Delete block</button></div>';
+      var raw = props.querySelector('[data-raw]');
+      raw.addEventListener('input', function(){
+        try { var parsed = JSON.parse(raw.value); if (!parsed || typeof parsed !== 'object') throw new Error('not an object'); push(); b.settings = parsed; setDirty(true); status.textContent = 'Unsaved changes'; status.className = 'status dirty' }
+        catch (e) { status.textContent = 'That is not valid JSON — not saved'; status.className = 'status error' }
+      });
+      props.querySelectorAll('[data-act]').forEach(function(btn){ btn.addEventListener('click', function(){ act(btn.dataset.act, state.selected) }) });
+      return;
+    }
     Object.keys(d.schema).forEach(function(key){
       var f = d.schema[key], v = b.settings[key] !== undefined ? b.settings[key] : (f.default !== undefined ? f.default : '');
       var label = esc(f.label || key);

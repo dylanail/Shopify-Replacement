@@ -256,6 +256,13 @@ test('one visitor across many requests is one session', () => {
   const second = sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same' })
   assert.equal(first, second)
   assert.notEqual(first, sessionFor(db, store.id, { ip: '10.0.0.2', userAgent: 'same' }))
+
+  // With the storefront's visitor cookie in hand the address stops mattering,
+  // in both directions: a phone that moves from wifi to cell is still one
+  // session, and two people behind one office address are two.
+  const moved = sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same', visitor: 'v_one' })
+  assert.equal(moved, sessionFor(db, store.id, { ip: '198.51.100.7', userAgent: 'same', visitor: 'v_one' }))
+  assert.notEqual(moved, sessionFor(db, store.id, { ip: '10.0.0.1', userAgent: 'same', visitor: 'v_two' }))
 })
 
 test('a member cannot take the storefront live, connect a domain or delete a page', async () => {

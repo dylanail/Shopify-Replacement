@@ -16,9 +16,10 @@ import { createPage, getPage, listPages, updatePage, type Page } from './store.t
  *
  * A product can have any number of page versions — each a format plus a
  * direction — and any number of advertorials. The versions with a weight are
- * in a split test: a visitor is assigned one by a hash of their session and
- * sees the same one every time, and the numbers per version come from the
- * same events everything else is measured by.
+ * in a split test: a visitor is assigned one by a hash of the storefront's
+ * visitor cookie and sees the same one every time — for a year, across
+ * midnight and across a change of address — and the numbers per version come
+ * from the same events everything else is measured by.
  */
 export type VersionRequest = {
   productId: string
@@ -87,12 +88,17 @@ export function versionsFor(db: Db, storeId: string, productId: string): Page[] 
   return listPages(db, storeId).filter((page) => page.productId === productId && (page.role === 'pdp' || page.role === 'advertorial'))
 }
 
-/** The pdp version a session sees, or null to render the built-in product page. */
-export function pickPdpVersion(db: Db, storeId: string, product: Product, sessionKey: string): Page | null {
+/**
+ * The pdp version a visitor sees, or null to render the built-in product page.
+ * `visitorKey` is the durable storefront cookie, not the analytics session:
+ * the session key turns over daily and moves with the address, which re-rolled
+ * returning visitors into the other arm mid-test.
+ */
+export function pickPdpVersion(db: Db, storeId: string, product: Product, visitorKey: string): Page | null {
   const live = versionsFor(db, storeId, product.id).filter((page) => page.role === 'pdp' && page.status === 'published' && page.weight > 0)
   if (!live.length) return null
   const total = live.reduce((sum, page) => sum + page.weight, 0)
-  const hash = parseInt(createHash('sha256').update(`${sessionKey}|${product.id}`).digest('hex').slice(0, 8), 16)
+  const hash = parseInt(createHash('sha256').update(`${visitorKey}|${product.id}`).digest('hex').slice(0, 8), 16)
   let point = hash % total
   for (const page of live) {
     point -= page.weight
