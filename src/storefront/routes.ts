@@ -10,11 +10,14 @@ import { logger } from '../lib/log.ts'
 import type { LineItem } from '../domain/types.ts'
 import { askQuestion, requestStockAlert, trackingFor } from '../domain/ops.ts'
 import { funnelEntry, funnelForProducts, pickFunnel, resolveBump, resolveOffer } from '../domain/funnels.ts'
-import { privacyHtml, termsHtml } from './legal.ts'
+import { privacyHtml, shippingHtml, termsHtml } from './legal.ts'
+import { publicStoreUrl } from '../lib/urls.ts'
+import { id as visitorId } from '../lib/ids.ts'
+import { renderSlot } from '../control/plugins.ts'
 import { BEHAVIOUR_EVENTS } from '../analytics/events.ts'
 import { recordDownsell } from '../domain/orders.ts'
 import { pickPdpVersion } from '../pages/versions.ts'
-import { getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
+import { canReserve, getCollection, getProduct, listCollections, listProducts } from '../domain/catalog.ts'
 import { findArticle, listBlogs } from '../domain/content.ts'
 import { CheckoutError, completeCart, getOrder } from '../domain/orders.ts'
 import { createReview, listReviews, statsFor } from '../domain/reviews.ts'
@@ -27,7 +30,27 @@ import * as view from './render.ts'
 import type { CheckoutInput, StoreView } from './render.ts'
 
 const CART_COOKIE = 'amboras_cart'
+const VISITOR_COOKIE = 'amboras_v'
 const log = logger('checkout')
+
+/**
+ * The durable visitor id, set on the first storefront request and kept for a
+ * year. Split tests are assigned from this rather than from the analytics
+ * session: the session key is a fingerprint of address, agent and today's
+ * date, so assigning from it re-rolled a returning visitor at midnight, and
+ * again every time a phone moved between wifi and cell — which is often
+ * enough that a two-day test was measuring the coin flip as much as the page.
+ */
+function visitorFor(ctx: Ctx): string {
+  const existing = ctx.cookies[VISITOR_COOKIE]
+  if (existing) return existing
+  const fresh = visitorId('v')
+  // Written back onto the request too, so a handler that asks twice — the
+  // version to render, then the session to record it against — gets one id.
+  ctx.cookies[VISITOR_COOKIE] = fresh
+  setCookie(ctx.res, VISITOR_COOKIE, fresh, { maxAge: 60 * 60 * 24 * 365 })
+  return fresh
+}
 
 /**
  * The storefront is served for a store resolved from the host (or from a
@@ -37,12 +60,18 @@ const log = logger('checkout')
 export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean } = {}): StoreView {
   const db = getDb()
   const env = environment(db, store.id, opts.preview ? 'draft' : store.status === 'live' ? 'live' : 'draft')
+  // The brand belongs to the environment being rendered. `stores.brand` is the
+  // working copy — the one the designer and the assistant's tools write — so
+  // reading it on the live path meant a colour change or a new announcement
+  // bar was live before anyone published it. A live environment with no brand
+  // of its own predates this and falls back rather than rendering unbranded.
+  const branded = env.kind === 'live' && Object.keys(env.brand).length ? { ...store, brand: env.brand } : store
   const cartId = ctx.cookies[`${CART_COOKIE}_${store.id}`]
   const cart = cartId ? getCart(db, store.id, cartId) : null
   const base = process.env.AMBORAS_STOREFRONT_HOST && !opts.preview ? '' : `${opts.preview ? '/preview' : '/s'}/${store.slug}`
   return {
     db,
-    store,
+    store: branded,
     env,
     base,
     preview: opts.preview ?? false,
@@ -69,6 +98,7 @@ function record(ctx: Ctx, current: StoreView, type: Parameters<typeof track>[3],
   const session = analyticsSession(current.db, current.store.id, {
     ip: ctx.ip,
     userAgent: String(ctx.req.headers['user-agent'] ?? ''),
+    visitor: visitorFor(ctx),
     referrer: String(ctx.req.headers.referer ?? ''),
   })
   track(current.db, current.store.id, session, type, { path: ctx.url.pathname, ...detail })
@@ -111,10 +141,18 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const current = withTotals(open(ctx))
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product || product.status !== 'published') throw notFound('No such product')
-    const sessionKey = current.preview ? '' : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? '') })
-    const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, sessionKey)
+    const visitor = current.preview ? '' : visitorFor(ctx)
+    const version = ctx.query.get('version') ? getPage(current.db, current.store.id, ctx.query.get('version') as string) : pickPdpVersion(current.db, current.store.id, product, visitor)
     record(ctx, current, 'view.product', { productId: product.id, meta: { pageId: version?.id ?? 'default' } })
-    if (version && version.productId === product.id) return html(view.blockPage(current, version))
+    if (version && version.productId === product.id) {
+      return html(
+        view.blockPage(current, version, {
+          title: product.seo.title || `${product.title} — ${current.store.name}`,
+          description: product.seo.description || product.subtitle || product.title,
+          canonical: `${current.base}/products/${product.handle}`,
+        }),
+      )
+    }
     const stats = statsFor(current.db, current.store.id, product.id)
     const reviews = listReviews(current.db, current.store.id, { productId: product.id, status: 'approved', limit: 12 })
     const companions = companionsFor(current.db, current.store.id, product.id, 2)
@@ -128,11 +166,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const product = getProduct(current.db, current.store.id, ctx.params.handle as string)
     if (!product) throw notFound('No such product')
     const body = await ctx.body()
+    // The button on this form says "Submit for moderation" and createReview
+    // defaults to 'approved' unless a thin heuristic objects — so anyone on
+    // the internet could put a one-star review on a product page and into its
+    // Google aggregateRating, instantly. Anything arriving from the storefront
+    // waits for the merchant, which is what the Reviews tab is for.
     createReview(current.db, current.store.id, {
       productId: product.id,
       rating: Number(body.rating ?? 5),
       body: String(body.body ?? ''),
       author: String(body.author ?? 'Anonymous'),
+      status: 'pending',
     })
     record(ctx, current, 'review.submit', { productId: product.id })
     return redirect(`${current.base}/products/${product.handle}#review`)
@@ -165,8 +209,14 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const related = listProducts(current.db, current.store.id, { status: 'published', limit: 3 })
     if (!number) return html(view.trackPage(current, { related }))
     const order = getOrder(current.db, current.store.id, number)
-    if (!order || (email && order.email !== email) || (!email && !current.preview)) {
-      return html(view.trackPage(current, { error: 'No order matches that number and email.', related }))
+    // A display number is four digits and guessable, so it is only good with
+    // the email on the order. The internal id is not guessable, and it is what
+    // the confirmation page links with — which is why "Track this order" used
+    // to land on "No order matches that number and email" every time.
+    const byOwnId = !!order && order.id === number
+    const wrong = !order || (email ? order.email !== email : !byOwnId && !current.preview)
+    if (wrong) {
+      return html(view.trackPage(current, { error: 'No order matches that number and email.', related, number }))
     }
     return html(view.trackPage(current, { tracking: trackingFor(current.db, current.store.id, order), related }))
   })
@@ -180,7 +230,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const updated = addToCart(current.db, current.store.id, cart.id, variantId, quantity, body.source ? String(body.source) : undefined)
     const line = updated.items.find((item) => item.variantId === variantId)
     record(ctx, current, 'cart.add', { productId: line?.productId, amountCents: (line?.unitCents ?? 0) * quantity })
-    return redirect(`${current.base}/cart`)
+    // The cart page fires the AddToCart pixel for exactly this line, once.
+    return redirect(`${current.base}/cart?added=${encodeURIComponent(variantId)}`)
   })
 
   router.post('/cart/update', async (ctx) => {
@@ -211,7 +262,9 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     }
     current = withTotals(current)
     ensureCart(ctx, current)
-    return html(view.cartPage(current, current.totals!))
+    const justAdded = ctx.query.get('added')
+    const line = justAdded ? current.cart?.items.find((item) => item.variantId === justAdded) : undefined
+    return html(view.cartPage(current, current.totals!, line ? { productId: line.productId, amountCents: line.unitCents * line.quantity } : null))
   })
 
   router.get('/checkout', (ctx) => {
@@ -221,15 +274,34 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     return html(renderCheckout(current, checkoutInputFor(current)))
   })
 
-  /** The no-provider path: the same form, a demo order, then the offer. */
+  /**
+   * The no-provider path: the same form, a demo order, then the offer.
+   *
+   * It is refused outright once Stripe is connected. This route writes an
+   * order with payment `captured` and never speaks to a payment provider, so
+   * on a store that takes real money it is a way to get the goods for free —
+   * by posting the form directly, or simply by having js.stripe.com blocked,
+   * which makes the pay button fall back to a native form submit.
+   */
   router.post('/checkout', async (ctx) => {
     const current = withTotals(open(ctx))
     const cart = current.cart
     if (!cart) return redirect(`${current.base}/cart`)
+    if (stripeFor(current.db, current.store.id)) {
+      log.warn('demo checkout refused: this store takes real payments')
+      return html(
+        renderCheckout(current, checkoutInputFor(current, { error: 'Payment could not start. Reload the page and try again — nothing has been charged.' })),
+        409,
+      )
+    }
     const body = await ctx.body()
     const draft = readCheckoutForm(body)
     if (body.shippingOptionId) setShipping(current.db, current.store.id, cart.id, String(body.shippingOptionId))
-    if (body.bumpVariantId && !cart.items.some((item) => item.variantId === body.bumpVariantId)) addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump')
+    if (body.bumpVariantId && !cart.items.some((item) => item.variantId === body.bumpVariantId)) {
+      const bump = checkoutInputFor(current).bump
+      const priced = bump && bump.variantId === String(body.bumpVariantId) ? bump.priceCents : undefined
+      addToCart(current.db, current.store.id, cart.id, String(body.bumpVariantId), 1, 'order-bump', priced)
+    }
     try {
       const order = completeCart(current.db, current.store.id, cart.id, {
         email: draft.email ?? '',
@@ -317,8 +389,13 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (built && (built.status === 'published' || current.preview)) {
       record(ctx, current, 'view.page')
       if (built.role === 'checkout' && built.mode === 'blocks') {
-        // The checkout page at its own address: the visitor's cart if there is one, a sample line otherwise, so the editor preview is never blank.
+        // The checkout page at its own address. A sample line keeps the editor
+        // preview from being blank; on the live storefront it put a fabricated
+        // order, a real Pay now button and the words "Sample order — the
+        // editor preview" in front of a customer, so out there an empty cart
+        // goes where the built-in checkout sends it.
         const sample = !current.cart?.items.length
+        if (sample && !current.preview) return redirect(`${current.base}/cart`)
         const shown = sample ? withSampleCart(current) : current
         return html(view.checkoutBlockPage(shown, built, checkoutInputFor(shown), { sample }))
       }
@@ -328,12 +405,15 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       about: `<p>${escapeHtml(current.store.brand.description ?? '')}</p><p>${escapeHtml(current.store.brand.voice ?? '')}</p>`,
       privacy: privacyHtml(current.db, current.store),
       terms: termsHtml(current.db, current.store),
-      shipping:
-        '<p>Everything is built to order. Stock builds ship in fourteen days; custom work takes about three weeks.</p>' +
-        '<p>Free shipping over 200. Returns are free for thirty days as long as the item has not been used in a fight.</p>',
+      shipping: shippingHtml(current.db, current.store),
+      // The support surface. Merchant-choice components on the accountOverview
+      // slot — the contact form among them — are drawn here; before this, that
+      // slot was rendered nowhere at all, so the Contact Form plugin installed
+      // and could never appear.
+      contact: `<p>Tell us what you need and a person will read it.</p>${renderSlot(current.db, current.store.id, 'accountOverview', { base: current.base }, { preview: current.preview })}`,
     }
     if (!copy[slug]) throw notFound('No such page')
-    const titles: Record<string, string> = { about: 'About', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
+    const titles: Record<string, string> = { about: 'About', contact: 'Contact', shipping: 'Shipping & returns', privacy: 'Privacy policy', terms: 'Terms of sale' }
     return html(view.simplePage(current, titles[slug] ?? slug, copy[slug]))
   })
 
@@ -357,8 +437,11 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/go/:group', (ctx) => {
     const current = open(ctx)
     const group = ctx.params.group as string
-    const sessionId = current.preview ? `preview-${Date.now()}` : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''), referrer: String(ctx.req.headers.referer ?? '') })
-    const funnel = pickFunnel(current.db, current.store.id, group, sessionId)
+    const visitor = current.preview ? `preview-${Date.now()}` : visitorFor(ctx)
+    const sessionId = current.preview
+      ? visitor
+      : analyticsSession(current.db, current.store.id, { ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''), visitor, referrer: String(ctx.req.headers.referer ?? '') })
+    const funnel = pickFunnel(current.db, current.store.id, group, visitor)
     if (!funnel) throw notFound('No funnel is running under that name')
     if (!current.preview) track(current.db, current.store.id, sessionId, 'funnel.enter', { path: ctx.url.pathname, meta: { funnelId: funnel.id, group } })
     return redirect(`${current.base}${funnelEntry(current.db, current.store.id, funnel)}`)
@@ -394,7 +477,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const cart = ensureCart(ctx, current)
     const body = await ctx.body()
     const variantId = String(body.variantId ?? '')
-    const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump') : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
+    // The bump's price comes from the funnel, and it is the number the
+    // checkout printed next to the tick box. Pricing the line from the catalog
+    // instead charged whatever the product happened to cost.
+    const bump = resolveBump(current.db, current.store.id, funnelForProducts(current.db, current.store.id, cart.items.map((item) => item.productId)))
+    const priced = bump && bump.variantId === variantId ? bump.priceCents : undefined
+    const updated = body.on ? addToCart(current.db, current.store.id, cart.id, variantId, 1, 'order-bump', priced) : setQuantity(current.db, current.store.id, cart.id, variantId, 0)
     const amounts = totals(current.db, current.store.id, updated)
     return { ...amounts, totalsHtml: view.totalsBlock({ ...current, cart: updated, totals: amounts }, amounts) }
   })
@@ -430,18 +518,36 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const amounts = totals(current.db, current.store.id, cart)
     const draft = cart.checkout
     try {
-      let customerId = ''
-      if (draft.email && stripe.config.captureMode !== 'manual') {
+      // The page asks for an intent on every render and on every edit to the
+      // form, and this opened a new PaymentIntent and a new Stripe Customer
+      // each time: a shopper who typed their email, changed the quantity and
+      // came back left five intents and five customers behind, and Stripe's
+      // dashboard read as five abandoned checkouts by five people. The intent
+      // a shopper is already looking at is re-priced instead. Only one still
+      // waiting for payment can be: a succeeded intent belongs to an order.
+      const REUSABLE = new Set(['requires_payment_method', 'requires_confirmation', 'requires_action'])
+      const started = cart.paymentIntentId
+        ? await stripe.client.paymentIntents.retrieve(cart.paymentIntentId).catch(() => null)
+        : null
+      const reusable = started && REUSABLE.has(started.status) ? started : null
+      let customerId = reusable?.customer ?? ''
+      if (!customerId && draft.email && stripe.config.captureMode !== 'manual') {
         customerId = (await stripe.client.customers.create({ email: draft.email, ...(draft.name ? { name: draft.name } : {}) })).id
       }
-      const intent = await stripe.client.paymentIntents.create({
-        amountCents: amounts.totalCents,
-        currency: amounts.currency,
-        ...(customerId ? { customerId } : {}),
-        saveForLater: Boolean(customerId),
-        ...(draft.email ? { receiptEmail: draft.email } : {}),
-        metadata: { storeId: current.store.id, cartId: cart.id },
-      })
+      const intent = reusable
+        ? await stripe.client.paymentIntents.update(reusable.id, {
+            amountCents: amounts.totalCents,
+            ...(customerId && !reusable.customer ? { customerId, saveForLater: true } : {}),
+            ...(draft.email ? { receiptEmail: draft.email } : {}),
+          })
+        : await stripe.client.paymentIntents.create({
+            amountCents: amounts.totalCents,
+            currency: amounts.currency,
+            ...(customerId ? { customerId } : {}),
+            saveForLater: Boolean(customerId),
+            ...(draft.email ? { receiptEmail: draft.email } : {}),
+            metadata: { storeId: current.store.id, cartId: cart.id },
+          })
       attachPaymentIntent(current.db, current.store.id, cart.id, intent.id)
       return { clientSecret: intent.client_secret, intentId: intent.id, publishableKey: stripe.config.publishableKey }
     } catch (error) {
@@ -471,6 +577,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
         marketing: cart.checkout.marketing ?? false,
         payment: { provider: 'stripe', intentId: intent.id, customerId: intent.customer ?? '', methodId: intent.payment_method ?? '', status: 'captured' },
       })
+      // The intent was created for the cart as it stood; completeCart prices it
+      // again against the promotions live now. A code that expired between the
+      // two writes an order for one amount against a card charged another, and
+      // nothing compared them. The charge is never stranded — the order stands
+      // — but the difference is recorded on it and said out loud, because it is
+      // the merchant's to reconcile.
+      if (intent.amount && intent.amount !== order.totalCents) {
+        const note = `Charged ${(intent.amount / 100).toFixed(2)} ${order.currency}, order totals ${(order.totalCents / 100).toFixed(2)}: the price moved between starting the payment and finishing it.`
+        log.warn(`order ${order.displayId}: ${note}`)
+        current.db.run("UPDATE orders SET notes = TRIM(COALESCE(notes, '') || ' ' || ?) WHERE id = ?", note, order.id)
+      }
       afterOrder(ctx, current, order)
       return redirect(`${current.base}/orders/${order.id}/offer`)
     } catch (error) {
@@ -532,6 +649,12 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
+    // Checked before the card is charged, not after: the offer used to take
+    // the money and then append a line for stock that was not there.
+    if (body.accept === 'yes' && offer && !canReserve(current.db, offer.variantId, 1)) {
+      recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}?offer=soldout`)
+    }
     if (body.accept !== 'yes' || !offer) {
       recordDownsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}`)
@@ -556,6 +679,10 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const body = await ctx.body()
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
+    if (body.accept === 'yes' && offer && !canReserve(current.db, offer.variantId, 1)) {
+      recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
+      return redirect(`${current.base}/orders/${order.id}/downsell`)
+    }
     if (body.accept !== 'yes' || !offer) {
       recordUpsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}/downsell`)
@@ -600,7 +727,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.get('/llms.txt', (ctx) => {
     const current = open(ctx)
     const products = listProducts(current.db, current.store.id, { status: 'published', limit: 50 })
-    return new Raw(llmsTxt(current.store, products), 'text/plain; charset=utf-8')
+    return new Raw(llmsTxt(current.store, products, publicStoreUrl(current.db, current.store)), 'text/plain; charset=utf-8')
   })
 
   router.get('/store/integrations/active', (ctx) => {

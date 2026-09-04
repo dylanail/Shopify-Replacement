@@ -6,7 +6,9 @@ import { listCustomers, segment } from '../domain/customers.ts'
 import { listOrders, getOrder } from '../domain/orders.ts'
 import { listPromotions } from '../domain/promotions.ts'
 import { listReviews, statsFor } from '../domain/reviews.ts'
-import { listRegions } from '../domain/regions.ts'
+import { listRegions, type Region } from '../domain/regions.ts'
+import { qualifyCatalogProduct, readQualifyNotes } from '../domain/qualify.ts'
+import { listBlogs } from '../domain/content.ts'
 import { environment, type Store } from '../control/stores.ts'
 import { listTeam } from '../control/auth.ts'
 import { listAudit } from '../control/todos.ts'
@@ -23,16 +25,16 @@ import { latestResearch } from '../agent/research.ts'
 import { listPages, type Page, PAGE_TEMPLATES } from '../pages/store.ts'
 import { DEFAULT_TIERS, listBundles } from '../domain/bundles.ts'
 import { getInstalled, hasCredentials } from '../control/plugins.ts'
-import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport } from '../domain/ops.ts'
+import { listAdSpend, listQuestions, marginFor, pendingStockAlerts, profitReport, type ProfitReport } from '../domain/ops.ts'
 import { listFunnels } from '../domain/funnels.ts'
 import { versionStats, versionsFor } from '../pages/versions.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
-import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
 import { renderArtifact } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
-import { listCustomBlocks } from '../pages/custom-blocks.ts'
+import { PHOTO_BRIEFS, shotOf } from '../creative/briefs.ts'
+import { listCustomBlocks, type CustomBlock } from '../pages/custom-blocks.ts'
 import { domainsFor } from '../control/domains.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 
@@ -113,9 +115,11 @@ export function productsPage(ctx: Ctx, status: string, search: string): string {
       <input type="hidden" name="status" value="${escapeHtml(status)}"><button class="btn" type="submit">Search</button></form></div>
   <form method="post" action="/admin/products/import" class="card row" style="align-items:flex-end">
     <div class="field" style="flex:2;margin:0"><label>Import a product from a URL — any Shopify store's product page, or a supplier page with Open Graph tags</label><input name="url" type="url" required placeholder="https://some-store.com/products/the-thing"></div>
-    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="2.5"></div>
+    <div class="field" style="width:120px;margin:0"><label>Markup ×</label><input name="markup" value="3"></div>
+    <div class="field" style="width:150px;margin:0"><label>Their shipping (minor units)</label><input name="supplierShippingCents" value="0" title="Part of the landed cost the markup is taken on, not something the margin absorbs."></div>
     <label class="row" style="font-size:12px;margin:0 .5rem .6rem"><input type="checkbox" name="asSupplier" value="true" checked> Their price is my cost</label>
     <button class="btn primary" type="submit">Import</button></form>
+  <p class="muted" style="font-size:11.5px;margin:-.6rem 0 1rem">The markup is on the landed cost — their price plus their shipping. At least 3×; 5× is the ideal band.</p>
   <div class="tabs">${['all', 'published', 'draft', 'archived']
     .map((option) => `<a class="${option === status ? 'on' : ''}" href="/admin/products?status=${option}">${option[0]?.toUpperCase()}${option.slice(1)}</a>`)
     .join('')}</div>
@@ -168,15 +172,16 @@ export function productDetail(ctx: Ctx, productId: string): string {
   </div>
   <div>
     <div class="card"><h2>Media</h2><div class="grid3" style="grid-template-columns:repeat(2,1fr);margin-top:.6rem">
-      ${[product.heroImage, ...product.media.map((entry) => entry.url)]
-        .filter(Boolean)
+      ${(product.media.length ? product.media : product.heroImage ? [{ url: product.heroImage, alt: product.title }] : [])
         .slice(0, 4)
-        .map((url) => `<img src="${escapeHtml(url)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`)
-        .join('')}</div>
+        .map((entry) => `<div><img src="${escapeHtml(entry.url)}" alt="${escapeHtml(entry.alt)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;border:1px solid var(--line)">
+          ${shotPicker(product.id, entry.url, shotOf(entry.alt))}</div>`)
+        .join('') || '<p class="muted" style="font-size:12px">No images yet.</p>'}</div>
       <form method="post" action="/admin/products/${escapeHtml(product.id)}/photo" enctype="multipart/form-data" style="margin-top:.8rem">
         <div class="field"><label>Upload a product photo</label><input type="file" name="photo" accept="image/*" required></div>
         <div class="field"><label>Stage it as</label><select name="preset">${['white-seamless', 'lifestyle', 'dark-luxury', 'flat-lay', 'golden-hour', 'studio-3-point']
           .map((preset) => `<option value="${preset}">${preset.replace(/-/g, ' ')}</option>`).join('')}</select></div>
+        <div class="field"><label>Which shot from the brief is it?</label><select name="shot"><option value="">— not one of them —</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}">${escapeHtml(brief.name)}</option>`).join('')}</select></div>
         <button class="btn primary" type="submit">Upload and stage</button></form>
       <p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Your photo stays your photo: it is staged into the scene, and the original is kept in the gallery.</p></div>
     ${regenerateCard(ctx, product)}
@@ -190,7 +195,21 @@ export function productDetail(ctx: Ctx, productId: string): string {
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.title ?? product.title)}</p>
       <p class="muted" style="font-size:12px">${escapeHtml(product.seo.description ?? '')}</p></div>
   </div></div>
-  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${versionsCard(ctx, product)}</div>`
+  <div class="grid2" style="margin-top:1rem">${supplierCard(ctx, product)}${qualifyCard(ctx, product)}</div>
+  <div class="grid2" style="margin-top:1rem">${versionsCard(ctx, product)}</div>`
+}
+
+/**
+ * Which brief an image satisfies. The Creative page checks coverage by reading
+ * a `photo:<id>` marker out of the alt text and told the owner to type one
+ * there — with no field anywhere that could write it. So the checklist could
+ * only ever show the hero as taken and everything else as missing.
+ */
+function shotPicker(productId: string, url: string, current: string): string {
+  return `<form method="post" action="/admin/products/${escapeHtml(productId)}/media/label" class="row" style="gap:.25rem;margin-top:.3rem">
+    <input type="hidden" name="mediaUrl" value="${escapeHtml(url)}">
+    <select name="shot" style="flex:1;font-size:11px;padding:.2rem"><option value="">— which shot —</option>${PHOTO_BRIEFS.map((brief) => `<option value="${escapeHtml(brief.id)}" ${brief.id === current ? 'selected' : ''}>${escapeHtml(brief.name)}</option>`).join('')}</select>
+    <button class="btn" type="submit" style="font-size:11px">Label</button></form>`
 }
 
 function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
@@ -213,21 +232,63 @@ function supplierCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]
     <table class="data" style="margin-top:.8rem"><tr><td>Price</td><td style="text-align:right">${format(margin.priceCents, currency)}</td></tr>
       <tr><td>Cost</td><td style="text-align:right">−${format(margin.costCents, currency)}</td></tr><tr><td>Supplier shipping</td><td style="text-align:right">−${format(margin.shippingCents, currency)}</td></tr>
       <tr><td>Card fees</td><td style="text-align:right">−${format(margin.feesCents, currency)}</td></tr>
-      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr></table>
+      <tr><td><strong>Profit per unit</strong></td><td style="text-align:right"><strong style="color:${margin.profitCents > 0 ? 'var(--ok)' : 'var(--bad)'}">${format(margin.profitCents, currency)} · ${margin.marginPercent}%</strong></td></tr>
+      <tr><td>Breakeven ROAS <span class="muted" style="font-size:11px">1 ÷ margin</span></td><td style="text-align:right">${margin.breakevenRoas === null ? '<span class="muted">set a cost</span>' : `${margin.breakevenRoas}×`}</td></tr>
+      <tr><td>Target ROAS <span class="muted" style="font-size:11px">breakeven + 1, the line to scale above</span></td><td style="text-align:right">${margin.targetRoas === null ? '<span class="muted">—</span>' : `<strong>${margin.targetRoas}×</strong>`}</td></tr></table>
     <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Before ad spend. The Profit page subtracts what you log there.</p></div>`
+}
+
+/**
+ * The qualification checklist, applied to this product.
+ *
+ * docs/knowledge/product-research.md opens the method with it — AOV over $60,
+ * 3x landed cost, unit price over $15, a flat or rising trend, light enough to
+ * ship, nothing patented or big-brand, and a way to stand out named before a
+ * pound is spent. None of it existed anywhere in the product: a store could be
+ * built end to end around a $9 seasonal item at 1.4x and nothing said so until
+ * the ads had run.
+ *
+ * What the numbers know — price, landed cost, margin — is read from the
+ * product. What only a person knows — the trend, the weight, whether it is
+ * patented, what the stand-out is — is a form, kept on the product.
+ */
+function qualifyCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
+  const judged = readQualifyNotes(product.metadata)
+  const result = qualifyCatalogProduct(product, judged)
+  const tone = { pass: 'ok', warn: 'warn', fail: 'bad' } as const
+  const decision = { run: 'ok', work: 'warn', skip: 'bad' } as const
+  const trends: Array<[string, string]> = [['unknown', 'Not checked'], ['up', 'Rising'], ['flat', 'Flat'], ['declining', 'Declining'], ['spike', 'Spiked and crashed']]
+  const flag = (name: string, label: string, on: boolean) => `<label class="row" style="font-size:12px;gap:.3rem;margin:0 .8rem .3rem 0"><input type="checkbox" name="${name}" value="true" ${on ? 'checked' : ''} style="width:auto"> ${escapeHtml(label)}</label>`
+  return `<div class="card" id="qualify"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Does it qualify?</h2><span class="tag ${decision[result.decision]}">${result.decision === 'run' ? 'run it' : result.decision === 'work' ? 'work on it' : 'skip it'}</span></div>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">${escapeHtml(result.summary)}</p>
+    <table class="data"><tbody>${result.checks.map((check) => `<tr><td style="width:9rem"><span class="tag ${tone[check.verdict]}">${check.verdict}</span> ${escapeHtml(check.label)}</td>
+      <td>${escapeHtml(check.detail)}<div class="muted" style="font-size:11px">${escapeHtml(check.rule)}</div></td></tr>`).join('')}</tbody></table>
+    <form method="post" action="/admin/products/${escapeHtml(product.id)}/qualify" style="margin-top:.7rem">
+      <div class="row"><div class="field" style="flex:1"><label>Trend — Google Trends, US, five years</label><select name="trend">${trends.map(([value, label]) => `<option value="${value}" ${judged.trend === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+        <div class="field" style="width:9rem"><label>Weight (grams)</label><input name="weightGrams" value="${judged.weightGrams ?? ''}"></div>
+        <div class="field" style="width:11rem"><label>Order value after bundles</label><input name="aovCents" value="${judged.aovCents ?? ''}" placeholder="minor units"></div></div>
+      <div class="row" style="flex-wrap:wrap;margin-bottom:.2rem">${flag('seasonal', 'Seasonal', Boolean(judged.seasonal))}${flag('tech', 'Tech or battery', Boolean(judged.tech))}${flag('patented', 'Patented', Boolean(judged.patented))}${flag('bigBrand', 'Big brand', Boolean(judged.bigBrand))}${flag('printOnDemand', 'Print on demand', Boolean(judged.printOnDemand))}</div>
+      <div class="field"><label>The way to stand out — the underserved avatar or the mechanism. None found is a reason not to run it.</label><input name="standOut" value="${escapeHtml(judged.standOut ?? '')}" placeholder="Night-shift nurses; nobody sells blackout for daytime sleep"></div>
+      <button class="btn primary" type="submit">Save the judgement</button></form>
+    <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Price and landed cost come from the supplier card; the rest is what only you can check. ${ctx.store.currency === 'USD' ? '' : `The thresholds are the method's, in US dollars.`}</p></div>`
 }
 
 function versionsCard(ctx: Ctx, product: ReturnType<typeof listProducts>[number]): string {
   const stats = versionStats(ctx.db, ctx.store.id, product.id)
   const advertorials = versionsFor(ctx.db, ctx.store.id, product.id).filter((page) => page.role === 'advertorial')
   const currency = ctx.store.currency
+  // The leader is the one earning most per visit, and only once there is
+  // enough traffic to mean anything.
+  const best = [...stats].filter((row) => row.views >= 20).sort((a, b) => b.revenuePerSessionCents - a.revenuePerSessionCents)[0]
   return `<div class="card"><h2>Versions &amp; split test</h2>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .8rem">Product-page versions with a weight are in the test; a visitor is assigned one by their session and sees it every time. Weight 0 keeps it out.</p>
-    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th></th></tr></thead><tbody>
+    ${stats.length ? `<table class="data"><thead><tr><th>Version</th><th>Weight</th><th>Views</th><th>Carts</th><th>Sales</th><th>CVR</th><th>Rev / session</th><th></th></tr></thead><tbody>
       ${stats.map((row) => `<tr><td><a href="/admin/pages/${escapeHtml(row.pageId)}/edit">${escapeHtml(row.title.replace(`${product.title} — `, ''))}</a><div class="muted" style="font-size:11px">${escapeHtml(row.format)} · ${row.status}</div></td>
         <td><form method="post" action="/admin/versions/${escapeHtml(row.pageId)}/weight" class="row" style="gap:.3rem"><input name="weight" value="${row.weight}" style="width:52px"><button class="btn" type="submit">Set</button></form></td>
-        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td>${(row.conversion * 100).toFixed(1)}%</td>
-        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
+        <td>${row.views}</td><td>${row.carts}</td><td>${row.purchases}${row.revenueCents ? `<div class="muted" style="font-size:11px">${format(row.revenueCents, currency)}</div>` : ''}</td><td class="muted">${(row.conversion * 100).toFixed(1)}%</td>
+        <td><strong>${format(row.revenuePerSessionCents, currency)}</strong>${best && row.pageId === best.pageId && best.revenuePerSessionCents > 0 ? ' <span class="tag ok">leading</span>' : ''}</td>
+        <td><a class="btn" href="${escapeHtml(ctx.storeUrl)}/products/${escapeHtml(product.handle)}?version=${escapeHtml(row.pageId)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table>
+      <p class="muted" style="font-size:11.5px;margin:.5rem 0 0">Decided on revenue per session — average order value × conversion — not conversion alone: a page that converts less at a higher order value is the better page. Compare it against your cost per click on the Profit page.</p>` : '<p class="muted" style="font-size:12px">No versions yet — the built-in product page is what visitors see.</p>'}
     ${advertorials.length ? `<p class="muted" style="font-size:12px;margin-top:.6rem">Advertorials: ${advertorials.map((page) => `<a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.format)}</a>`).join(' · ')}</p>` : ''}
     <form method="post" action="/admin/products/${escapeHtml(product.id)}/versions" style="margin-top:1rem;border-top:1px solid var(--line);padding-top:.8rem">
       <div class="eyebrow" style="margin-bottom:.5rem">Generate versions</div>
@@ -286,7 +347,9 @@ export function orderDetail(ctx: Ctx, orderId: string): string {
       <table class="data" style="margin-top:.4rem"><tr><td>Subtotal</td><td style="text-align:right">${format(order.subtotalCents, order.currency)}</td></tr>
       ${order.discountCents ? `<tr><td>Discount ${escapeHtml(order.discountCode)}</td><td style="text-align:right">-${format(order.discountCents, order.currency)}</td></tr>` : ''}
       <tr><td>Shipping</td><td style="text-align:right">${order.shippingCents ? format(order.shippingCents, order.currency) : 'Free'}</td></tr>
-      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table></div>
+      ${order.taxCents ? `<tr><td>Tax</td><td style="text-align:right">${format(order.taxCents, order.currency)}</td></tr>` : ''}
+      <tr><td><strong>Total</strong></td><td style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong></td></tr></table>
+      ${order.notes ? `<div class="notice" style="margin-top:.7rem;border-left-color:var(--warn);font-size:12px">${escapeHtml(order.notes)}</div>` : ''}</div>
     <div class="card"><h2>Customer</h2><p style="margin:.3rem 0 0">${escapeHtml(order.email)}</p>
       <p class="muted" style="font-size:12px;margin:.3rem 0 0">${escapeHtml([order.address.name, order.address.line1, order.address.city, order.address.postal, order.address.country].filter(Boolean).join(', '))}</p></div>
     ${order.refunds.length ? `<div class="card"><h2>Refunds</h2>${order.refunds.map((refund) => `<p class="muted" style="font-size:12px;margin:.3rem 0 0">${format(refund.amountCents, order.currency)} — ${escapeHtml(refund.reason || 'no reason given')}</p>`).join('')}</div>` : ''}
@@ -328,7 +391,7 @@ export function promotionsPage(ctx: Ctx): string {
     <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
     <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : `${promotion.value}%`}</td>
     <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
-    <td style="text-align:right">${promotion.status === 'active' ? `<form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/disable"><button class="btn">Disable</button></form>` : ''}</td></tr>`).join('')
+    <td style="text-align:right"><form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/${promotion.status === 'active' ? 'disable' : 'enable'}"><button class="btn">${promotion.status === 'active' ? 'Disable' : 'Enable'}</button></form></td></tr>`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
   </tbody></table></div>`
 }
@@ -524,23 +587,76 @@ function settingsField(key: string, field: { type: string; label?: string; enum?
   return `<div class="field"><label>${label}${field.help ? ` — <span class="muted">${escapeHtml(field.help)}</span>` : ''}</label>${control}</div>`
 }
 
+/**
+ * Regions and shipping, editable.
+ *
+ * These were four lines of read-only text. The rates a customer is quoted, the
+ * currency they are charged in and the countries a region claims could only be
+ * set by asking the assistant — and even it could only add, never change: a
+ * second "Standard shipping" landed beside the first and the cart quoted
+ * whichever came out of the database first.
+ */
+function regionsCard(ctx: Ctx, regions: Region[]): string {
+  const region = (entry: Region) => `<details style="border-top:1px solid var(--line);padding:.5rem 0">
+    <summary style="cursor:pointer"><strong>${escapeHtml(entry.name)}</strong> <span class="muted">${escapeHtml(entry.currency)} · ${escapeHtml(entry.countries.join(', ') || 'no countries')}${entry.taxRate ? ` · tax ${(entry.taxRate * 100).toFixed(2)}%` : ''}</span>${entry.isDefault ? ' <span class="tag ok">default</span>' : ''}</summary>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}" style="margin:.5rem 0">
+      <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" value="${escapeHtml(entry.name)}" required></div>
+        <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" value="${escapeHtml(entry.currency)}" required></div>
+        <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" value="${(entry.taxRate * 100).toFixed(2)}"></div></div>
+      <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" value="${escapeHtml(entry.countries.join(', '))}" placeholder="US, CA"></div>
+      <label class="row" style="font-size:12px;margin-bottom:.5rem"><input type="checkbox" name="isDefault" value="true" ${entry.isDefault ? 'checked disabled' : ''} style="width:auto"> The region a country no one claims falls back to</label>
+      <div class="row"><button class="btn primary" type="submit">Save region</button>
+        ${regions.length > 1 ? `<button class="btn" type="submit" formaction="/admin/regions/${escapeHtml(entry.id)}/delete" formnovalidate onclick="return confirm('Delete ${escapeHtml(entry.name)} and its rates?')">Delete region</button>` : ''}</div></form>
+    <table class="data" style="margin:.2rem 0"><tbody>${entry.shipping.map((option) => `<tr><td>
+      <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end">
+        <input type="hidden" name="optionId" value="${escapeHtml(option.id)}">
+        <div class="field" style="flex:2;margin:0"><label>Rate</label><input name="name" value="${escapeHtml(option.name)}" required></div>
+        <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" value="${(option.amountCents / 100).toFixed(2)}" required></div>
+        <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" value="${option.freeAboveCents === null ? '' : (option.freeAboveCents / 100).toFixed(2)}" placeholder="—"></div>
+        <button class="btn primary" type="submit">Save</button>
+        ${entry.shipping.length > 1 ? `<button class="btn" type="submit" formaction="/admin/shipping/${escapeHtml(option.id)}/delete" formnovalidate>Remove</button>` : ''}
+      </form>${option.position === 0 ? '<div class="muted" style="font-size:11px">The standard rate: this is the one a free-shipping promotion covers.</div>' : ''}</td></tr>`).join('')}</tbody></table>
+    <form method="post" action="/admin/regions/${escapeHtml(entry.id)}/shipping" class="row" style="gap:.4rem;align-items:flex-end;margin-bottom:.4rem">
+      <div class="field" style="flex:2;margin:0"><label>Add a rate</label><input name="name" placeholder="Express (2 day)" required></div>
+      <div class="field" style="width:7rem;margin:0"><label>Price</label><input name="amount" placeholder="24.00" required></div>
+      <div class="field" style="width:8rem;margin:0"><label>Free over</label><input name="freeAbove" placeholder="—"></div>
+      <button class="btn" type="submit">Add</button></form>
+  </details>`
+  return `<div class="card" id="regions"><h2>Regions and shipping</h2>
+    <p class="muted" style="font-size:12px;margin:.2rem 0 .4rem">What each region is charged in, what it is quoted for shipping, and the tax on it. The cart and the checkout read these.</p>
+    ${regions.map(region).join('') || '<p class="muted" style="font-size:12px">No regions yet — add one below, or the checkout has no currency and no rate.</p>'}
+    <details style="border-top:1px solid var(--line);padding:.5rem 0"><summary class="muted" style="cursor:pointer;font-size:12.5px">Add a region</summary>
+      <form method="post" action="/admin/regions" style="margin-top:.5rem">
+        <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="name" required placeholder="United Kingdom"></div>
+          <div class="field" style="width:5.5rem"><label>Currency</label><input name="currency" required placeholder="GBP"></div>
+          <div class="field" style="width:6rem"><label>Tax %</label><input name="taxPercent" placeholder="20"></div></div>
+        <div class="field"><label>Countries (two-letter codes, comma separated)</label><input name="countries" required placeholder="GB, IE"></div>
+        <div class="row"><div class="field" style="flex:2"><label>Standard rate</label><input name="shippingName" value="Standard shipping"></div>
+          <div class="field" style="width:7rem"><label>Price</label><input name="shippingAmount" placeholder="9.00"></div>
+          <div class="field" style="width:8rem"><label>Free over</label><input name="shippingFreeAbove" placeholder="200.00"></div></div>
+        <button class="btn primary" type="submit">Add region</button></form></details></div>`
+}
+
 /* ------------------------------------------------------------------- settings */
 
 export function settingsPage(ctx: Ctx): string {
   const regions = listRegions(ctx.db, ctx.store.id)
   const team = listTeam(ctx.db, ctx.store.id) as Array<{ email: string; role: string; status: string }>
   const audit = listAudit(ctx.db, ctx.store.id, 12) as Array<{ actor_type: string; action: string; created_at: string; target: string }>
+  // Contact-form submissions were written into the audit log's diff column and
+  // read back by nothing: a visitor was told "a person will read that and
+  // reply" and no person could.
+  const messages = ctx.db.all<{ target: string; diff: string; created_at: string }>(
+    "SELECT target, diff, created_at FROM audit_log WHERE store_id = ? AND action = 'contact_form' ORDER BY created_at DESC LIMIT 20",
+    ctx.store.id,
+  )
   return `${flash(ctx)}<div class="head"><h1 class="serif">Settings</h1><a class="btn primary" href="/admin/settings/payments">Payments &amp; Stripe</a></div>
   <div class="grid2"><div>
     ${modelsCard(ctx)}
     <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Domains</h2><a class="btn primary" href="/admin/domains">Connect a domain</a></div>
       ${domainsFor(ctx.db, ctx.store.id).map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status} · ${domain.mode}</span></div>`).join('')
         || `<p class="muted" style="font-size:12px;margin:.5rem 0 0">None yet. The store is live at its platform address; the Domains page has the records for Namecheap, GoDaddy, Cloudflare and the rest.</p>`}</div>
-    <div class="card"><h2>Regions and shipping</h2>
-      ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
-        <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
-        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency)}` : ''}</div>`).join('')}
-      </div>`).join('')}</div>
+    ${regionsCard(ctx, regions)}
     <div class="card"><h2>Team</h2>
       <form method="post" action="/admin/team" class="row" style="margin:.6rem 0">
         <input name="email" type="email" placeholder="teammate@example.com" style="flex:1">
@@ -551,6 +667,21 @@ export function settingsPage(ctx: Ctx): string {
         || '<p class="muted" style="font-size:12px">Just you.</p>'}</div>
   </div>
   <div>
+    <div class="card"><h2>Messages</h2>
+      <p class="muted" style="font-size:11.5px">What visitors sent through the contact form.</p>
+      ${messages.length
+        ? messages.map((message) => {
+            let text = ''
+            try {
+              text = String((JSON.parse(message.diff || '{}') as { message?: string }).message ?? '')
+            } catch {
+              text = ''
+            }
+            return `<div style="border-top:1px solid var(--line);padding:.5rem 0">
+              <div class="row" style="justify-content:space-between"><a href="mailto:${escapeHtml(message.target)}">${escapeHtml(message.target || 'no address given')}</a><span class="muted" style="font-size:11px">${escapeHtml(message.created_at.slice(0, 16).replace('T', ' '))}</span></div>
+              <p style="margin:.3rem 0 0;font-size:12.5px;white-space:pre-wrap">${escapeHtml(text)}</p></div>`
+          }).join('')
+        : '<p class="muted" style="font-size:12px">Nothing yet.</p>'}</div>
     <div class="card"><h2>Audit</h2>
       <p class="muted" style="font-size:11.5px">Every action, including the assistant's.</p>
       ${audit.map((entry) => `<div style="border-top:1px solid var(--line);padding:.35rem 0;font-size:12px">
@@ -576,6 +707,40 @@ function modelsCard(ctx: Ctx): string {
 
 /* --------------------------------------------------------------- profit */
 
+/**
+ * Breakeven and target ROAS, and what the course does at each side of them.
+ *
+ * The inputs were all on file already; the report stopped at "ROAS 2.1x" and
+ * left the operator to work out whether that was a scale, a hold or a cut.
+ */
+function roasCard(report: ProfitReport, currency: string): string {
+  if (report.breakevenRoas === null || report.targetRoas === null) {
+    const why = !report.revenueCents
+      ? 'No sales in this window, so there is no gross margin to divide into.'
+      : 'Every sale in this window cost more than it made. Set supplier cost and shipping on each product, or the price is wrong.'
+    return `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--warn)"><strong>No line to scale on.</strong> ${why} Breakeven ROAS is 1 ÷ gross margin; target is that plus one.</div>`
+  }
+  const verdict = {
+    scale: ['ok', 'Scale.', 'Above target. Raise budget 20%, and expect ROAS to fall 5–25% as it settles.'],
+    hold: ['warn', 'Hold.', 'Between breakeven and target: profitable, not yet worth more budget.'],
+    cut: ['bad', 'Scale down.', 'Below breakeven, so every sale loses money. Cut 20%, never below your minimum daily spend.'],
+  }[report.verdict ?? 'hold'] as [string, string, string]
+  const tile = (label: string, value: string, note = '') =>
+    `<div class="kpi"><div class="label">${label}</div><div class="value">${escapeHtml(value)}</div>${note ? `<div class="delta">${escapeHtml(note)}</div>` : ''}</div>`
+  return `<div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+    ${tile('Gross margin', `${report.marginPercent}%`, 'revenue less COGS, shipping, fees')}
+    ${tile('Breakeven ROAS', `${report.breakevenRoas}×`, '1 ÷ margin')}
+    ${tile('Target ROAS', `${report.targetRoas}×`, 'breakeven + 1')}
+    ${tile('Cost per click', report.cpcCents === null ? '—' : format(report.cpcCents, currency), report.clicks ? `${report.clicks} clicks, on the spend logged with them` : 'log clicks with spend')}
+  </div>
+  ${report.roas === null
+    ? `<div class="notice" style="margin-bottom:1rem">No ad spend logged for this window, so there is nothing to hold against those lines.</div>`
+    : `<div class="notice" style="margin-bottom:1rem;border-left-color:var(--${verdict[0] === 'ok' ? 'ok' : verdict[0] === 'bad' ? 'bad' : 'warn'})">
+        <strong>${escapeHtml(verdict[1])}</strong> ${report.roas}× against a ${report.breakevenRoas}× breakeven and a ${report.targetRoas}× target. ${escapeHtml(verdict[2])}
+        ${report.spendDays < 3 ? ` <span class="muted">Only ${report.spendDays} day${report.spendDays === 1 ? '' : 's'} of spend on file — never act on fewer than three.</span>` : ''}
+      </div>`}`
+}
+
 export function profitPage(ctx: Ctx, days: number): string {
   const report = profitReport(ctx.db, ctx.store.id, days)
   const spend = listAdSpend(ctx.db, ctx.store.id, days)
@@ -585,14 +750,18 @@ export function profitPage(ctx: Ctx, days: number): string {
     <form method="get"><select name="days" onchange="this.form.submit()">${[7, 14, 30, 90].map((option) => `<option value="${option}" ${option === days ? 'selected' : ''}>Last ${option} days</option>`).join('')}</select></form></div>
   <div class="kpis"><div class="kpi"><div class="label">Revenue</div><div class="value">${format(report.revenueCents, currency)}</div><div class="delta">${report.orders} orders</div></div>
     <div class="kpi"><div class="label">COGS + supplier shipping</div><div class="value">−${format(report.cogsCents + report.supplierShippingCents, currency)}</div></div>
-    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
+    <div class="kpi"><div class="label">Ad spend</div><div class="value">−${format(report.adSpendCents, currency)}</div><div class="delta ${report.verdict === 'cut' ? 'neg' : ''}">${report.roas !== null ? `ROAS ${report.roas}×` : 'log spend below'}</div></div>
     <div class="kpi"><div class="label">Fees + refunds</div><div class="value">−${format(report.feesCents + report.refundsCents, currency)}</div></div>
     <div class="kpi"><div class="label">Net profit</div><div class="value" style="color:${report.profitCents >= 0 ? 'var(--ok)' : 'var(--bad)'}">${format(report.profitCents, currency)}</div><div class="delta ${report.profitCents < 0 ? 'neg' : ''}">${report.revenueCents ? Math.round((report.profitCents / report.revenueCents) * 100) : 0}% margin</div></div></div>
+  ${roasCard(report, currency)}
   <div class="grid2"><div class="card"><h2>Profit by day</h2><div class="spark" style="margin-top:.7rem;height:64px">${report.perDay.map((day) => `<i style="height:${Math.max(2, (Math.abs(day.profit) / peak) * 64)}px;background:${day.profit >= 0 ? 'var(--ok)' : 'var(--bad)'}" title="${day.day}: ${format(day.profit, currency)} (rev ${format(day.revenue, currency)}, spend ${format(day.spend, currency)})"></i>`).join('') || '<span class="muted">No orders in the window.</span>'}</div></div>
-  <div><form method="post" action="/admin/profit/spend" class="card"><h2>Log ad spend</h2>
-    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div></div>
-    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div><button class="btn primary" type="submit">Log</button></form>
-    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
+  <div><form method="post" action="/admin/profit/spend" class="card" id="spend"><h2>Log ad spend</h2>
+    <div class="row" style="margin-top:.6rem"><div class="field" style="flex:1"><label>Day</label><input name="day" type="date" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field" style="flex:1"><label>Platform</label><select name="platform"><option>Meta</option><option>TikTok</option><option>Google</option><option>Other</option></select></div><div class="field" style="flex:1"><label>Amount (minor units)</label><input name="amountCents" required placeholder="15000"></div>
+      <div class="field" style="flex:1"><label>Clicks</label><input name="clicks" placeholder="420"></div></div>
+    <div class="field"><label>Note</label><input name="note" placeholder="Campaign, creative…"></div>
+    <p class="muted" style="font-size:11.5px;margin:-.2rem 0 .6rem">Clicks are optional, but without them there is no cost per click to judge revenue per session against.</p>
+    <button class="btn primary" type="submit">Log</button></form>
+    <div class="card" style="padding:0"><table class="data"><thead><tr><th>Day</th><th>Platform</th><th>Spend</th><th>Clicks</th><th>CPC</th><th>Note</th></tr></thead><tbody>${spend.slice(0, 20).map((row) => `<tr><td>${row.day}</td><td>${escapeHtml(row.platform)}</td><td>${format(row.amount_cents, currency)}</td><td>${row.clicks || '—'}</td><td>${row.clicks ? format(Math.round(row.amount_cents / row.clicks), currency) : '—'}</td><td class="muted">${escapeHtml(row.note)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted" style="padding:1rem">Nothing logged yet.</td></tr>'}</tbody></table></div></div></div>`
 }
 
 /* --------------------------------------------------------------- funnels */
@@ -611,6 +780,7 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:1"><label>1 · Advertorial page</label><select name="advertorialPageId">${pageOptions('advertorial', funnel?.advertorialPageId)}</select></div>
       <div class="field" style="flex:1"><label>2 · Offer page</label><select name="offerPageId">${pageOptions('any', funnel?.offerPageId)}</select></div></div>
     <div class="eyebrow" style="margin:.4rem 0">3 · Checkout order bump</div>
+    <label class="row" style="font-size:12px;margin-bottom:.4rem"><input type="checkbox" name="bumpOff" value="true" ${funnel && funnel.bump.enabled === false ? 'checked' : ''}> No order bump on this funnel</label>
     <div class="row"><div class="field" style="flex:2"><label>Bump product (default: shipping protection)</label><select name="bumpVariantId">${variantOptions(funnel?.bump.variantId)}</select></div>
       <div class="field" style="flex:1"><label>Label</label><input name="bumpLabel" value="${escapeHtml(funnel?.bump.label ?? '')}" placeholder="Protect my order"></div><div class="field" style="width:110px"><label>Price</label><input name="bumpPriceCents" value="${funnel?.bump.priceCents ?? ''}" placeholder="299"></div></div>
     <div class="eyebrow" style="margin:.4rem 0">4 · One-click upsell</div>
@@ -620,7 +790,7 @@ export function funnelsPage(ctx: Ctx): string {
     <div class="row"><div class="field" style="flex:2"><label>Product</label><select name="downsellVariantId">${variantOptions(funnel?.downsell.variantId)}</select></div><div class="field" style="width:110px"><label>% off</label><input name="downsellDiscount" value="${funnel?.downsell.discountPercent ?? ''}" placeholder="35"></div></div>
     <div class="field"><label>Headline</label><input name="downsellHeadline" value="${escapeHtml(funnel?.downsell.headline ?? '')}" placeholder="How about the wraps instead, 35% off?"></div>
     <div class="eyebrow" style="margin:.4rem 0">6 · Split test</div>
-    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? 0}"></div></div>
+    <div class="row"><div class="field" style="flex:2"><label>Test group (funnels sharing a name split the traffic at /go/&lt;group&gt;)</label><input name="testGroup" value="${escapeHtml(funnel?.testGroup ?? '')}" placeholder="spring-offer"></div><div class="field" style="width:110px"><label>Weight</label><input name="weight" value="${funnel?.weight ?? ''}" placeholder="50"></div></div>
     <div class="row"><button class="btn primary" type="submit">${funnel ? 'Save' : 'Create funnel'}</button>${funnel ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/pages/${escapeHtml(pages.find((page) => page.id === funnel.advertorialPageId)?.handle ?? '')}" target="_blank" rel="noopener">Open step 1 ↗</a>` : ''}</div></form>
     ${funnel ? `<form method="post" action="/admin/funnels/${escapeHtml(funnel.id)}/delete" style="margin:-.6rem 0 1rem"><button class="btn" type="submit">Delete funnel</button></form>` : ''}`
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Funnels</h1><p class="muted" style="margin:.25rem 0 0">Ad → advertorial → offer → checkout with a bump → upsell → downsell → thank you. The pages are yours; the checkout, the offers and the thank-you page read the funnel.</p></div></div>
@@ -653,6 +823,7 @@ export function pagesPage(ctx: Ctx): string {
   </div>
   <div class="grid2" style="margin-bottom:1.2rem">${ripCard(ctx)}${suggestCard(ctx)}</div>
   ${customBlocksCard(ctx)}
+  ${blogCard(ctx)}
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Page</th><th>Kind</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
   ${pages.length ? pages.map((page) => `<tr><td><a href="/admin/pages/${escapeHtml(page.id)}/edit">${escapeHtml(page.title)}</a>${page.isHome ? ' <span class="tag ok">home</span>' : ''}${page.role === 'checkout' ? ` <span class="tag ${page.status === 'published' ? 'ok' : 'warn'}" title="The most recently updated published checkout page is the store's /checkout">checkout</span>` : ''}<div class="muted" style="font-size:11.5px">/pages/${escapeHtml(page.handle)}${page.sourceUrl ? ` · cloned from ${escapeHtml(page.sourceUrl.replace(/^https?:\/\//, '').slice(0, 40))}` : ''}</div></td>
     <td>${escapeHtml(page.kind)}</td><td>${page.mode === 'html' ? 'HTML' : `${page.blocks.length} blocks`}</td>
@@ -665,21 +836,72 @@ export function pagesPage(ctx: Ctx): string {
   </tbody></table></div>`
 }
 
-/** The blocks this store defined for itself, and the form to define one. The model can do the same through create_block. */
+/**
+ * The blog, in the admin.
+ *
+ * The storefront has served /blogs/:blog and /blogs/:blog/:article since the
+ * beginning and the assistant could write into them — and the merchant could
+ * not see what was there, fix a line of it, unpublish it or take it down. A
+ * page a store publishes under its own name with no way to edit it is worse
+ * than no blog at all.
+ */
+function blogCard(ctx: Ctx): string {
+  const blogs = listBlogs(ctx.db, ctx.store.id)
+  const statuses = ['published', 'draft'] as const
+  const article = (blogId: string, entry: (typeof blogs)[number]['articles'][number] | null) => `<form method="post" action="${entry ? `/admin/articles/${escapeHtml(entry.id)}` : `/admin/blogs/${escapeHtml(blogId)}/articles`}" style="padding:.4rem 0">
+    <div class="row"><div class="field" style="flex:2"><label>Title</label><input name="title" value="${escapeHtml(entry?.title ?? '')}" required placeholder="How we choose leather"></div>
+      <div class="field" style="width:8rem"><label>Status</label><select name="status">${statuses.map((status) => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${status}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Excerpt — the line the blog index shows</label><input name="excerpt" value="${escapeHtml(entry?.excerpt ?? '')}"></div>
+    <div class="field"><label>Body — one paragraph per blank line</label><textarea name="body" rows="${entry ? 6 : 4}">${escapeHtml(entry?.body ?? '')}</textarea></div>
+    <div class="row"><button class="btn primary" type="submit">${entry ? 'Save' : 'Write it'}</button>
+      ${entry ? `<a class="btn" href="${escapeHtml(ctx.storeUrl)}/blogs/${escapeHtml(blogs.find((blog) => blog.id === blogId)?.handle ?? '')}/${escapeHtml(entry.handle)}" target="_blank" rel="noopener">View ↗</a>
+        <button class="btn" type="submit" formaction="/admin/articles/${escapeHtml(entry.id)}/delete" formnovalidate onclick="return confirm('Delete this article?')">Delete</button>` : ''}</div></form>`
+  return `<div class="card" id="blog" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Blog</h2>
+      <span class="muted" style="font-size:12px">${blogs.length ? `${blogs.reduce((sum, blog) => sum + blog.articles.length, 0)} articles across ${blogs.length} blog${blogs.length === 1 ? '' : 's'}` : 'None yet'} · served at /blogs on the storefront</span></div>
+    ${blogs.map((blog) => `<details style="border-top:1px solid var(--line);padding:.4rem 0"><summary style="cursor:pointer"><strong>${escapeHtml(blog.title)}</strong> <span class="muted">/blogs/${escapeHtml(blog.handle)} · ${blog.articles.filter((entry) => entry.status === 'published').length} published, ${blog.articles.filter((entry) => entry.status !== 'published').length} draft</span></summary>
+      ${blog.articles.map((entry) => `<details style="border-top:1px solid var(--line)"><summary style="cursor:pointer;padding:.4rem 0;font-size:13px"><span class="tag ${entry.status === 'published' ? 'ok' : 'warn'}">${escapeHtml(entry.status)}</span> ${escapeHtml(entry.title)} <span class="muted">· ${escapeHtml(entry.publishedAt?.slice(0, 10) ?? 'unpublished')}</span></summary>${article(blog.id, entry)}</details>`).join('')
+        || '<p class="muted" style="font-size:12px;margin:.4rem 0">Nothing in it yet.</p>'}
+      <details style="border-top:1px solid var(--line)"><summary class="muted" style="cursor:pointer;padding:.4rem 0;font-size:12.5px">Write an article</summary>${article(blog.id, null)}</details>
+      <form method="post" action="/admin/blogs/${escapeHtml(blog.id)}/delete" onsubmit="return confirm('Delete this blog and every article in it?')" style="margin-top:.3rem"><button class="btn" type="submit" style="font-size:11px">Delete the blog</button></form></details>`).join('')}
+    <form method="post" action="/admin/blogs" class="row" style="gap:.4rem;align-items:flex-end;margin-top:.5rem">
+      <div class="field" style="flex:1;margin:0"><label>Start a blog</label><input name="title" required placeholder="Journal"></div>
+      <button class="btn" type="submit">Create</button></form></div>`
+}
+
+/**
+ * The blocks this store defined for itself, and the form to define one. The
+ * model can do the same through create_block.
+ *
+ * Every block opens onto the same form, filled in with what is stored: the
+ * template, the CSS, the script and the fields. Saving posts the same type
+ * back, which replaces it. Before this the card listed a name and a Remove
+ * button, so a block written by the assistant — or by you, last month — could
+ * be deleted and written again from scratch, and nothing else.
+ */
 function customBlocksCard(ctx: Ctx): string {
   const blocks = listCustomBlocks(ctx.db, ctx.store.id)
   return `<div class="card" id="blocks" style="margin-bottom:1.2rem"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Your own blocks</h2><span class="muted" style="font-size:12px">${blocks.length ? `${blocks.length} defined` : 'None yet'} · when no block in the catalog does the job, define one; the assistant can too</span></div>
-    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'}</div></td>
-      <td style="width:6rem;text-align:right"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block?')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
-    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>
-    <form method="post" action="/admin/blocks" style="margin-top:.6rem">
-      <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required placeholder="Ingredient strip"></div><div class="field" style="flex:1"><label>Type (optional, custom-…)</label><input name="type" placeholder="custom-ingredient-strip"></div><div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="✚"></div></div>
-      <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" placeholder="A row of ingredient chips with a percentage each"></div>
-      <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|"></textarea></div>
-      <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;"></textarea></div>
-      <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2"></textarea></div>
-      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2"></textarea></div>
-      <button class="btn primary" type="submit">Save the block</button></form></details></div>`
+    ${blocks.length ? `<table class="data" style="margin:.6rem 0"><tbody>${blocks.map((block) => `<tr><td><strong>${escapeHtml(block.name)}</strong> <code style="font-size:11px">${escapeHtml(block.type)}</code><div class="muted" style="font-size:11.5px">${escapeHtml(block.description ?? '')} · fields: ${escapeHtml(block.fields.map((field) => field.key).join(', ') || 'none')} · ${block.source === 'model' ? 'written by the assistant' : 'written by you'} · edited ${escapeHtml(block.updatedAt.slice(0, 10))}</div>
+      <details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer;font-size:12px">Edit it</summary>${blockForm(block)}</details></td>
+      <td style="width:6rem;text-align:right;vertical-align:top"><form method="post" action="/admin/blocks/${escapeHtml(block.type)}/delete" onsubmit="return confirm('Remove this block? Pages that use it keep the section until you take it off them.')"><button class="btn" type="submit" style="font-size:11px">Remove</button></form></td></tr>`).join('')}</tbody></table>` : ''}
+    <details style="margin-top:.4rem"><summary class="muted" style="cursor:pointer;font-size:12.5px">Define a block</summary>${blockForm()}</details></div>`
+}
+
+/** One block's definition as a form. With a block it edits that block; without one it defines a new one. */
+function blockForm(block?: CustomBlock): string {
+  const fieldLines = (block?.fields ?? [])
+    .map((field) => [field.key, field.label ?? field.key, field.multiline ? 'text' : field.type, field.default === undefined ? '' : String(field.default)].join('|').replace(/\|+$/, ''))
+    .join('\n')
+  return `<form method="post" action="/admin/blocks" style="margin-top:.6rem">
+      <div class="row"><div class="field" style="flex:1"><label>Name</label><input name="name" required value="${escapeHtml(block?.name ?? '')}" placeholder="Ingredient strip"></div>
+        <div class="field" style="flex:1"><label>Type${block ? '' : ' (optional, custom-…)'}</label><input name="type" value="${escapeHtml(block?.type ?? '')}" ${block ? 'readonly' : ''} placeholder="custom-ingredient-strip"></div>
+        <div class="field" style="width:5rem"><label>Icon</label><input name="icon" value="${escapeHtml(block?.icon ?? '✚')}"></div></div>
+      <div class="field"><label>What it is for (the assistant reads this)</label><input name="description" value="${escapeHtml(block?.description ?? '')}" placeholder="A row of ingredient chips with a percentage each"></div>
+      <div class="field"><label>Fields, one per line: key|label|type|default (type: string, text, number, boolean)</label><textarea name="fields" rows="3" placeholder="headline|Headline|string|What is in it&#10;items|Items (name|percent per line)|text|">${escapeHtml(fieldLines)}</textarea></div>
+      <div class="field"><label>Template — {{key}} escaped, {{{key}}} raw, {{#if key}}…{{/if}}, {{#each items}} {{0}} {{1}} {{/each}}, {{product.title}} {{product.price}}</label><textarea name="template" rows="6" required placeholder="&lt;h2 class=&quot;head&quot;&gt;{{headline}}&lt;/h2&gt;&lt;div class=&quot;cols&quot;&gt;{{#each items}}&lt;div class=&quot;col&quot;&gt;&lt;h3&gt;{{0}}&lt;/h3&gt;&lt;p&gt;{{1}}&lt;/p&gt;&lt;/div&gt;{{/each}}&lt;/div&gt;">${escapeHtml(block?.template ?? '')}</textarea></div>
+      <div class="field"><label>CSS (optional)</label><textarea name="css" rows="2">${escapeHtml(block?.css ?? '')}</textarea></div>
+      <div class="field"><label>JavaScript (optional; runs once per page that uses the block; the instances are <code>.blk--&lt;type&gt;</code>)</label><textarea name="js" rows="2">${escapeHtml(block?.js ?? '')}</textarea></div>
+      <button class="btn primary" type="submit">${block ? 'Save changes' : 'Save the block'}</button></form>`
 }
 
 /* --------------------------------------------------------------- bundles */
@@ -741,27 +963,6 @@ export function paymentsPage(ctx: Ctx): string {
 }
 
 /* --------------------------------------------------------------- stores hub */
-
-export function storesPage(ctx: Ctx, stores: Store[]): string {
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Your stores</h1>
-    <p class="muted" style="margin:.25rem 0 0">${stores.length} store${stores.length === 1 ? '' : 's'}. Each one is its own catalog, customers, orders, brand and address.</p></div>
-    <a class="btn primary" href="/onboarding">+ Start a new store</a></div>
-  <div class="grid3">${stores.map((store) => {
-    const products = ctx.db.one<{ c: number }>("SELECT COUNT(*) c FROM products WHERE store_id = ? AND status = 'published'", store.id)?.c ?? 0
-    const sales = salesSummary(ctx.db, store.id, 30)
-    return `<div class="card" style="display:flex;flex-direction:column;gap:.5rem">
-      <div class="row" style="justify-content:space-between;align-items:flex-start">
-        <div class="row">${store.brand.logoSvg ? `<img src="${escapeHtml(store.brand.logoSvg)}" alt="" style="width:36px;height:36px;border-radius:8px">` : ''}
-          <div><h2>${escapeHtml(store.name)}</h2><div class="muted" style="font-size:11.5px">${escapeHtml(store.brand.slogan ?? '')}</div></div></div>
-        <span class="tag ${store.status === 'live' ? 'ok' : 'warn'}">${store.status}</span></div>
-      <div class="muted" style="font-size:12px">${products} products · ${sales.orders} orders / 30d · ${format(sales.revenueCents, store.currency)}</div>
-      <div class="muted" style="font-size:11.5px">${escapeHtml(store.prompt.slice(0, 110))}${store.prompt.length > 110 ? '…' : ''}</div>
-      <div class="row" style="margin-top:.4rem">
-        <a class="btn primary" href="/admin/switch?storeId=${escapeHtml(store.id)}">${store.id === ctx.store.id ? 'Open (current)' : 'Open'}</a>
-        <a class="btn" href="/s/${escapeHtml(store.slug)}" target="_blank" rel="noopener">Storefront ↗</a></div>
-    </div>`
-  }).join('')}</div>`
-}
 
 /* ------------------------------------------------------------- research page */
 
@@ -837,7 +1038,7 @@ export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
     <div class="card"><h2>Recent runs</h2>
       ${runs.map((run) => `<div style="border-top:1px solid var(--line);padding:.5rem 0">
         <div class="row" style="justify-content:space-between"><span style="font-size:12.5px">${escapeHtml(run.prompt.slice(0, 60))}</span>
-          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}</span></div>
+          <span class="tag ${run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'}">${run.status}${run.status === 'partial' && run.error ? ` · ${escapeHtml(run.error.split(';').length)} failed` : ''}</span></div>
         <div class="muted" style="font-size:11.5px">${run.steps.map((step) => `${escapeHtml(step.tool)}${step.status === 'failed' ? ' ✗' : ''}`).join(' · ')}</div></div>`).join('')
         || '<p class="muted" style="font-size:12px">No runs yet.</p>'}</div>
   </div></div>`

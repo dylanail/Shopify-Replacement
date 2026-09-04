@@ -1,6 +1,7 @@
 import { getDb } from '../lib/db.ts'
-import { badRequest, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
-import { endSession, login, register, requireRole, requireUser, SESSION_COOKIE, startSession, userFor, inviteTeammate } from '../control/auth.ts'
+import { format } from '../lib/money.ts'
+import { badRequest, escapeHtml, forbidden, html, notFound, redirect, Router, setCookie, sse, unauthorized, type Ctx } from '../lib/http.ts'
+import { acceptInvite, endSession, login, register, requireRole, requireUser, resetPassword, SESSION_COOKIE, startPasswordReset, startSession, userFor, userForReset, inviteTeammate } from '../control/auth.ts'
 import { environment, getStore, listStores, publish, publishState, rollback, setTheme, updateStore, verifyDomain, type Store } from '../control/stores.ts'
 import { attachDomain, checkDomain, removeDomain, type DomainMode } from '../control/domains.ts'
 import { deleteAd, draftAds, getAd, reviseAd, saveAd, saveInspiration, deleteInspiration, readInspiration, type AdPlatform } from '../agent/ads.ts'
@@ -22,25 +23,29 @@ import { createPage, deletePage, duplicatePage, getPage, pageTemplate, updatePag
 import { clonePage, extractBlocks } from '../pages/clone.ts'
 import { blockDefinition } from '../pages/blocks.ts'
 import { removeBundle, upsertBundle, type BundleTier } from '../domain/bundles.ts'
+import { createRegion, deleteRegion, deleteShippingOption, listRegions, setShippingOption, updateRegion, updateShippingOption } from '../domain/regions.ts'
+import { qualifyCatalogProduct, TRENDS, writeQualifyNotes } from '../domain/qualify.ts'
+import { createArticle, createBlog, deleteArticle, deleteBlog, listBlogs, updateArticle } from '../domain/content.ts'
 import { latestResearch } from '../agent/research.ts'
 import { getProduct } from '../domain/catalog.ts'
 import { editorPage } from './editor.ts'
-import { stripeFor } from '../payments/stripe.ts'
+import { refundThroughProvider, stripeFor } from '../payments/stripe.ts'
 import { getOrder, markDelivered, recordSupplierOrder } from '../domain/orders.ts'
 import { answerQuestion, hideQuestion, importReviews, markStockAlertsNotified, pendingStockAlerts, recordAdSpend } from '../domain/ops.ts'
 import { deleteFunnel, upsertFunnel } from '../domain/funnels.ts'
 import { generateVersions, setVersionWeight } from '../pages/versions.ts'
-import { sendEmail, orderContext } from '../email/send.ts'
+import { sendAccountEmail, sendEmail, orderContext } from '../email/send.ts'
 import { getVariant } from '../domain/catalog.ts'
 import { onActivity, recentActivity } from '../agent/events.ts'
-import { onboard } from '../agent/onboarding.ts'
+import { buildTicket, startOnboarding } from '../agent/onboarding.ts'
 import * as pages from './pages.ts'
 import { shell } from './shell.ts'
-import { authPage, onboardingPage } from './auth-pages.ts'
+import { authPage, buildingPage, forgotPage, onboardingPage, resetPage } from './auth-pages.ts'
+import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
-import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
-import { deleteQueueItem, getQueueItem, PAGE_GOALS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
+import { deleteDoc, latestDoc, planRowRequest, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type AdPlanRow } from '../agent/market.ts'
+import { deleteQueueItem, getQueueItem, labelShot, PAGE_GOALS, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
 import { newBlock } from '../pages/store.ts'
@@ -50,6 +55,10 @@ import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 
 const STORE_COOKIE = 'amboras_store'
+/** The build mode chosen on the onboarding form, held until its build finishes. */
+const pendingMode = new Map<string, string>()
+/** An invite token held between clicking the link and having an account. */
+const INVITE_COOKIE = 'amboras_invite'
 
 type Session = { user: { id: string; name: string; email: string }; store: Store; stores: Store[] }
 
@@ -59,12 +68,43 @@ function session(ctx: Ctx): Session {
   const stores = listStores(db, user.id)
   if (!stores.length) throw new NoStores()
   const wanted = ctx.query.get('storeId') ?? ctx.cookies[STORE_COOKIE]
+  // An id that is unknown, deleted, or someone else's used to fall through to
+  // whichever store happened to be newest — and /admin/switch then pinned the
+  // cookie to it. A stale bookmark quietly moved you into another store and
+  // kept you there. An unknown id from the URL is refused; a stale cookie just
+  // falls back, because that is a store that was deleted or handed over.
+  if (ctx.query.get('storeId') && !stores.some((entry) => entry.id === ctx.query.get('storeId'))) {
+    throw notFound('No store of yours with that id')
+  }
   const store = stores.find((entry) => entry.id === wanted) ?? (stores[0] as Store)
   requireRole(db, user.id, store.id)
   return { user, store, stores }
 }
 
 class NoStores extends Error {}
+
+/**
+ * The same session, for the decisions a 'member' should not make on someone
+ * else's store: taking the storefront live or rolling it back, connecting or
+ * removing a domain, installing or removing an integration, choosing which
+ * models write, and deleting things.
+ *
+ * `requireRole` exists and three routes used it; every other write accepted
+ * the default 'member', so the role on an invite decided nothing at all.
+ */
+function adminSession(ctx: Ctx): Session {
+  const current = session(ctx)
+  requireRole(getDb(), current.user.id, current.store.id, 'admin')
+  return current
+}
+
+/** Someone who followed an invite link before they had an account joins on their first sign-in. */
+function redeemPendingInvite(ctx: Ctx, userId: string) {
+  const pending = ctx.cookies[INVITE_COOKIE]
+  if (!pending) return
+  acceptInvite(getDb(), userId, pending)
+  setCookie(ctx.res, INVITE_COOKIE, '', { maxAge: 0 })
+}
 
 function page(ctx: Ctx, current: Session, active: string, title: string, body: string) {
   const db = getDb()
@@ -136,6 +176,7 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     try {
       const user = login(db(), String(body.email ?? ''), String(body.password ?? ''))
+      redeemPendingInvite(ctx, user.id)
       setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
       return redirect('/admin')
     } catch (error) {
@@ -143,15 +184,85 @@ export function adminRouter(): Router {
     }
   })
 
+  /* A way back into an account. There was none: a forgotten password meant the
+     store, its products, its orders and its domain were gone. */
+  router.get('/forgot', (ctx) =>
+    userFor(db(), ctx)
+      ? redirect('/admin')
+      : html(forgotPage({ error: ctx.query.get('error'), sent: ctx.query.get('sent') === '1', logged: ctx.query.get('logged') === '1' })),
+  )
+
+  router.post('/forgot', async (ctx) => {
+    const body = await ctx.body()
+    const email = String(body.email ?? '').trim().toLowerCase()
+    const started = email ? startPasswordReset(db(), email) : null
+    let delivery: 'sent' | 'logged' | 'failed' = 'sent'
+    if (started) {
+      const origin = process.env.AMBORAS_PUBLIC_ORIGIN || ctx.url.origin
+      const link = `${origin}/reset?token=${encodeURIComponent(started.token)}`
+      delivery = await sendAccountEmail({
+        to: started.user.email,
+        subject: 'Reset your Amboras password',
+        html: `<p>Someone asked to reset the password for this account.</p><p><a href="${escapeHtml(link)}">Choose a new password</a></p><p>The link works once and expires in an hour. If it was not you, nothing has changed and you can ignore this.</p>`,
+      })
+    }
+    // The same answer either way: a form that says "no account with that
+    // email" is a way to find out who has one.
+    return redirect(`/forgot?sent=1${delivery === 'logged' ? '&logged=1' : ''}`)
+  })
+
+  router.get('/reset', (ctx) => {
+    const value = ctx.query.get('token') ?? ''
+    const user = value ? userForReset(db(), value) : null
+    if (!user) return redirect(`/forgot?error=${encodeURIComponent('That reset link has expired or has already been used. Ask for another.')}`)
+    return html(resetPage({ token: value, email: user.email, error: ctx.query.get('error') }))
+  })
+
+  router.post('/reset', async (ctx) => {
+    const body = await ctx.body()
+    const value = String(body.token ?? '')
+    try {
+      const user = resetPassword(db(), value, String(body.password ?? ''))
+      setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
+      return redirect(`/admin?flash=${encodeURIComponent('Password changed. Every other signed-in device has been signed out.')}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not change the password'
+      // A live token keeps its form; a dead one goes back to asking for another.
+      return redirect(userForReset(db(), value) ? `/reset?token=${encodeURIComponent(value)}&error=${encodeURIComponent(message)}` : `/forgot?error=${encodeURIComponent(message)}`)
+    }
+  })
+
   router.post('/register', async (ctx) => {
     const body = await ctx.body()
     try {
       const user = register(db(), { email: String(body.email ?? ''), password: String(body.password ?? ''), name: String(body.name ?? '') })
+      redeemPendingInvite(ctx, user.id)
       setCookie(ctx.res, SESSION_COOKIE, startSession(db(), user.id), { maxAge: 60 * 60 * 24 * 30 })
       return redirect('/onboarding')
     } catch (error) {
       return redirect(`/register?error=${encodeURIComponent(error instanceof Error ? error.message : 'Could not register')}`)
     }
+  })
+
+  /**
+   * Redeem an invite.
+   *
+   * `inviteTeammate` minted a token and `acceptInvite` was the only thing that
+   * could turn the row it wrote into access — and nothing called it. No route
+   * took a token, the token was never shown to the person who created it, and
+   * a teammate without an account could never join. The invite is a link now:
+   * signing in or registering with it in hand joins the store.
+   */
+  router.get('/join/:token', (ctx) => {
+    const inviteToken = ctx.params.token as string
+    const user = userFor(db(), ctx)
+    if (!user) {
+      setCookie(ctx.res, INVITE_COOKIE, inviteToken, { maxAge: 60 * 60 * 24 * 7 })
+      return redirect(`/register?error=${encodeURIComponent('Create an account with the address you were invited at, and you will join the store.')}`)
+    }
+    const joined = acceptInvite(db(), user.id, inviteToken)
+    setCookie(ctx.res, INVITE_COOKIE, '', { maxAge: 0 })
+    return redirect(joined ? '/admin/stores?flash=' + encodeURIComponent('You are on the team.') : '/admin/stores?flash=' + encodeURIComponent('!That invite has been used already, or it is not valid.'))
   })
 
   router.post('/logout', (ctx) => {
@@ -165,7 +276,7 @@ export function adminRouter(): Router {
 
   router.get('/onboarding', (ctx) => {
     const user = requireUser(db(), ctx)
-    return html(onboardingPage(user.name || user.email, ctx.query.get('error'), listStores(db(), user.id).length > 0))
+    return html(onboardingPage(user.name || user.email, ctx.query.get('error'), listStores(db(), user.id).length))
   })
 
   router.post('/onboarding', async (ctx) => {
@@ -186,16 +297,41 @@ export function adminRouter(): Router {
       if (error instanceof UploadError) return redirect(`/onboarding?error=${encodeURIComponent(error.message)}`)
       throw error
     }
-    const result = await onboard(db(), {
+    const ticket = startOnboarding(db(), {
       ownerId: user.id,
       prompt,
       ...(referenceImage ? { referenceImage } : {}),
       ...(siteUrl ? { referenceUrl: siteUrl } : {}),
     })
-    setCookie(ctx.res, STORE_COOKIE, result.store.id, { maxAge: 60 * 60 * 24 * 365 })
-    const mode = modeById(String(body.mode ?? 'own-product')) ?? modeById('own-product')
-    if (mode) setBuildMode(db(), result.store.id, mode.id)
-    return redirect('/admin?flash=' + encodeURIComponent(`${result.store.name} is built — ${result.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`))
+    pendingMode.set(ticket.id, String(body.mode ?? 'own-product'))
+    return redirect(`/onboarding/building?t=${encodeURIComponent(ticket.id)}`)
+  })
+
+  /** The build, watched rather than waited on. */
+  router.get('/onboarding/building', (ctx) => {
+    const user = requireUser(db(), ctx)
+    const ticket = buildTicket(ctx.query.get('t') ?? '', user.id)
+    if (!ticket) return redirect('/onboarding')
+    return html(buildingPage(ticket))
+  })
+
+  router.get('/onboarding/status', (ctx) => {
+    const user = requireUser(db(), ctx)
+    const ticket = buildTicket(ctx.query.get('t') ?? '', user.id)
+    if (!ticket) return { state: 'failed', error: 'That build is not in flight any more.' }
+    if (ticket.state === 'done' && ticket.storeId) {
+      const mode = modeById(pendingMode.get(ticket.id) ?? 'own-product') ?? modeById('own-product')
+      if (mode) setBuildMode(db(), ticket.storeId, mode.id)
+      pendingMode.delete(ticket.id)
+      setCookie(ctx.res, STORE_COOKIE, ticket.storeId, { maxAge: 60 * 60 * 24 * 365 })
+      // The flash says what actually happened, including what did not: it used
+      // to claim success whether or not the steps had failed.
+      const note = ticket.failures.length
+        ? `${ticket.storeName} is built, but ${ticket.failures.length} step${ticket.failures.length === 1 ? '' : 's'} failed: ${ticket.failures.slice(0, 2).join('; ')}. The Build page has the order of work from here.`
+        : `${ticket.storeName} is built — ${ticket.summaries.length} steps ran. The Build page has the order of work from here; publish when it looks right.`
+      return { state: 'done', stage: ticket.stage, next: `/admin?flash=${encodeURIComponent(note)}` }
+    }
+    return { state: ticket.state, stage: ticket.stage, error: ticket.error }
   })
 
   /* ------------------------------------------------------------------ pages */
@@ -206,9 +342,49 @@ export function adminRouter(): Router {
     return page(ctx, current, 'dashboard', 'Dashboard', pages.dashboard(ctxFor(current, ctx), range(ctx)))
   })
 
+  /**
+   * The account's own page, not a store's: it has to answer for a user with
+   * no stores at all, so it deliberately does not go through session().
+   */
   router.get('/admin/stores', (ctx) => {
-    const current = session(ctx)
-    return page(ctx, current, 'stores', 'Your stores', pages.storesPage(ctxFor(current, ctx), current.stores))
+    const user = requireUser(db(), ctx)
+    const stores = listStores(db(), user.id)
+    const name = user.name || user.email.split('@')[0] || 'there'
+    return html(
+      accountShell({
+        userName: name,
+        title: 'Your stores',
+        body: storesHub({
+          db: db(),
+          stores,
+          userName: name,
+          origin: process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin,
+          ...(ctx.query.get('flash') ? { flash: ctx.query.get('flash') as string } : {}),
+        }),
+      }),
+    )
+  })
+
+  /**
+   * Taking a shop down and putting it back up. `paused` was a status the type
+   * declared and nothing ever wrote, so a published store could never be
+   * closed: the only lever was publish, and it only went one way.
+   */
+  router.post('/admin/stores/:id/status', async (ctx) => {
+    const user = requireUser(db(), ctx)
+    const storeId = ctx.params.id as string
+    requireRole(db(), user.id, storeId, 'admin')
+    const body = await ctx.body()
+    const wanted = String(body.status ?? '')
+    if (wanted !== 'live' && wanted !== 'paused') return badRequest('A shop is either open or paused.')
+    const store = getStore(db(), storeId)
+    if (!store) return notFound('No such store')
+    if (wanted === 'live' && !environment(db(), storeId, 'live').publishedAt) {
+      return redirect(`/admin/stores?flash=${encodeURIComponent('!That store has never been published — open it and publish it first.')}`)
+    }
+    updateStore(db(), storeId, { status: wanted })
+    recordAudit(db(), { storeId, actorType: 'user', actorId: user.id, action: wanted === 'paused' ? 'pause_store' : 'reopen_store' })
+    return redirect(`/admin/stores?flash=${encodeURIComponent(wanted === 'paused' ? `${store.name} is paused — its address shows a closed sign.` : `${store.name} is open again.`)}`)
   })
 
   router.get('/admin/research', (ctx) => {
@@ -238,15 +414,59 @@ export function adminRouter(): Router {
     if (!files.photo) return back(ctx, '!Choose an image first.')
     try {
       const saved = saveUpload(files.photo, current.store.id)
+      const shot = String(body.shot ?? '').trim().toLowerCase()
       const result = await execute(
         'attach_product_photo',
-        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless') },
+        { productId: ctx.params.id as string, upload: saved.url, preset: String(body.preset ?? 'white-seamless'), ...(shot ? { shot } : {}) },
         { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' },
       )
       return back(ctx, result.summary)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Upload failed'}`)
     }
+  })
+
+  /* Which brief an image satisfies. The Creative checklist reads these markers;
+     nothing could write one, so coverage never moved past the hero. */
+  router.post('/admin/products/:id/media/label', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, ctx.params.id as string)
+    if (!product) return back(ctx, '!No such product')
+    const url = String(body.mediaUrl ?? '')
+    const shot = String(body.shot ?? '').trim().toLowerCase()
+    if (shot && !PHOTO_BRIEFS.some((brief) => brief.id === shot)) return back(ctx, '!That is not one of the briefs.')
+    if (!product.media.some((entry) => entry.url === url)) return back(ctx, '!That image is not on this product.')
+    updateProduct(db(), current.store.id, product.id, {
+      media: product.media.map((entry) => (entry.url === url ? { ...entry, alt: labelShot(entry.alt, shot) } : entry)),
+    })
+    const brief = PHOTO_BRIEFS.find((entry) => entry.id === shot)
+    return back(ctx, brief ? `Labelled as "${brief.name}". The Creative checklist counts it now.` : 'Label removed.')
+  })
+
+  /* The judgements the numbers cannot make: the trend, the weight, whether it
+     is patented, and whether anyone has found a way to stand out. */
+  router.post('/admin/products/:id/qualify', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const product = getProduct(db(), current.store.id, ctx.params.id as string)
+    if (!product) return back(ctx, '!No such product')
+    const trend = String(body.trend ?? 'unknown')
+    const number = (key: string) => Math.max(0, Math.round(Number(body[key] ?? 0)) || 0)
+    const notes = {
+      ...(TRENDS.includes(trend as (typeof TRENDS)[number]) ? { trend: trend as (typeof TRENDS)[number] } : {}),
+      ...(number('weightGrams') ? { weightGrams: number('weightGrams') } : {}),
+      ...(number('aovCents') ? { aovCents: number('aovCents') } : {}),
+      ...(body.seasonal === 'true' ? { seasonal: true } : {}),
+      ...(body.tech === 'true' ? { tech: true } : {}),
+      ...(body.patented === 'true' ? { patented: true } : {}),
+      ...(body.bigBrand === 'true' ? { bigBrand: true } : {}),
+      ...(body.printOnDemand === 'true' ? { printOnDemand: true } : {}),
+      ...(String(body.standOut ?? '').trim() ? { standOut: String(body.standOut).trim() } : {}),
+    }
+    updateProduct(db(), current.store.id, product.id, { metadata: { qualify: writeQualifyNotes(notes) } })
+    const result = qualifyCatalogProduct(getProduct(db(), current.store.id, product.id) as typeof product, notes)
+    return back(ctx, result.decision === 'skip' ? `!${result.summary}` : result.summary)
   })
 
   router.post('/admin/products/:id/rewrite', async (ctx) => {
@@ -342,7 +562,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/blocks/:type/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteCustomBlock(db(), current.store.id, ctx.params.type as string)
     return back(ctx, 'Block removed. Pages that used it show a note where it was until you replace it.')
   })
@@ -352,7 +572,12 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const blocks = Array.isArray(body.blocks) ? (body.blocks as Array<{ id?: string; type: string; settings?: Record<string, unknown> }>) : []
     const custom = new Set(customDefinitions(db(), current.store.id).map((definition) => definition.type))
-    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type))
+    // A type the page already carries is allowed through even when nothing
+    // defines it any more — a custom block that was removed leaves orphans,
+    // and refusing the save meant the page could not be edited at all, least
+    // of all to take the orphan off it. New types still have to exist.
+    const carried = new Set((getPage(db(), current.store.id, ctx.params.id as string)?.blocks ?? []).map((block) => block.type))
+    const unknown = blocks.find((block) => !blockDefinition(block.type) && !custom.has(block.type) && !carried.has(block.type))
     if (unknown) return { error: `Unknown block type ${unknown.type}` }
     const seo = (body.seo ?? {}) as Record<string, unknown>
     const updated = updatePage(db(), current.store.id, ctx.params.id as string, {
@@ -383,7 +608,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/pages/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deletePage(db(), current.store.id, ctx.params.id as string)
     return redirect('/admin/pages?flash=Deleted.')
   })
@@ -429,7 +654,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/bundles/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     removeBundle(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Bundle removed and its promotions disabled.')
   })
@@ -445,7 +670,7 @@ export function adminRouter(): Router {
     const current = session(ctx)
     const body = await ctx.body()
     try {
-      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 2.5), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
+      const result = await execute('import_product_from_url', { url: String(body.url ?? ''), markup: Number(body.markup ?? 3), supplierShippingCents: Math.max(0, Math.round(Number(body.supplierShippingCents ?? 0)) || 0), asSupplier: body.asSupplier === 'true' }, { db: db(), storeId: current.store.id, actor: { type: 'user', id: current.user.id }, page: 'products' })
       const productId = (result.data as { id?: string })?.id
       return redirect(productId ? `/admin/products/${productId}?flash=${encodeURIComponent(result.summary)}` : `/admin/products?flash=${encodeURIComponent(result.summary)}`)
     } catch (error) {
@@ -493,7 +718,7 @@ export function adminRouter(): Router {
     const order = recordSupplierOrder(db(), current.store.id, ctx.params.id as string, { supplier: String(body.supplier ?? ''), orderId: String(body.orderId ?? ''), costCents: number('costCents'), shippingCents: number('shippingCents'), ...(body.tracking ? { tracking: String(body.tracking) } : {}), ...(body.carrier ? { carrier: String(body.carrier) } : {}) })
     if (body.tracking) {
       const shipment = order.fulfillments.at(-1)
-      void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
+      void sendEmail(db(), current.store.id, { template: 'order_shipped', to: order.email, context: { ...orderContext(order, publicUrl(ctx, current.store)), tracking: shipment?.tracking ?? '' } }).catch(() => undefined)
     }
     return back(ctx, body.tracking ? 'Saved and marked shipped; the customer has the tracking link.' : 'Supplier order saved.')
   })
@@ -501,7 +726,7 @@ export function adminRouter(): Router {
   router.post('/admin/orders/:id/delivered', (ctx) => {
     const current = session(ctx)
     const order = markDelivered(db(), current.store.id, ctx.params.id as string)
-    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, ctx.url.origin + storeUrl(ctx, current.store)) }).catch(() => undefined)
+    void sendEmail(db(), current.store.id, { template: 'order_delivered', to: order.email, context: orderContext(order, publicUrl(ctx, current.store)) }).catch(() => undefined)
     return back(ctx, 'Marked delivered. The review request goes out a week from now.')
   })
 
@@ -513,7 +738,13 @@ export function adminRouter(): Router {
   router.post('/admin/profit/spend', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
-    recordAdSpend(db(), current.store.id, { day: String(body.day ?? new Date().toISOString()), platform: String(body.platform ?? 'Other'), amountCents: Math.round(Number(body.amountCents ?? 0)), note: String(body.note ?? '') })
+    recordAdSpend(db(), current.store.id, {
+      day: String(body.day ?? new Date().toISOString()),
+      platform: String(body.platform ?? 'Other'),
+      amountCents: Math.round(Number(body.amountCents ?? 0)),
+      clicks: Math.round(Number(body.clicks ?? 0)) || 0,
+      note: String(body.note ?? ''),
+    })
     return back(ctx, 'Logged.')
   })
 
@@ -532,17 +763,19 @@ export function adminRouter(): Router {
       productId: String(body.productId ?? ''),
       advertorialPageId: String(body.advertorialPageId ?? ''),
       offerPageId: String(body.offerPageId ?? ''),
-      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: true },
+      bump: { variantId: String(body.bumpVariantId ?? ''), label: String(body.bumpLabel ?? ''), priceCents: number('bumpPriceCents'), enabled: body.bumpOff !== 'true' },
       upsell: { variantId: String(body.upsellVariantId ?? ''), discountPercent: number('upsellDiscount') ?? 20, headline: String(body.upsellHeadline ?? '') },
       downsell: { variantId: String(body.downsellVariantId ?? ''), discountPercent: number('downsellDiscount'), headline: String(body.downsellHeadline ?? '') },
       testGroup: String(body.testGroup ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
-      weight: Number(body.weight ?? 0) || 0,
+      // A funnel put into a test group with no weight is not in the test, and
+      // the entry URL then answers with nothing. Naming a group means running it.
+      weight: Number(body.weight ?? 0) || (String(body.testGroup ?? '').trim() ? 50 : 0),
     })
     return back(ctx, 'Funnel saved.')
   })
 
   router.post('/admin/funnels/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteFunnel(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Funnel deleted.')
   })
@@ -571,7 +804,7 @@ export function adminRouter(): Router {
     for (const alert of alerts) {
       const variant = getVariant(db(), current.store.id, alert.variant_id)
       if (!variant || (variant.inventory <= 0 && !variant.allowBackorder)) continue
-      await sendEmail(db(), current.store.id, { template: 'welcome', to: alert.email, context: { storeUrl: ctx.url.origin + storeUrl(ctx, current.store), heading: 'It is back in stock' } })
+      await sendEmail(db(), current.store.id, { template: 'back_in_stock', to: alert.email, context: { storeUrl: publicUrl(ctx, current.store), product: { title: variant.title } } })
       sent.push(alert.id)
     }
     markStockAlertsNotified(db(), sent)
@@ -581,7 +814,10 @@ export function adminRouter(): Router {
   router.get('/admin/switch', (ctx) => {
     const current = session(ctx)
     setCookie(ctx.res, STORE_COOKIE, current.store.id, { maxAge: 60 * 60 * 24 * 365 })
-    return redirect('/admin')
+    // `to` lets the hub open a store straight onto a page — Build, say — but it
+    // is a path on this admin and nothing else.
+    const to = ctx.query.get('to') ?? ''
+    return redirect(/^\/admin(\/|$)/.test(to) && !to.startsWith('//') ? to : '/admin')
   })
 
   router.get('/admin/ai', (ctx) => {
@@ -644,16 +880,16 @@ export function adminRouter(): Router {
     requireRole(db(), current.user.id, current.store.id, 'admin')
     const existing = getOrder(db(), current.store.id, ctx.params.id as string)
     if (!existing) throw notFound('No such order')
-    if (existing.paymentProvider === 'stripe' && existing.paymentIntentId) {
-      const stripe = stripeFor(db(), current.store.id)
-      if (!stripe) return back(ctx, '!This order was paid through Stripe, which is no longer connected.')
-      try {
-        await stripe.client.refunds.create({ paymentIntentId: existing.paymentIntentId, reason: 'requested_by_customer' })
-      } catch (error) {
-        return back(ctx, `!Stripe refused the refund: ${error instanceof Error ? error.message : 'unknown error'}`)
-      }
-    }
+    const moved = await refundThroughProvider(db(), current.store.id, existing)
+    if (!moved.ok) return back(ctx, `!${moved.message}`)
     const order = refundOrder(db(), current.store.id, existing.id, { reason: 'Refunded from the admin' })
+    // The template exists with the trigger 'order.refunded' and nothing sent
+    // it: the customer learned about their refund from their bank.
+    void sendEmail(db(), current.store.id, {
+      template: 'refund_issued',
+      to: order.email,
+      context: { ...orderContext(order, publicUrl(ctx, current.store)), amount: format(order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0), order.currency) },
+    }).catch(() => undefined)
     return back(ctx, `Refunded${existing.paymentProvider === 'stripe' ? ' through Stripe' : ''}. Payment is now ${order.paymentStatus}.`)
   })
 
@@ -679,10 +915,19 @@ export function adminRouter(): Router {
     return page(ctx, current, 'promotions', 'Promotions', pages.promotionsPage(ctxFor(current, ctx)))
   })
 
-  router.post('/admin/promotions/:id/disable', (ctx) => {
+  /**
+   * Turning a promotion off, and back on.
+   *
+   * setPromotionStatus took a status and every caller passed 'disabled'; the
+   * table only offered the button while a promotion was active, so a code
+   * switched off after a launch could never be run again. The only way back
+   * was a duplicate, which forks the usage count.
+   */
+  router.post('/admin/promotions/:id/:state', (ctx) => {
     const current = session(ctx)
-    setPromotionStatus(db(), current.store.id, ctx.params.id as string, 'disabled')
-    return back(ctx, 'Promotion disabled.')
+    const wanted = ctx.params.state === 'enable' ? 'active' : 'disabled'
+    setPromotionStatus(db(), current.store.id, ctx.params.id as string, wanted)
+    return back(ctx, wanted === 'active' ? 'Promotion is live again.' : 'Promotion disabled.')
   })
 
   router.get('/admin/analytics', (ctx) => {
@@ -709,7 +954,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/theme', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     setTheme(db(), current.store.id, {
       template: String(body.template ?? 'atelier'),
@@ -722,14 +967,14 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/theme/code', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     setTheme(db(), current.store.id, { customCss: String(body.customCss ?? ''), customJs: String(body.customJs ?? '') }, { build: 'Store-wide css and js edited' })
     return back(ctx, 'Custom code saved to the draft. Publish to make it live.')
   })
 
   router.post('/admin/publish', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const state = publishState(db(), current.store.id)
     if (!state.ready) return back(ctx, `!${state.reason}`)
     const live = publish(db(), current.store.id)
@@ -739,7 +984,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/rollback', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     rollback(db(), current.store.id)
     return back(ctx, 'Draft reset to what is live.')
   })
@@ -762,7 +1007,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/plugins/:id/settings', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       install(db(), current.store.id, ctx.params.id as string, body)
@@ -775,7 +1020,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/plugins/:id/uninstall', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     requireRole(db(), current.user.id, current.store.id, 'admin')
     uninstall(db(), current.store.id, ctx.params.id as string)
     invalidateStorefrontConfig(current.store.id)
@@ -793,7 +1038,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       const record = attachDomain(db(), current.store.id, { hostname: String(body.hostname ?? ''), mode: (body.mode === 'forward' ? 'forward' : 'host') as DomainMode, registrar: String(body.registrar ?? 'other') })
@@ -817,7 +1062,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains/verify', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     try {
       verifyDomain(db(), current.store.id, String(body.hostname ?? ''))
@@ -829,7 +1074,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/domains/remove', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     removeDomain(db(), current.store.id, String(body.hostname ?? ''))
     return back(ctx, 'Detached.')
@@ -906,7 +1151,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/ads/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteAd(db(), current.store.id, ctx.params.id as string)
     return redirect(`/admin/ads?flash=${encodeURIComponent('Deleted.')}`)
   })
@@ -1034,6 +1279,28 @@ export function adminRouter(): Router {
     }
   })
 
+  /* A plan row, run. The plan named the concept, the angle, the variations,
+     the format and the method, and then the owner retyped all of it into the
+     ad drafter by hand because nothing connected the two. */
+  router.post('/admin/market/plan/:index/ads', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const index = Number(ctx.params.index)
+    const doc = latestDoc<AdPlan>(db(), current.store.id, 'ad-plan')
+    const row = doc?.body.rows[index]
+    if (!row) return back(ctx, '!No such plan row')
+    const product = String(body.productId ?? '') || listProducts(db(), current.store.id, { status: 'published', limit: 1 })[0]?.id || ''
+    if (!product) return back(ctx, '!Publish a product first; an ad has to point at something.')
+    try {
+      const request = planRowRequest(row, listAvatars(db(), current.store.id))
+      const ads = await draftAds(db(), current.store, { productId: product, platform: String(body.platform ?? 'meta') as AdPlatform, ...request })
+      if (row.status === 'idea') updatePlanRow(db(), current.store.id, index, { status: 'working' })
+      return back(ctx, `${ads.length} ad${ads.length === 1 ? '' : 's'} drafted from "${row.concept}". The row is working now; write its learnings when the test is read.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not draft the ads'}`)
+    }
+  })
+
   router.post('/admin/market/loop', async (ctx) => {
     const current = session(ctx)
     const body = await ctx.body()
@@ -1043,7 +1310,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/market/docs/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteDoc(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Deleted.')
   })
@@ -1195,7 +1462,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/avatars/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteAvatar(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Avatar deleted.')
   })
@@ -1276,7 +1543,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/competitors/:id/delete', (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     deleteCompetitor(db(), current.store.id, ctx.params.id as string)
     return back(ctx, 'Deleted.')
   })
@@ -1311,13 +1578,160 @@ export function adminRouter(): Router {
     return back(ctx, body.as === 'hero' ? 'That is the hero image now.' : 'Added to the gallery.')
   })
 
+  /* Regions, rates and tax. Read-only until now: the only way to change what a
+     customer is charged for shipping was to ask the assistant, and it could
+     only add. */
+  const money = (raw: unknown): number | null => {
+    const text = String(raw ?? '').trim().replace(/[^0-9.,-]/g, '').replace(/,/g, '')
+    if (!text) return null
+    const value = Number(text)
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) : null
+  }
+  const countryList = (raw: unknown) =>
+    String(raw ?? '')
+      .split(/[,\s]+/)
+      .map((code) => code.trim().toUpperCase())
+      .filter((code) => /^[A-Z]{2}$/.test(code))
+
+  router.post('/admin/regions', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const currency = String(body.currency ?? '').trim().toUpperCase()
+    if (!/^[A-Z]{3}$/.test(currency)) return back(ctx, '!A currency is three letters, like USD or GBP.')
+    const countries = countryList(body.countries)
+    if (!countries.length) return back(ctx, '!Give the region at least one country, as a two-letter code.')
+    const region = createRegion(db(), current.store.id, {
+      name: String(body.name ?? '').trim() || currency,
+      currency,
+      countries,
+      taxRate: Math.min(1, Math.max(0, Number(String(body.taxPercent ?? '0').replace(/[^0-9.]/g, '')) / 100 || 0)),
+    })
+    const amount = money(body.shippingAmount)
+    if (amount !== null) {
+      setShippingOption(db(), region.id, { name: String(body.shippingName ?? '').trim() || 'Standard shipping', amountCents: amount, freeAboveCents: money(body.shippingFreeAbove) })
+    }
+    return back(ctx, `${region.name} added: ${region.currency} for ${countries.join(', ')}.`)
+  })
+
+  router.post('/admin/regions/:id', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const currency = String(body.currency ?? '').trim().toUpperCase()
+    if (currency && !/^[A-Z]{3}$/.test(currency)) return back(ctx, '!A currency is three letters, like USD or GBP.')
+    try {
+      const region = updateRegion(db(), current.store.id, ctx.params.id as string, {
+        name: String(body.name ?? '').trim() || undefined,
+        ...(currency ? { currency } : {}),
+        ...(body.countries === undefined ? {} : { countries: countryList(body.countries) }),
+        ...(body.taxPercent === undefined ? {} : { taxRate: Math.min(1, Math.max(0, Number(String(body.taxPercent).replace(/[^0-9.]/g, '')) / 100 || 0)) }),
+        ...(body.isDefault === 'true' ? { isDefault: true } : {}),
+      })
+      return back(ctx, `${region.name} saved.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save the region'}`)
+    }
+  })
+
+  router.post('/admin/regions/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    try {
+      deleteRegion(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, 'Region removed, with its rates.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not remove the region'}`)
+    }
+  })
+
+  router.post('/admin/regions/:id/shipping', async (ctx) => {
+    const current = adminSession(ctx)
+    const body = await ctx.body()
+    const region = listRegions(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!region) return back(ctx, '!No such region')
+    const amount = money(body.amount)
+    if (amount === null) return back(ctx, '!Give the rate a price — 0 for free shipping.')
+    const name = String(body.name ?? '').trim() || 'Standard shipping'
+    const freeAbove = money(body.freeAbove)
+    const optionId = String(body.optionId ?? '')
+    if (optionId && region.shipping.some((option) => option.id === optionId)) {
+      updateShippingOption(db(), optionId, { name, amountCents: amount, freeAboveCents: freeAbove })
+      return back(ctx, `${name} saved on ${region.name}.`)
+    }
+    setShippingOption(db(), region.id, { name, amountCents: amount, freeAboveCents: freeAbove })
+    return back(ctx, `${name} added to ${region.name}.`)
+  })
+
+  router.post('/admin/shipping/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    try {
+      deleteShippingOption(db(), current.store.id, ctx.params.id as string)
+      return back(ctx, 'Rate removed.')
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not remove the rate'}`)
+    }
+  })
+
+  /* The blog. The storefront has served it from the beginning and the
+     assistant could write into it; the merchant could not read it back, fix a
+     line, unpublish it or take it down. */
+  router.post('/admin/blogs', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const title = String(body.title ?? '').trim()
+    if (!title) return back(ctx, '!Give the blog a name.')
+    const blog = createBlog(db(), current.store.id, title)
+    return back(ctx, `"${blog.title}" is at /blogs/${blog.handle}. It shows once it has a published article.`)
+  })
+
+  router.post('/admin/blogs/:id/articles', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const blog = listBlogs(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!blog) return back(ctx, '!No such blog')
+    const title = String(body.title ?? '').trim()
+    if (!title) return back(ctx, '!Give the article a title.')
+    const article = createArticle(db(), current.store.id, blog.id, {
+      title,
+      body: String(body.body ?? ''),
+      excerpt: String(body.excerpt ?? ''),
+      status: body.status === 'published' ? 'published' : 'draft',
+    })
+    return back(ctx, `"${article.title}" saved as a ${article.status}.`)
+  })
+
+  router.post('/admin/articles/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    try {
+      const article = updateArticle(db(), current.store.id, ctx.params.id as string, {
+        title: String(body.title ?? '').trim() || undefined,
+        body: String(body.body ?? ''),
+        excerpt: String(body.excerpt ?? ''),
+        status: body.status === 'published' ? 'published' : 'draft',
+      })
+      return back(ctx, `"${article.title}" saved as a ${article.status}.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not save the article'}`)
+    }
+  })
+
+  router.post('/admin/articles/:id/delete', (ctx) => {
+    const current = session(ctx)
+    return back(ctx, deleteArticle(db(), current.store.id, ctx.params.id as string) ? 'Article deleted.' : '!No such article')
+  })
+
+  router.post('/admin/blogs/:id/delete', (ctx) => {
+    const current = adminSession(ctx)
+    return back(ctx, deleteBlog(db(), current.store.id, ctx.params.id as string) ? 'Blog deleted, with everything in it.' : '!No such blog')
+  })
+
   router.post('/admin/team', async (ctx) => {
     const current = session(ctx)
     requireRole(db(), current.user.id, current.store.id, 'owner')
     const body = await ctx.body()
     try {
       const result = inviteTeammate(db(), current.store.id, String(body.email ?? ''), String(body.role ?? 'member') as 'member')
-      return back(ctx, result.joined ? 'They already had an account and now have access.' : 'Invite created.')
+      const link = `${process.env.AMBORAS_PUBLIC_ORIGIN || ctx.url.origin}/join/${result.invite}`
+      return back(ctx, result.joined ? 'They already had an account and now have access.' : `Invite created. Send them this link: ${link}`)
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not invite'}`)
     }
@@ -1325,7 +1739,7 @@ export function adminRouter(): Router {
 
   /** Which model writes what, per store. Empty means the environment default. */
   router.post('/admin/settings/models', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     const models: Partial<Record<Task, string>> = {}
     for (const task of TASKS) {

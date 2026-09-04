@@ -111,6 +111,77 @@ export const pageTools: Tool[] = defineTools([
     },
   },
   {
+    name: 'read_page',
+    area: 'store',
+    description: 'Read a page back: its blocks in order, each with its position, id, type and current settings. Read this before update_block, move_block or remove_block — those address a block by its id or its position, and both come from here.',
+    schema: { pageId: { type: 'string', required: true } },
+    handler(args, ctx) {
+      const { getPage } = require_pages()
+      const page = getPage(ctx.db, ctx.storeId, args.pageId as string)
+      if (!page) throw new Error('No such page')
+      const blocks = page.blocks.map((block, index) => ({ position: index, id: block.id, type: block.type, settings: block.settings }))
+      return {
+        summary: page.mode === 'html'
+          ? `"${page.title}" is a raw-HTML page (${page.rawHtml.length} characters), not blocks.`
+          : `"${page.title}" — ${blocks.length} block${blocks.length === 1 ? '' : 's'}, ${page.status}, at /pages/${page.handle}.`,
+        data: { id: page.id, title: page.title, handle: page.handle, mode: page.mode, status: page.status, blocks },
+        artifacts: [{ type: 'table', columns: ['#', 'Type', 'Id', 'Settings'], rows: blocks.map((block) => [String(block.position), block.type, block.id, Object.entries(block.settings).map(([key, value]) => `${key}: ${String(value).slice(0, 60)}`).join('; ')]) }],
+      }
+    },
+  },
+  {
+    name: 'update_block',
+    area: 'store',
+    description: 'Change the settings of a block already on a page. The keys given are merged over what is there, so send only what changes. Address the block by id or by position (read_page gives both).',
+    schema: {
+      pageId: { type: 'string', required: true },
+      blockId: { type: 'string', help: 'From read_page. Either this or position.' },
+      position: { type: 'number', integer: true, min: 0 },
+      settings: { type: 'object', required: true },
+    },
+    handler(args, ctx) {
+      const { page, index, block } = locateBlock(ctx, args)
+      const blocks = [...page.blocks]
+      blocks[index] = { ...block, settings: { ...block.settings, ...((args.settings as Record<string, unknown>) ?? {}) } }
+      updatePage(ctx.db, ctx.storeId, page.id, { blocks })
+      const changed = Object.keys((args.settings as Record<string, unknown>) ?? {})
+      return { summary: `Updated ${block.type} at position ${index} on ${page.title}: ${changed.join(', ') || 'nothing'}.`, artifacts: [{ type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open the page' }] }
+    },
+  },
+  {
+    name: 'move_block',
+    area: 'store',
+    description: 'Move a block to another position on its page. Position 0 is the top.',
+    schema: {
+      pageId: { type: 'string', required: true },
+      blockId: { type: 'string' },
+      position: { type: 'number', integer: true, min: 0, help: 'Where the block is now, when it is not addressed by id.' },
+      to: { type: 'number', integer: true, min: 0, required: true },
+    },
+    handler(args, ctx) {
+      const { page, index, block } = locateBlock(ctx, args)
+      const blocks = [...page.blocks]
+      blocks.splice(index, 1)
+      const to = Math.min(blocks.length, Math.max(0, args.to as number))
+      blocks.splice(to, 0, block)
+      updatePage(ctx.db, ctx.storeId, page.id, { blocks })
+      return { summary: `Moved the ${block.type} block from ${index} to ${to} on ${page.title}.`, artifacts: [{ type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open the page' }] }
+    },
+  },
+  {
+    name: 'remove_block',
+    area: 'store',
+    description: 'Take a block off a page. Removes the section, not the block type — for that, delete_block.',
+    schema: { pageId: { type: 'string', required: true }, blockId: { type: 'string' }, position: { type: 'number', integer: true, min: 0 } },
+    handler(args, ctx) {
+      const { page, index, block } = locateBlock(ctx, args)
+      const blocks = [...page.blocks]
+      blocks.splice(index, 1)
+      updatePage(ctx.db, ctx.storeId, page.id, { blocks })
+      return { summary: `Removed the ${block.type} block from ${page.title} (${blocks.length} left).`, artifacts: [{ type: 'link', href: `/admin/pages/${page.id}/edit`, label: 'Open the page' }] }
+    },
+  },
+  {
     name: 'create_block',
     area: 'store',
     description: 'Define a new reusable block for this store when no catalog block does the job (check list_blocks first). Give it fields, an HTML template over them, and css and js when it needs them: {{key}} escaped, {{{key}}} raw, {{#if key}}…{{else}}…{{/if}}, {{#each key}}…{{/each}} over the lines of a multiline field with {{0}} {{1}} for its "|" parts and {{.}} for the line, plus {{store.name}}, {{base}}, {{product.title}}, {{product.image}}, {{product.price}}, {{product.handle}}. The theme\'s classes (head, lead, eyebrow, cols, col, checks, btn, micro, rating) style it; add css only for what they do not cover. No scripts. The block then appears in the builder palette and can be placed with add_block.',
@@ -196,6 +267,28 @@ export const pageTools: Tool[] = defineTools([
     },
   },
 ])
+
+/**
+ * The block an edit is about. Addressed by id where the caller has one and by
+ * position otherwise — an assistant that has just read the page has both, and
+ * one working from a description of the page has only the position.
+ */
+function locateBlock(ctx: { db: Parameters<typeof updatePage>[0]; storeId: string }, args: Record<string, unknown>) {
+  const { getPage } = require_pages()
+  const page = getPage(ctx.db, ctx.storeId, args.pageId as string)
+  if (!page) throw new Error('No such page')
+  if (page.mode === 'html') throw new Error(`"${page.title}" is a raw-HTML page; edit it in the page builder.`)
+  const index = args.blockId ? page.blocks.findIndex((block) => block.id === args.blockId) : typeof args.position === 'number' ? (args.position as number) : -1
+  const block = page.blocks[index]
+  if (!block) {
+    throw new Error(
+      args.blockId
+        ? `No block ${args.blockId} on ${page.title}. read_page lists what is there.`
+        : `Give blockId or a position between 0 and ${Math.max(0, page.blocks.length - 1)}; read_page lists what is there.`,
+    )
+  }
+  return { page, index, block }
+}
 
 // Avoids a circular import at module load: pages/store imports domain code that imports nothing from tools.
 function require_pages() {

@@ -11,7 +11,8 @@ import { readBrief } from './copy.ts'
 import { latestResearch, rulesResearch, type Research } from './research.ts'
 import { directionFor, getAvatar, listAvatars, type Avatar } from './avatars.ts'
 import { classifyAngle, extractAngle, readCompetitor, type AngleKind, type Fetcher } from './angles.ts'
-import type { Direction } from './directions.ts'
+import { marketBrief, type Direction } from './directions.ts'
+import { latestDoc, loopBrief, type MarketAnalysis } from './market.ts'
 import { completeJson, describe, modelFor, S, type ModelChoice } from './models.ts'
 import { knowledge } from './knowledge.ts'
 
@@ -98,6 +99,20 @@ export type AdInput = {
   reviews: Array<{ rating: number; body: string; author: string }>
   bundle: { tiers: Array<{ quantity: number; discountPercent: number; label: string }> } | null
   inspiration: Inspiration[]
+  /**
+   * What the account has already learned, from the feedback loops on file.
+   * The Market tab collected them under a line saying the writers read
+   * them; nothing did, so an account could write down that statics keep
+   * failing and go on being handed statics.
+   */
+  loops?: string
+  /**
+   * The Market tab's analysis. The system prompt already loads the
+   * sophistication knowledge and asks for one angle; the store's actual
+   * awareness level, sophistication stage, mechanism and underserved avatar
+   * were written on their own tab and handed to nothing.
+   */
+  market?: MarketAnalysis | null
 }
 
 const CTA: Record<Direction['tone'], string> = {
@@ -259,6 +274,73 @@ const AD_SCHEMA = S.obj({
  * avatar, the direction, the real reviews and the swipe file, and writes the
  * copy fresh. Testimonials only ever quote the approved reviews it is given.
  */
+/**
+ * Quotes have to come from somewhere.
+ *
+ * The model is told that the approved reviews on file are the only source for
+ * a quote, and told never to invent a customer — and "told" was the whole of
+ * it. The character limits were the same until they were clipped after the
+ * fact rather than trusted, and a fabricated testimonial is worth more care
+ * than a long headline: it is a false statement about a real person, in an ad,
+ * with the store's name on it.
+ *
+ * Anything inside quotation marks is checked against the reviews that were
+ * handed to the model. Most of its words have to appear in one of them —
+ * enough room for a trim or a light tidy, not enough for a new sentence.
+ */
+export function unverifiedQuotes(text: string, reviews: Array<{ body: string; author: string }>): string[] {
+  const bag = (value: string) => new Set(value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean))
+  const pool = reviews.map((review) => bag(`${review.body} ${review.author}`))
+  const out: string[] = []
+  // Straight apostrophes are left out on purpose: they are contractions far
+  // more often than quotation marks, and "don't ... isn't" is not a quote.
+  for (const match of text.matchAll(/["\u201c\u201d]([^"\u201c\u201d]{12,240})["\u201c\u201d]/g)) {
+    const quote = (match[1] ?? '').trim()
+    const words = [...bag(quote)].filter((word) => word.length > 3)
+    if (words.length < 3) continue
+    const best = pool.length ? Math.max(...pool.map((set) => words.filter((word) => set.has(word)).length / words.length)) : 0
+    if (best < 0.7) out.push(quote)
+  }
+  return out
+}
+
+/** The written ad, with any field carrying an unverifiable quote put back to the rules draft. */
+function withoutInventedQuotes(written: AdCopy, draft: AdCopy, reviews: Array<{ body: string; author: string }>): AdCopy {
+  const dropped: string[] = []
+  const checkText = (value: string, fallback: string) => {
+    const bad = unverifiedQuotes(value, reviews)
+    if (!bad.length) return value
+    dropped.push(...bad)
+    return fallback
+  }
+  const checkList = (values: string[], fallback: string[]) => {
+    const kept = values.filter((value) => {
+      const bad = unverifiedQuotes(value, reviews)
+      dropped.push(...bad)
+      return !bad.length
+    })
+    return kept.length ? kept : fallback
+  }
+  const result: AdCopy = {
+    ...written,
+    hooks: checkList(written.hooks, draft.hooks),
+    primaryText: checkText(written.primaryText, draft.primaryText),
+    headline: checkText(written.headline, draft.headline),
+    description: checkText(written.description, draft.description),
+    headlines: checkList(written.headlines, draft.headlines),
+    descriptions: checkList(written.descriptions, draft.descriptions),
+    script: written.script.some((beat) => unverifiedQuotes(`${beat.line} ${beat.visual}`, reviews).length) ? draft.script : written.script,
+  }
+  if (!dropped.length) return result
+  return {
+    ...result,
+    notes: [
+      `A quote in this ad was not in any approved review, so that line was put back to the draft written from the reviews on file: "${clip(dropped[0] as string, 90)}". Nothing here quotes a customer who did not say it.`,
+      ...result.notes,
+    ].slice(0, 4),
+  }
+}
+
 async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInput): Promise<AdCopy> {
   if (!choice) return draft
   if (input.format.id === 'testimonial' && !draft.primaryText) return draft
@@ -272,6 +354,8 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       `Product: ${input.product.title}. ${input.product.subtitle}\n${input.product.description.slice(0, 900)}\nPrice from ${money(Math.min(...input.product.variants.map((variant) => variant.priceCents)), input.store.currency)}. Guarantee on the page: ${input.product.content.guarantee || '(none written)'}`,
       input.bundle?.tiers.some((tier) => tier.discountPercent > 0) ? `Bundle tiers on the product: ${input.bundle.tiers.map((tier) => `${tier.label} (${tier.discountPercent}% off)`).join(', ')}` : 'No bundle on this product.',
       `Research: ${JSON.stringify({ positioning: input.research.positioning, triggers: input.research.triggers, objections: input.research.objections, proofPoints: input.research.proofPoints, competitors: input.research.competitors, keywords: input.research.keywords })}`,
+      marketBrief(input.market),
+      input.loops ?? '',
       input.reviews.length ? `Approved reviews on file (the only source for any quote; use first names only):\n${JSON.stringify(input.reviews.slice(0, 6))}` : 'No approved reviews on file: do not quote anyone.',
       input.inspiration.length ? `Swipe file, patterns to learn from and not copy: ${JSON.stringify(input.inspiration.slice(0, 6).map((entry) => ({ hook: entry.hook, angle: entry.angle })))}` : '',
       `The rules draft below shows which fields this format fills and the shape of each. Write your own copy in those fields; leave the others as they are.\n${JSON.stringify({ hooks: draft.hooks, primaryText: draft.primaryText, headline: draft.headline, description: draft.description, cta: draft.cta, headlines: draft.headlines, descriptions: draft.descriptions, script: draft.script })}`,
@@ -285,20 +369,27 @@ async function authorAd(choice: ModelChoice | null, draft: AdCopy, input: AdInpu
       schema: AD_SCHEMA,
       name: 'ad_copy',
     })
-    const clean = (list: string[] | undefined, max: number) => (list ?? []).map((line) => line.trim()).filter(Boolean).slice(0, max)
-    return {
+    // The rules draft clips to the platform's real limits; the model path only
+    // sliced by count, so a headline over Google's 30 characters or Meta's 40
+    // came back whole and the ad manager rejected the upload. Asking the model
+    // to respect a limit is not the same as respecting it.
+    const platformLimits = PLATFORMS.find((entry) => entry.id === input.platform)?.limits ?? { primary: 125, headline: 40, description: 30 }
+    const clean = (list: string[] | undefined, max: number, chars = 0) =>
+      (list ?? []).map((line) => (chars ? clip(line.trim(), chars) : line.trim())).filter(Boolean).slice(0, max)
+    const written: AdCopy = {
       hooks: clean(parsed.hooks, 10).length ? clean(parsed.hooks, 10) : draft.hooks,
-      primaryText: input.format.id === 'search' ? '' : parsed.primaryText?.trim() || draft.primaryText,
-      headline: parsed.headline?.trim() || draft.headline,
-      description: parsed.description?.trim() ?? draft.description,
+      primaryText: input.format.id === 'search' ? '' : clip(parsed.primaryText?.trim() || draft.primaryText, platformLimits.primary),
+      headline: clip(parsed.headline?.trim() || draft.headline, platformLimits.headline),
+      description: clip(parsed.description?.trim() ?? draft.description, platformLimits.description),
       cta: parsed.cta?.trim() || draft.cta,
-      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15).length ? clean(parsed.headlines, 15) : draft.headlines) : [],
-      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4).length ? clean(parsed.descriptions, 4) : draft.descriptions) : [],
+      headlines: input.format.id === 'search' ? (clean(parsed.headlines, 15, 30).length ? clean(parsed.headlines, 15, 30) : draft.headlines) : [],
+      descriptions: input.format.id === 'search' ? (clean(parsed.descriptions, 4, 90).length ? clean(parsed.descriptions, 4, 90) : draft.descriptions) : [],
       script: input.format.video ? (parsed.script?.length ? parsed.script.slice(0, 8) : draft.script) : [],
       angle: parsed.angle?.trim() || draft.angle,
       avatar: draft.avatar,
       notes: [...clean(parsed.notes, 3), ...draft.notes.filter((note) => /approved reviews|Tiers come from|No bundle/.test(note))].filter(Boolean),
     }
+    return withoutInventedQuotes(written, draft, input.reviews)
   } catch (error) {
     log.warn(`${describe(choice)} could not write the ${input.format.name} ad; keeping the rules draft: ${error instanceof Error ? error.message : String(error)}`)
     return draft
@@ -331,7 +422,8 @@ function adInput(db: Db, store: Store, product: Product, request: { direction?: 
   const direction = directionFor(request.direction ?? '', avatar)
   const reviews = listReviews(db, store.id, { productId: product.id, status: 'approved', minRating: 4, limit: 10 })
   const bundle = bundleFor(db, store.id, product.id)
-  return { product, store, research, direction, format: request.format, platform: request.platform, avatar, reviews, bundle, inspiration: listInspiration(db, store.id).slice(0, 8) }
+  const market = latestDoc<MarketAnalysis>(db, store.id, 'analysis')?.body ?? null
+  return { product, store, research, direction, format: request.format, platform: request.platform, avatar, reviews, bundle, inspiration: listInspiration(db, store.id).slice(0, 8), market, loops: loopBrief(db, store.id) }
 }
 
 export async function draftAds(db: Db, store: Store, request: DraftRequest): Promise<Ad[]> {

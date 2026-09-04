@@ -58,12 +58,85 @@ export function authPage(mode: 'login' | 'register', error: string | null): stri
       ${isLogin ? '' : '<p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>'}
       <button type="submit">${isLogin ? 'Sign in' : 'Create account'}</button>
     </form>
-    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
+    <p class="alt">${isLogin ? 'No account yet? <a href="/register">Get started</a> · <a href="/forgot">Forgot your password?</a>' : 'Already have one? <a href="/login">Sign in</a>'}</p>`)
 }
 
-export function onboardingPage(name: string, error: string | null, hasStores = false): string {
+/**
+ * Asking for a reset link.
+ *
+ * The answer is the same whether or not the address has an account: a form
+ * that says "no account with that email" is a way to find out who has one.
+ */
+export function forgotPage(state: { error?: string | null; sent?: boolean; logged?: boolean }): string {
+  return frame('Reset your password', `
+    <h1>Reset your password</h1>
+    <p class="lead">${state.sent ? 'If that address has an account, a link is on its way. It is good for an hour.' : 'We will email you a link. It works once, and it expires in an hour.'}</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    ${state.logged ? '<div class="err">No email sender is configured on this deployment, so the link was written to the server log instead. Whoever runs the process can read it out.</div>' : ''}
+    <form method="post" action="/forgot">
+      <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="email"></div>
+      <button type="submit">Email me a link</button>
+    </form>
+    <p class="alt">Remembered it? <a href="/login">Sign in</a></p>`)
+}
+
+/** Choosing the new password. The token rides in a hidden field; it is single-use and checked again on submit. */
+export function resetPage(state: { token: string; email?: string; error?: string | null }): string {
+  return frame('Choose a new password', `
+    <h1>Choose a new password</h1>
+    <p class="lead">${state.email ? `For ${escapeHtml(state.email)}. ` : ''}Signing in everywhere else ends when you save this.</p>
+    ${state.error ? `<div class="err">${escapeHtml(state.error)}</div>` : ''}
+    <form method="post" action="/reset">
+      <input type="hidden" name="token" value="${escapeHtml(state.token)}">
+      <div class="field"><label for="password">New password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password"></div>
+      <p class="muted" style="font-size:12px;margin:-.3rem 0 1rem">At least ten characters.</p>
+      <button type="submit">Save it and sign in</button>
+    </form>
+    <p class="alt"><a href="/login">Back to sign in</a></p>`)
+}
+
+/**
+ * The build, while it is happening.
+ *
+ * Onboarding used to run inside the POST: a spinning tab for minutes, a
+ * gateway error behind any proxy with a timeout, and a flash claiming success
+ * whether or not the steps had failed. This page is what the POST redirects
+ * to; it polls and says which of the five stages is running.
+ */
+export function buildingPage(ticket: { id: string; stage: string; storeName: string }): string {
+  return frame('Building your store', `
+    <h1>${ticket.storeName ? escapeHtml(ticket.storeName) : 'Building it now'}</h1>
+    <p class="lead" id="stage">${escapeHtml(ticket.stage)}</p>
+    <div class="steps" id="steps">
+      <div><i></i><span>Researches who buys this, what stops them, and what they pay</span></div>
+      <div><i></i><span>Names the brand and picks a palette, fonts and a mark</span></div>
+      <div><i></i><span>Writes three products with full pages, variants, prices and imagery</span></div>
+      <div><i></i><span>Sets a welcome code, a free-shipping threshold and a bundle</span></div>
+      <div><i></i><span>Builds the storefront and hands you the address</span></div>
+    </div>
+    <p class="alt" id="note">This takes a minute or two. You can leave this page open.</p>
+    <script>
+    (function(){
+      var stage = document.getElementById('stage'), note = document.getElementById('note');
+      function poll(){
+        fetch('/onboarding/status?t=${encodeURIComponent(ticket.id)}', { headers: { accept: 'application/json' } })
+          .then(function(r){ return r.json() })
+          .then(function(s){
+            if (s.stage) stage.textContent = s.stage;
+            if (s.state === 'done') { window.location = s.next; return }
+            if (s.state === 'failed') { note.textContent = s.error || 'That did not work. Try again with a little more detail.'; return }
+            setTimeout(poll, 1500);
+          })
+          .catch(function(){ setTimeout(poll, 3000) });
+      }
+      setTimeout(poll, 1200);
+    })();
+    </script>`)
+}
+
+export function onboardingPage(name: string, error: string | null, storeCount = 0): string {
   return frame('Build your store', `
-    ${hasStores ? '<p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin">← Back to your stores</a></p>' : ''}
+    <p class="alt" style="text-align:left;margin:0 0 1rem"><a href="/admin/stores">${storeCount ? `← Your stores (${storeCount})` : '← Your account'}</a></p>
     <h1>What are you selling?</h1>
     <p class="lead">One sentence, ${escapeHtml(name.split(/[\s@]/)[0] ?? 'there')}. Research runs first; then naming, brand, three products with pages and imagery, and the promotions all run at once.</p>
     ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
@@ -78,7 +151,7 @@ export function onboardingPage(name: string, error: string | null, hasStores = f
         <input id="siteUrl" name="siteUrl" type="url" placeholder="https://yourbrand.com">
         <span class="muted" style="font-size:12px">Read for positioning and copy during research.</span></div>
       <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem"><legend style="font-size:13px;margin-bottom:.4rem">How will you build it?</legend>
-        ${MODES.map((mode, index) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${index === 2 ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
+        ${MODES.map((mode) => `<label style="display:flex;gap:.6rem;align-items:flex-start;font-size:13px;margin-bottom:.4rem"><input type="radio" name="mode" value="${mode.id}" ${mode.id === 'own-product' ? 'checked' : ''} style="margin-top:.2rem"><span><strong>${escapeHtml(mode.name)}</strong><br><span class="muted" style="font-size:12px">${escapeHtml(mode.description)}</span></span></label>`).join('')}</fieldset>
       <button type="submit">Build my store</button>
     </form>
     <div class="steps">

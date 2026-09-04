@@ -38,6 +38,14 @@ export type BlockContext = {
   brand: { primary?: string; secondary?: string; logoSvg?: string; slogan?: string }
   /** The blocks this store defined for itself (custom-blocks.ts), resolved alongside the catalog. */
   custom?: BlockDefinition[]
+  /**
+   * Where this page's call to action leads inside its funnel: the offer page
+   * for an advertorial, the checkout for an offer page. The funnel model is
+   * ad → advertorial → offer → checkout, and the advertorial's own CTA
+   * defaults to `#offer`, an anchor on itself — so the offer page a merchant
+   * had chosen in the funnel editor was never linked from anywhere.
+   */
+  funnelNext?: string
   /** Live numbers the conversion blocks read. Always from real data; empty when there is none. */
   live?: {
     purchases: Array<{ name: string; city: string; product: string; image: string; at: string }>
@@ -527,7 +535,10 @@ export const BLOCKS: BlockDefinition[] = [
       const left = product
         ? `<div class="sticky-product">${product.image ? `<img src="${e(product.image)}" alt="" loading="lazy">` : ''}<div><b>${e(product.title)}</b><span class="micro">${settings.note ? e(settings.note) : format(product.priceCents, context.currency)}</span></div></div>`
         : `<div>${settings.note ? `<div class="p">${e(settings.note)}</div>` : ''}</div>`
-      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(settings.href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
+      // The shipped default is an anchor on this page; when the page is a step
+      // in a funnel, the next step is where the button belongs.
+      const href = settings.href === '#offer' && context.funnelNext ? context.funnelNext : (settings.href as string)
+      return `<div class="stickybar" data-block="${e(block.id)}" data-sticky>${left}<a class="btn" href="${e(href)}">${e(settings.label)}${product ? ` — ${format(product.priceCents, context.currency)}` : ''}</a></div>`
     },
   },
   {
@@ -1130,7 +1141,7 @@ export const BLOCKS: BlockDefinition[] = [
     icon: '{}',
     description: 'CSS and script for this page only.',
     schema: { css: { type: 'string', label: 'CSS', multiline: true, default: '' }, js: { type: 'string', label: 'JavaScript', multiline: true, default: '' } },
-    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${String(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${String(settings.js)}</script>` : ''}`,
+    render: (settings, _context, block) => `<!-- custom-code data-block="${e(block.id)}" -->${settings.css ? `<style data-block="${e(block.id)}">${inlineStyle(settings.css)}</style>` : ''}${settings.js ? `<script data-block="${e(block.id)}">${inlineScript(settings.js)}</script>` : ''}`,
   },
 ]
 
@@ -1160,6 +1171,32 @@ export type CustomBlockInput = { type: string; name: string; description?: strin
  *   {{product.title}} {{product.image}} {{product.price}} {{product.handle}} {{product.subtitle}}
  *      the product a `productId` setting names, else the first one
  */
+/**
+ * A script or a style element ends at the first closing tag in its text, not
+ * at the one the template meant. `</script>` inside a block's own script broke
+ * out of it and everything after was parsed as markup — the browser's rule,
+ * not a preference — so a stray closing tag in a snippet someone pasted took
+ * the rest of the page with it.
+ */
+export function inlineScript(js: unknown): string {
+  return String(js ?? '').replace(/<\/script/gi, '<\\/script')
+}
+
+export function inlineStyle(css: unknown): string {
+  return String(css ?? '').replace(/<\/style/gi, '')
+}
+
+/**
+ * The rule is "no <script> in a block template; put it in the js field, which
+ * runs once per page". It was checked against the template's own text, and a
+ * template can carry one in through a raw `{{{field}}}` — the check saw
+ * nothing and the page got the script. Enforcing it on what was rendered
+ * covers both, and covers a tag assembled out of two halves besides.
+ */
+function withoutScripts(html: string): string {
+  return html.replace(/<script\b[\s\S]*?<\/script\s*>/gi, '').replace(/<\/?script\b[^>]*>/gi, '')
+}
+
 export function renderTemplate(template: string, settings: Record<string, unknown>, context: BlockContext): string {
   const product = productFor(context, settings.productId)
   const scope: Record<string, unknown> = {
@@ -1191,7 +1228,7 @@ export function renderTemplate(template: string, settings: Record<string, unknow
         })
         .join(''),
     )
-  return vars(ifs(eaches(template), {}), {})
+  return withoutScripts(vars(ifs(eaches(template), {}), {}))
 }
 
 const CUSTOM_LIMITS = { fields: 24, template: 40_000, css: 10_000, js: 20_000 }
@@ -1232,7 +1269,7 @@ export function customDefinition(input: CustomBlockInput): BlockDefinition {
     icon: (input.icon ?? '✚').slice(0, 4) || '✚',
     description: (input.description ?? '').trim() || 'A block this store defined for itself.',
     schema: { ...(usesProduct ? { productId: { type: 'string', label: 'Product', default: '' } } : {}), ...schema, ...COMMON },
-    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${css}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
+    render: (settings, context, block) => wrap(settings, block, `${css ? `<style data-custom="${e(input.type)}">${inlineStyle(css)}</style>` : ''}${renderTemplate(input.template, settings, context)}`),
   }
 }
 
@@ -1245,7 +1282,11 @@ function resolve(type: string, context?: BlockContext): BlockDefinition | null {
 export function renderBlock(block: BlockInstance, context: BlockContext): string {
   const definition = resolve(block.type, context)
   if (!definition) return `<section class="blk" data-block="${e(block.id)}"><div class="blk-in"><p class="micro">Unknown block: ${e(block.type)}</p></div></section>`
-  const validated = check(definition.schema, block.settings)
+  // blankIsValue: text the owner deleted stays deleted. coerceField treats ''
+  // as absent everywhere else — which is right for a settings form — and here
+  // it silently reinstated the shipped copy at render, so no stock headline
+  // in the catalog could ever be removed.
+  const validated = check(definition.schema, block.settings, { blankIsValue: true })
   // A setting that fails its own field takes the default; the rest survive.
   // A page with one bad number in one block must not lose the block.
   const settings = validated.ok ? validated.value : { ...defaultsFor(definition), ...pickValid(definition, block.settings) }
@@ -1260,7 +1301,7 @@ function pickValid(definition: BlockDefinition, raw: Record<string, unknown>): R
   const out: Record<string, unknown> = {}
   for (const [key, field] of Object.entries(definition.schema)) {
     if (raw[key] === undefined) continue
-    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] })
+    const single = check({ [key]: { ...field, required: false } }, { [key]: raw[key] }, { blankIsValue: true })
     if (single.ok && single.value[key] !== undefined) out[key] = single.value[key]
   }
   return out

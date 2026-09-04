@@ -6,8 +6,10 @@ import { advertorialTemplate, blockContextFor, checkoutTemplate, createPage, get
 import { clonePage, extractBlocks } from '../src/pages/clone.ts'
 import { bundleFor, renderBundleWidget, tierFor, upsertBundle, removeBundle } from '../src/domain/bundles.ts'
 import { formBody, signWebhook, stripeClient, verifyWebhookSignature } from '../src/payments/stripe.ts'
-import { createStore } from '../src/control/stores.ts'
-import { createProduct, getVariant } from '../src/domain/catalog.ts'
+import { createStore, environment } from '../src/control/stores.ts'
+import { createProduct, getProduct, getVariant, updateProduct } from '../src/domain/catalog.ts'
+import { blockPage, htmlPage, productPage } from '../src/storefront/render.ts'
+import { createReview, statsFor } from '../src/domain/reviews.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { addToCart, createCart, setQuantity, setShipping, totals } from '../src/domain/cart.ts'
 import { completeCart, recordUpsell } from '../src/domain/orders.ts'
@@ -368,4 +370,159 @@ test('the assistant can build a page and a bundle', async () => {
   assert.match(bundle.summary, /3 tiers/)
   assert.ok(bundleFor(db, store.id, glove.id))
   assert.ok(blockDefinition('bundle-offer'))
+})
+
+test('the assistant can read a page back and edit the blocks on it', async () => {
+  // It could add blocks and never touch them again: no way to see what was on
+  // a page, change a headline, reorder it or take a section off. The only edit
+  // available was building the page a second time.
+  const { db, store, user, glove } = shop()
+  const ctx = { db, storeId: store.id, actor: { type: 'user' as const, id: user.id } }
+  const created = await execute('create_page', { template: 'advertorial', productId: glove.id }, ctx)
+  const pageId = (created.data as { id: string }).id
+  await execute('add_block', { pageId, type: 'countdown', settings: { text: 'Ends in' } }, ctx)
+
+  const read = await execute('read_page', { pageId }, ctx)
+  const blocks = (read.data as { blocks: Array<{ position: number; id: string; type: string; settings: Record<string, unknown> }> }).blocks
+  assert.equal(blocks.at(-1)?.type, 'countdown')
+  assert.equal(blocks.at(-1)?.settings.text, 'Ends in')
+  assert.equal(blocks[0]?.position, 0, 'every block comes back with the position the edit tools address it by')
+
+  const countdown = blocks.at(-1)!
+  await execute('update_block', { pageId, blockId: countdown.id, settings: { text: 'Ends tonight' } }, ctx)
+  const edited = getPage(db, store.id, pageId)!.blocks.find((block) => block.id === countdown.id)
+  assert.equal(edited?.settings.text, 'Ends tonight')
+  assert.ok(Object.keys(edited?.settings ?? {}).length > 1, 'a partial update merges rather than replacing the settings')
+
+  await execute('move_block', { pageId, blockId: countdown.id, to: 0 }, ctx)
+  assert.equal(getPage(db, store.id, pageId)?.blocks[0]?.id, countdown.id)
+
+  const before = getPage(db, store.id, pageId)!.blocks.length
+  await execute('remove_block', { pageId, position: 0 }, ctx)
+  const after = getPage(db, store.id, pageId)!.blocks
+  assert.equal(after.length, before - 1)
+  assert.ok(!after.some((block) => block.id === countdown.id))
+
+  await assert.rejects(execute('update_block', { pageId, blockId: 'blk_nope', settings: {} }, ctx), /read_page/)
+  await assert.rejects(execute('remove_block', { pageId, position: 99 }, ctx), /read_page/)
+})
+
+test('bundle tiers re-price against the variant the buyer picks', () => {
+  // The widget is rendered once, from the cheapest variant. On a product where
+  // the large size costs more, the three-pack quoted the small size's total
+  // and the cart charged the large one — the page said $240 and the customer
+  // paid $360.
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Sizes', prompt: 'sizes' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, {
+    title: 'Tee',
+    status: 'published',
+    variants: [{ title: 'Small', priceCents: 4000, inventory: 5 }, { title: 'Large', priceCents: 6000, inventory: 5 }],
+  })
+  upsertBundle(db, store.id, { productId: product.id, tiers: [{ quantity: 1, discountPercent: 0, label: 'One' }, { quantity: 3, discountPercent: 20, label: 'Three' }] })
+  const widget = renderBundleWidget(bundleFor(db, store.id, product.id)!, product, 'USD', { variantPriceCents: 4000 })
+  assert.match(widget, /data-discount="20"/, 'the tier carries what it is worth, not only what it costs today')
+  assert.match(widget, /<b data-tier-total>\$96\.00<\/b>/, 'three small at 20% off')
+
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const pdp = productPage(view as never, { product: getProduct(db, store.id, product.id)!, stats: statsFor(db, store.id, product.id), reviews: [], companions: [] })
+  assert.match(pdp, /data-tier-total/, 'and the page can find the number to change')
+  assert.match(pdp, /input\.dataset\.discount/, 'picking a variant re-prices every tier from that variant')
+})
+
+test('the buybox promises only what the store has actually configured', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Bare', prompt: 'bare' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Serum', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+
+  const render = (item: typeof product) => productPage(view as never, { product: item, stats: statsFor(db, store.id, item.id), reviews: [], companions: [] })
+  const pdp = render(product)
+  assert.ok(!/delivery by/.test(pdp), 'no supplier means no invented shipping date')
+  assert.ok(!/PayPal/.test(pdp), 'the platform does not implement PayPal, so no page claims it')
+  assert.ok(!/VISA/.test(pdp), 'and with no provider connected the store cannot take a card')
+  assert.ok(!/Repaired in-house/.test(pdp), 'the demo store\'s promises are not this store\'s')
+  assert.match(pdp, /Free shipping over \$200\.00/, 'the threshold is the one on the region')
+
+  updateProduct(db, store.id, product.id, { supplier: { processingDays: 1, shippingDaysMin: 3, shippingDaysMax: 5 } })
+  const withSupplier = render(getProduct(db, store.id, product.id)!)
+  assert.match(withSupplier, /delivery by/, 'once the merchant says how long it takes, the estimate is theirs to show')
+})
+
+test('a review left on the storefront waits for the merchant', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Mod', prompt: 'mod' })
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 4000, inventory: 5 }] })
+  createReview(db, store.id, { productId: product.id, rating: 1, body: 'unverifiable', author: 'Passer-by', status: 'pending' })
+  assert.equal(statsFor(db, store.id, product.id).count, 0, 'a pending review is in no rating and on no page')
+})
+
+test('a block setting the owner cleared stays cleared', () => {
+  // Any catalog block that ships copy in a string setting will do.
+  const found = BLOCKS.map((entry) => blockDefinition(entry.type))
+    .filter((definition): definition is NonNullable<typeof definition> => Boolean(definition))
+    .flatMap((definition) =>
+      Object.entries(definition.schema)
+        .filter(([, field]) => field.type === 'string' && typeof (field as { default?: unknown }).default === 'string' && String((field as { default?: unknown }).default).length > 6)
+        .map(([key, field]) => ({ definition, key, fallback: String((field as { default?: unknown }).default) })),
+    )[0]
+  assert.ok(found, 'the catalog ships blocks with stock copy in their string settings')
+  const cleared = renderBlock({ id: 'b1', type: found.definition.type, settings: { [found.key]: '' } }, context)
+  assert.ok(
+    !cleared.includes(found.fallback),
+    `deleting ${found.definition.type}.${found.key} must not bring "${found.fallback}" back at render`,
+  )
+})
+
+test('a split-test version served at the product URL is that product, to a crawler', () => {
+  const { db, store, glove } = shop()
+  const version = createPage(db, store.id, {
+    title: 'The Glove — benefit-led · Coach Mara (premium, focus on the wrist)',
+    kind: 'product',
+    role: 'pdp',
+    productId: glove.id,
+    status: 'published',
+    weight: 100,
+    blocks: [newBlock('headline', { text: 'Buy it' })],
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const asItself = blockPage(view as never, version)
+  assert.match(asItself, /Coach Mara/, 'at its own address it is the version')
+
+  const asProduct = blockPage(view as never, version, {
+    title: `${glove.title} — ${store.name}`,
+    description: glove.subtitle || glove.title,
+    canonical: `/s/${store.slug}/products/${glove.handle}`,
+  })
+  assert.ok(!/Coach Mara/.test(asProduct), 'at the product address the operator\'s internal name is not the title')
+  assert.match(asProduct, new RegExp(`rel="canonical" href="[^"]*/products/${glove.handle}"`), 'and the canonical is the product, not a page nobody links to')
+})
+
+test('a cloned page carries its own meta, not the site it was copied from', () => {
+  const { db, store } = shop()
+  const source = `<!doctype html><html><head><title>Their Brand — Buy Now</title>
+    <meta name="description" content="Their words">
+    <link rel="canonical" href="https://competitor.example/offer">
+    <meta property="og:title" content="Their Brand"></head><body><h1>Offer</h1></body></html>`
+  const page = createPage(db, store.id, {
+    title: 'Our offer',
+    kind: 'landing',
+    mode: 'html',
+    rawHtml: source,
+    sourceUrl: 'https://competitor.example/offer',
+    seo: { title: 'Our offer — Bundle Co', description: 'What we actually sell' },
+    headHtml: '<meta name="robots" content="index">',
+    status: 'published',
+  })
+  const view = { db, store, env: environment(db, store.id, 'draft'), base: `/s/${store.slug}`, preview: false, cart: null, totals: null }
+  const out = htmlPage(view as never, getPage(db, store.id, page.id)!)
+
+  assert.match(out, /<title>Our offer — Bundle Co<\/title>/)
+  assert.ok(!/Their Brand — Buy Now/.test(out), 'the source title is gone, not sitting beside ours')
+  assert.match(out, /content="What we actually sell"/)
+  assert.ok(!/competitor\.example\/offer"/.test(out.match(/rel="canonical"[^>]*/)?.[0] ?? ''), 'the canonical is ours')
+  assert.match(out, new RegExp(`rel="canonical" href="[^"]*/pages/${page.handle}"`))
+  assert.match(out, /name="robots" content="index"/, 'and the extra head is emitted at all')
 })

@@ -74,7 +74,7 @@ export function shell(input: ShellInput): string {
       ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)}</option>`).join('')}
     </select>
   </form>
-  <a class="chip" href="/admin/stores">Stores (${input.stores.length})</a>
+  <a class="chip" href="/admin/stores">Your stores (${input.stores.length})</a>
   <a class="chip" href="/onboarding">+ New store</a>
   <button class="chip" type="button" onclick="askThis('I would like to request a feature: ')">🎙 Request a feature</button>
   <div class="spacer"></div>
@@ -82,6 +82,7 @@ export function shell(input: ShellInput): string {
   <form method="post" action="/admin/publish">
     <button class="publish" type="submit" ${input.publish.ready ? '' : 'disabled'} title="${escapeHtml(input.publish.reason)}">${escapeHtml(input.publish.label)}</button>
   </form>
+  <form method="post" action="/logout"><button class="chip" type="submit">Sign out</button></form>
 </div>
 <div class="frame">
   <nav class="rail" aria-label="Sections">
@@ -173,6 +174,8 @@ export function renderArtifact(artifact: Artifact): string {
       return ''
   }
 }
+
+export { css as adminCss }
 
 function css(accent: string): string {
   return `

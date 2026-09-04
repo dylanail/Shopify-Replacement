@@ -250,7 +250,7 @@ export function competitorsCard(ctx: Ctx): string {
         ${record.notes.length ? `<p class="muted" style="font-size:11.5px">${escapeHtml(record.notes.join(' '))}</p>` : ''}
         <div class="field"><label>As a direction — edit before using</label><input name="direction" value="${escapeHtml(directionFrom(record))}"></div>
         <div class="row"><button class="btn primary" type="submit">Save</button>
-          <button class="btn" type="submit" formaction="/admin/competitors/${escapeHtml(record.id)}/apply">Fold into research</button>
+          <button class="btn" type="submit" formaction="/admin/competitors/${escapeHtml(record.id)}/apply" title="Adds them as a named competitor and an avatar, and files what they promise as notes about them. Their guarantee does not become yours.">Fold into research</button>
           ${record.productId ? `<button class="btn" type="submit" formaction="/admin/competitors/${escapeHtml(record.id)}/versions">Generate PDP versions with this angle</button><button class="btn" type="submit" formaction="/admin/competitors/${escapeHtml(record.id)}/ads">Draft ads with this angle</button>` : '<span class="muted" style="font-size:11.5px">Pick which product it competes with to generate from it.</span>'}
           <button class="btn" type="submit" formaction="/admin/competitors/${escapeHtml(record.id)}/delete" onclick="return confirm('Delete this record?')">Delete</button></div></form></details>`).join('')}</div>`
 }

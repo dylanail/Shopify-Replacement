@@ -35,6 +35,67 @@ export function login(db: Db, email: string, password: string): User {
   return getUser(db, row.id) as User
 }
 
+/* ------------------------------------------------------------ password reset */
+
+const RESET_MINUTES = 60
+
+/**
+ * A way back into an account.
+ *
+ * There was none: a forgotten password meant the store, its products, its
+ * orders and its connected domain were gone, recoverable only by editing the
+ * database by hand. The token is random, stored as a hash like a session, good
+ * for an hour and usable once.
+ *
+ * Null for an address with no account — the caller answers the same either
+ * way, so the form cannot be used to find out who has one.
+ */
+export function startPasswordReset(db: Db, email: string): { token: string; user: User } | null {
+  const row = db.one<{ id: string }>('SELECT id FROM users WHERE email = ?', email.trim().toLowerCase())
+  if (!row) return null
+  // One live link at a time: asking again invalidates the last one, so a
+  // forwarded or intercepted older mail stops working.
+  db.run("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL", now(), row.id)
+  const secret = token()
+  db.insert('password_resets', {
+    id: id('pwr'),
+    user_id: row.id,
+    token_hash: hash(secret),
+    expires_at: new Date(Date.now() + RESET_MINUTES * 60_000).toISOString(),
+    used_at: null,
+    created_at: now(),
+  })
+  return { token: secret, user: getUser(db, row.id) as User }
+}
+
+/** The user a live reset token belongs to, for rendering the form before anything is changed. */
+export function userForReset(db: Db, secret: string): User | null {
+  const row = db.one<{ user_id: string }>(
+    'SELECT user_id FROM password_resets WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
+    hash(secret),
+    now(),
+  )
+  return row ? getUser(db, row.user_id) : null
+}
+
+export function resetPassword(db: Db, secret: string, password: string): User {
+  const row = db.one<{ id: string; user_id: string }>(
+    'SELECT id, user_id FROM password_resets WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
+    hash(secret),
+    now(),
+  )
+  if (!row) throw badRequest('That reset link has expired or has already been used. Ask for another.')
+  if (password.length < 10) throw badRequest('Use a password of at least 10 characters')
+  db.tx(() => {
+    db.update('users', row.user_id, { password_hash: hashPassword(password) })
+    db.update('password_resets', row.id, { used_at: now() })
+    // Every other session ends. If the reason for the reset was that someone
+    // else had the password, leaving their session alive undoes the reset.
+    db.run('DELETE FROM sessions WHERE user_id = ?', row.user_id)
+  })
+  return getUser(db, row.user_id) as User
+}
+
 export function getUser(db: Db, userId: string): User | null {
   const row = db.one<{ id: string; email: string; name: string; created_at: string }>('SELECT id, email, name, created_at FROM users WHERE id = ?', userId)
   return row ? { id: row.id, email: row.email, name: row.name, createdAt: row.created_at } : null

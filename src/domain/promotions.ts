@@ -91,7 +91,14 @@ function eligibleItems(promotion: Promotion, items: LineItem[], collectionsByPro
 export type PromotionOutcome = {
   discountCents: number
   freeShipping: boolean
-  applied: Array<{ id: string; title: string; code: string; amountCents: number }>
+  /**
+   * `kind` rides along because the checkout has to know which of these paid
+   * for the shipping. It decided that by matching the promotion's *title*
+   * against /shipping/i, so "Shipping protection bundle" zeroed the delivery
+   * charge and a free-shipping promotion someone had named "Delivery on us"
+   * did not.
+   */
+  applied: Array<{ id: string; title: string; code: string; amountCents: number; kind: Promotion['kind'] }>
 }
 
 /**
@@ -130,7 +137,11 @@ export function applyPromotions(
   for (const promotion of candidates) {
     if (promotion.rules.minSubtotalCents && opts.subtotalCents < promotion.rules.minSubtotalCents) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
-    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf)
+    // A gift is not bought and an order bump is not a unit of the product on
+    // offer: counting the $2.99 shipping protection as the second item made a
+    // store-wide "buy two, save 15%" fire on a single-product cart, so every
+    // customer who accepted the bump took 15% off the whole order with it.
+    const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf && item.source !== 'order-bump')
     if (!eligible.length && promotion.kind !== 'free_shipping') continue
     const eligibleTotal = eligible.reduce((sum, item) => sum + item.unitCents * item.quantity, 0)
     const units = eligible.reduce((sum, item) => sum + item.quantity, 0)
@@ -171,9 +182,16 @@ export function applyPromotions(
       }
     }
 
+    // Each promotion can only take what is still there. Every one used to be
+    // computed against the full subtotal and only the sum was clamped, so two
+    // automatic 60%-off promotions on a $100 cart produced a $120 discount
+    // clamped to $100 with two $60 lines beside it: a totals block whose
+    // numbers did not add up, and a cart that could go to zero.
+    const takeable = Math.max(0, opts.subtotalCents - outcome.discountCents)
+    amount = Math.min(amount, takeable)
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
-      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount })
+      outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount, kind: promotion.kind })
     }
   }
 
@@ -181,14 +199,13 @@ export function applyPromotions(
   // product's own bundle tiers are two answers to the same question; the
   // customer gets the better one, not both.
   const quantityKinds = new Set(['bundle', 'tiered'])
-  const quantity = outcome.applied.filter((entry) => quantityKinds.has(all.find((promotion) => promotion.id === entry.id)?.kind ?? ''))
+  const quantity = outcome.applied.filter((entry) => quantityKinds.has(entry.kind))
   if (quantity.length > 1) {
     const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))
     const dropped = quantity.filter((entry) => entry.id !== best.id)
     outcome.applied = outcome.applied.filter((entry) => !dropped.includes(entry))
     outcome.discountCents -= dropped.reduce((sum, entry) => sum + entry.amountCents, 0)
   }
-  outcome.discountCents = Math.min(outcome.discountCents, opts.subtotalCents)
   return outcome
 }
 

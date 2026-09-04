@@ -11,11 +11,20 @@ import { generate, imageModels, imagePrompt, defaultProvider, useImageTransport 
 import { attachDomain, checkDomain, dnsPlan, domainsFor, REGISTRARS, tlsAllowed, type Resolver } from '../src/control/domains.ts'
 import { directionFor, listAvatars, saveAvatar, suggestAvatars, shortWho } from '../src/agent/avatars.ts'
 import { applyCompetitor, classifyAngle, directionFrom, extractAngle, readCompetitor, saveCompetitor } from '../src/agent/angles.ts'
-import { AD_FORMATS, draftAds, limitWarnings, patternInspiration, PLATFORMS, readInspiration, reviseAd, saveAd, searchAdLibrary, useAdLibraryTransport, writeAd, type AdInput } from '../src/agent/ads.ts'
+import { AD_FORMATS, draftAds, limitWarnings, patternInspiration, PLATFORMS, readInspiration, reviseAd, saveAd, searchAdLibrary, unverifiedQuotes, useAdLibraryTransport, writeAd, type AdInput } from '../src/agent/ads.ts'
 import { latestResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { readDirection } from '../src/agent/directions.ts'
 import { generateVersions } from '../src/pages/versions.ts'
+import { sweepReviewRequests } from '../src/email/reviews.ts'
+import { listSends } from '../src/email/send.ts'
+import { TEMPLATES } from '../src/email/templates.ts'
+import { completeCart, markDelivered } from '../src/domain/orders.ts'
+import { addToCart, createCart } from '../src/domain/cart.ts'
+import { createProduct } from '../src/domain/catalog.ts'
+import { seedDefaultRegion } from '../src/domain/regions.ts'
+import { privacyHtml } from '../src/storefront/legal.ts'
+import { install } from '../src/control/plugins.ts'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 
@@ -227,6 +236,19 @@ test('avatars are suggested from research, edited by hand, and read into a direc
   assert.equal(amateur.source, 'research')
   assert.equal(shortWho(amateur), 'serious amateurs')
 
+  // One is on, not all of them. Every writer takes the first selected avatar,
+  // so a set where everything is selected picks whichever row came back first
+  // and the merchant never made the choice at all.
+  const on = avatars.filter((avatar) => avatar.selected)
+  assert.equal(on.length, 1, 'the core avatar is the one being written to')
+  assert.equal(on[0]?.share, Math.max(...avatars.map((avatar) => avatar.share)), 'and it is the largest share')
+
+  // A store that has already chosen keeps its choice when research is re-read.
+  saveAvatar(db, store.id, { id: on[0]!.id, name: on[0]!.name, selected: false })
+  saveAvatar(db, store.id, { id: amateur.id, name: amateur.name, selected: true })
+  await suggestAvatars(db, store.id)
+  assert.deepEqual(listAvatars(db, store.id).filter((avatar) => avatar.selected).map((avatar) => avatar.id), [amateur.id], 'a second run adds, it does not re-pick')
+
   // Edits survive a re-suggest.
   saveAvatar(db, store.id, { id: amateur.id, name: amateur.name, angle: 'padding that protects a partner', tone: 'blunt' })
   await suggestAvatars(db, store.id)
@@ -317,7 +339,7 @@ test('a blocked site says so and offers the paste route; a fetched one is read',
   assert.equal(pastedWins.headline, 'Pasted')
 })
 
-test('a competitor is folded into the research as a named competitor, triggers, proof to match and an avatar', async () => {
+test('a competitor is folded in as a competitor and an avatar, and never as the store\'s own claims', async () => {
   const { db, store, product } = await seeded()
   const before = latestResearch(db, store.id)!
   const record = saveCompetitor(db, store.id, { productId: product.id, angle: { ...extractAngle(COMPETITOR_HTML, 'https://fightco.example.com/p'), take: 'Foam, not horsehair; the wrist lock is velcro under the laces.' } })
@@ -326,8 +348,14 @@ test('a competitor is folded into the research as a named competitor, triggers, 
   assert.equal(competitor.priceBand, '$89.00–$149.00')
   assert.match(competitor.weakness, /velcro under the laces/)
   assert.match(competitor.angle, /scarcity/)
-  assert.ok(research.triggers.includes('Why 12,000+ boxers switched to ProGlove'))
-  assert.ok(research.proofPoints.some((point) => /Match or beat: 90-day money-back guarantee/.test(point)))
+  // Proof points are printed on pages as trust lines and pull-quotes, and
+  // triggers are what the copy writers turn into sentences. A competitor's
+  // guarantee folded into either put a promise this merchant never made — in
+  // the competitor's wording — on the merchant's own product page.
+  assert.deepEqual(research.triggers, before.triggers, 'their hooks are not this store\'s reasons to buy')
+  assert.deepEqual(research.proofPoints, before.proofPoints, 'and their guarantee is not this store\'s claim')
+  assert.ok(research.sourceNotes.some((note) => /FightCo promises: .*90-day money-back guarantee/.test(note)), 'what they promise is on file as theirs')
+  assert.ok(research.sourceNotes.some((note) => /not to reuse.*Why 12,000\+ boxers switched/.test(note)), 'and so are their hooks')
   assert.equal(latestResearch(db, store.id)!.competitors.length, before.competitors.length + 1, 'a new research record is on file')
   assert.ok(listAvatars(db, store.id).some((avatar) => avatar.source === 'competitor' && avatar.who === 'serious boxers'))
 })
@@ -376,6 +404,20 @@ test('every ad format writes for every platform, and the testimonial format refu
   const testimonial = writeAd(adInput({ format: AD_FORMATS.find((format) => format.id === 'testimonial')!, reviews: [{ rating: 5, body: 'Four months of sparring and the stitching has not moved an inch, which is more than I can say for the last two pairs.', author: 'Marisol A.' }] }))
   assert.match(testimonial.primaryText, /"Four months of sparring/)
   assert.match(testimonial.primaryText, /— Marisol\./, 'first name only')
+})
+
+test('a quote the model wrote is checked against the approved reviews, not just asked for', () => {
+  // "Quote only the reviews you are given" was a line in a prompt and nothing
+  // else — the same footing the character limits were on before they were
+  // clipped after the fact. A fabricated testimonial is a false statement
+  // about a real person, in an ad, with the store's name on it.
+  const reviews = [{ body: 'Four months of sparring and the stitching has not moved an inch, which is more than I can say for the last two pairs.', author: 'Marisol A.' }]
+  assert.deepEqual(unverifiedQuotes('They said "Four months of sparring and the stitching has not moved an inch."', reviews), [])
+  assert.deepEqual(unverifiedQuotes('"the stitching has not moved an inch after four months of sparring" — Marisol', reviews), [], 'a trim of a real review still passes')
+  assert.equal(unverifiedQuotes('"My doctor told me these are the only gloves worth buying for tendonitis." — Dana', reviews).length, 1)
+  assert.deepEqual(unverifiedQuotes('It doesn\'t slip and it isn\'t heavy.', reviews), [], 'apostrophes are contractions, not quotation marks')
+  assert.deepEqual(unverifiedQuotes('"Built to last."', reviews), [], 'a phrase too short to be a testimonial is left alone')
+  assert.equal(unverifiedQuotes('"Anything at all here that nobody ever wrote about anything."', []).length, 1, 'with no reviews on file, any quote is unverified')
 })
 
 test('the avatar and the direction shape the copy', () => {
@@ -469,4 +511,46 @@ test('the ad tools run through the executor', async () => {
   const read = await execute('read_competitor_site', { html: COMPETITOR_HTML, url: 'https://fightco.example.com/p', productId: product.id }, ctx)
   assert.match(read.summary, /FightCo runs the urgency angle/)
   await assert.rejects(execute('draft_ads', { productId: product.id, formats: ['nonsense'] }, ctx), /cannot accept/)
+})
+
+test('the review request the admin promises actually goes out, once', async () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Asks', prompt: 'asks' })
+  seedDefaultRegion(db, store.id, 'USD')
+  const product = createProduct(db, store.id, { title: 'Glove', status: 'published', variants: [{ title: 'One', priceCents: 5_000, inventory: 5 }] })
+  const cart = addToCart(db, store.id, createCart(db, store.id).id, product.variants[0]!.id, 1)
+  const order = completeCart(db, store.id, cart.id, { email: 'buyer@example.com' })
+  markDelivered(db, store.id, order.id)
+
+  assert.equal(await sweepReviewRequests(db), 0, 'not before the week is up')
+
+  // Delivered eight days ago.
+  db.run('UPDATE orders SET delivered_at = ? WHERE id = ?', new Date(Date.now() - 8 * 86400000).toISOString(), order.id)
+  assert.equal(await sweepReviewRequests(db), 1)
+  const sends = listSends(db, store.id, 10)
+  assert.ok(sends.some((send) => send.template === 'review_request' && send.recipient === 'buyer@example.com'))
+  const body = db.one<{ html: string }>("SELECT html FROM email_sends WHERE store_id = ? AND template = 'review_request'", store.id)?.html ?? ''
+  assert.match(body, /\/products\/glove#review/, 'and the link is the product\'s real address, not https://<slug>/products/<id>')
+
+  assert.equal(await sweepReviewRequests(db), 0, 'and never twice')
+})
+
+test('a back-in-stock email is not the welcome email wearing a different heading', () => {
+  const template = TEMPLATES.find((entry) => entry.key === 'back_in_stock')
+  assert.ok(template, 'there is a template for it')
+  assert.match(template.subject, /back in stock/i)
+  assert.ok(!/Welcome/i.test(template.subject))
+})
+
+test('the privacy policy stops saying nothing is shared for advertising once a pixel is installed', () => {
+  const { db, user } = fresh()
+  const store = createStore(db, user.id, { name: 'Pixels', prompt: 'pixels' })
+  const before = privacyHtml(db, getStore(db, store.id)!)
+  assert.match(before, /Nothing is sold or shared for advertising/)
+
+  install(db, store.id, 'meta-pixel', { pixelId: '1234567890' })
+  const after = privacyHtml(db, getStore(db, store.id)!)
+  assert.ok(!/Nothing is sold or shared for advertising/.test(after), 'not on a page that is firing a Meta pixel')
+  assert.match(after, /Meta \(Facebook and Instagram\)/)
+  assert.match(after, /set their own cookies/)
 })

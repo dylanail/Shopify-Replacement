@@ -7,6 +7,7 @@ import { readBrief } from '../agent/copy.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS, authorBlocks, formatById, readDirection, writeAdvertorial, writePdp } from '../agent/directions.ts'
 import { modelFor } from '../agent/models.ts'
 import { latestResearch, rulesResearch } from '../agent/research.ts'
+import { latestDoc, type MarketAnalysis } from '../agent/market.ts'
 import { directionFor, getAvatar, listAvatars } from '../agent/avatars.ts'
 import { createPage, getPage, listPages, updatePage, type Page } from './store.ts'
 
@@ -15,9 +16,10 @@ import { createPage, getPage, listPages, updatePage, type Page } from './store.t
  *
  * A product can have any number of page versions — each a format plus a
  * direction — and any number of advertorials. The versions with a weight are
- * in a split test: a visitor is assigned one by a hash of their session and
- * sees the same one every time, and the numbers per version come from the
- * same events everything else is measured by.
+ * in a split test: a visitor is assigned one by a hash of the storefront's
+ * visitor cookie and sees the same one every time — for a year, across
+ * midnight and across a change of address — and the numbers per version come
+ * from the same events everything else is measured by.
  */
 export type VersionRequest = {
   productId: string
@@ -40,10 +42,13 @@ export async function generateVersions(db: Db, store: Store, request: VersionReq
   const catalog = request.kind === 'pdp' ? PDP_FORMATS : ADVERTORIAL_FORMATS
   const wanted = request.formats?.length ? request.formats : suggestFormats(request.kind, direction).slice(0, request.count ?? 3)
   const model = modelFor(db, store.id, 'pages')
+  // The Market tab's analysis, if this store has run one: what the writer needs
+  // to pick an awareness level, a sophistication reset and the mechanism.
+  const market = latestDoc<MarketAnalysis>(db, store.id, 'analysis')?.body ?? null
   const created: Page[] = []
   for (const formatId of wanted) {
     const format = formatById(formatId, request.kind)
-    const input = { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format }
+    const input = { product, store: { name: store.name, prompt: store.prompt }, research, brief, direction, format, market }
     const drafted = request.kind === 'pdp' ? writePdp(input) : writeAdvertorial(input)
     const { blocks } = await authorBlocks(model, drafted, input)
     created.push(
@@ -83,12 +88,17 @@ export function versionsFor(db: Db, storeId: string, productId: string): Page[] 
   return listPages(db, storeId).filter((page) => page.productId === productId && (page.role === 'pdp' || page.role === 'advertorial'))
 }
 
-/** The pdp version a session sees, or null to render the built-in product page. */
-export function pickPdpVersion(db: Db, storeId: string, product: Product, sessionKey: string): Page | null {
+/**
+ * The pdp version a visitor sees, or null to render the built-in product page.
+ * `visitorKey` is the durable storefront cookie, not the analytics session:
+ * the session key turns over daily and moves with the address, which re-rolled
+ * returning visitors into the other arm mid-test.
+ */
+export function pickPdpVersion(db: Db, storeId: string, product: Product, visitorKey: string): Page | null {
   const live = versionsFor(db, storeId, product.id).filter((page) => page.role === 'pdp' && page.status === 'published' && page.weight > 0)
   if (!live.length) return null
   const total = live.reduce((sum, page) => sum + page.weight, 0)
-  const hash = parseInt(createHash('sha256').update(`${sessionKey}|${product.id}`).digest('hex').slice(0, 8), 16)
+  const hash = parseInt(createHash('sha256').update(`${visitorKey}|${product.id}`).digest('hex').slice(0, 8), 16)
   let point = hash % total
   for (const page of live) {
     point -= page.weight
@@ -97,18 +107,64 @@ export function pickPdpVersion(db: Db, storeId: string, product: Product, sessio
   return live[0] ?? null
 }
 
-export type VersionStats = { pageId: string; title: string; format: string; weight: number; status: string; views: number; carts: number; purchases: number; revenueCents: number; conversion: number }
+export type VersionStats = {
+  pageId: string
+  title: string
+  format: string
+  weight: number
+  status: string
+  views: number
+  carts: number
+  purchases: number
+  revenueCents: number
+  conversion: number
+  /**
+   * AOV × conversion rate. docs/knowledge/offers.md: "Measure revenue per
+   * session, not conversion alone" — $249 × 0.42% loses to $222 × 3.09%, and
+   * a version that converts worse at a higher order value can be the winner.
+   * Funnels were compared on it and page versions were not.
+   */
+  revenuePerSessionCents: number
+}
 
-/** Per-version numbers from the event stream: a view carries the page it was; a cart add and a purchase are attributed to the version the session saw. */
+/**
+ * Per-version numbers from the event stream.
+ *
+ * A cart add or a purchase counts for a version only if it happened *after*
+ * that session saw it, and a cart add counts only for this product. Without
+ * either bound every version of every product was credited with every
+ * purchase the session ever made, before or after — so a split test between
+ * two pages of one product was decided on a number that included orders for
+ * a different product placed the week before.
+ */
 export function versionStats(db: Db, storeId: string, productId: string): VersionStats[] {
   const pages = versionsFor(db, storeId, productId).filter((page) => page.role === 'pdp')
   return pages.map((page) => {
-    const sessions = db.all<{ session_id: string }>("SELECT DISTINCT session_id FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ?", storeId, page.id).map((row) => row.session_id)
-    if (!sessions.length) return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0 }
-    const placeholders = sessions.map(() => '?').join(', ')
-    const carts = db.one<{ c: number }>(`SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND session_id IN (${placeholders})`, storeId, ...sessions)?.c ?? 0
-    const purchases = db.one<{ c: number; total: number | null }>(`SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND session_id IN (${placeholders})`, storeId, ...sessions)
-    return { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: sessions.length, carts, purchases: purchases?.c ?? 0, revenueCents: purchases?.total ?? 0, conversion: sessions.length ? (purchases?.c ?? 0) / sessions.length : 0 }
+    const seen = db.all<{ session_id: string; at: string }>(
+      "SELECT session_id, MIN(created_at) at FROM analytics_events WHERE store_id = ? AND type = 'view.product' AND json_extract(meta, '$.pageId') = ? GROUP BY session_id",
+      storeId,
+      page.id,
+    )
+    const empty = { pageId: page.id, title: page.title, format: page.format, weight: page.weight, status: page.status, views: 0, carts: 0, purchases: 0, revenueCents: 0, conversion: 0, revenuePerSessionCents: 0 }
+    if (!seen.length) return empty
+    // One OR-ed pair per session: its id, and the moment it first saw this
+    // version. SQLite has no tuple IN, and the alternative is a query per
+    // session.
+    const after = seen.map(() => '(session_id = ? AND created_at >= ?)').join(' OR ')
+    const params = seen.flatMap((row) => [row.session_id, row.at])
+    const carts = db.one<{ c: number }>(
+      `SELECT COUNT(DISTINCT session_id) c FROM analytics_events WHERE store_id = ? AND type = 'cart.add' AND product_id = ? AND (${after})`,
+      storeId,
+      productId,
+      ...params,
+    )?.c ?? 0
+    const purchases = db.one<{ c: number; total: number | null }>(
+      `SELECT COUNT(DISTINCT session_id) c, SUM(amount_cents) total FROM analytics_events WHERE store_id = ? AND type = 'checkout.complete' AND (${after})`,
+      storeId,
+      ...params,
+    )
+    const revenue = purchases?.total ?? 0
+    return { ...empty, views: seen.length, carts, purchases: purchases?.c ?? 0, revenueCents: revenue, conversion: seen.length ? (purchases?.c ?? 0) / seen.length : 0, revenuePerSessionCents: seen.length ? Math.round(revenue / seen.length) : 0 }
   })
 }
 

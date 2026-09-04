@@ -111,10 +111,12 @@ export class Raw {
   readonly body: Buffer | string
   readonly contentType: string
   readonly headers: Record<string, string>
-  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}) {
+  readonly status: number
+  constructor(body: Buffer | string, contentType: string, headers: Record<string, string> = {}, status = 200) {
     this.body = body
     this.contentType = contentType
     this.headers = headers
+    this.status = status
   }
 }
 
@@ -240,6 +242,10 @@ function parseCookies(header?: string): Record<string, string> {
 
 export function setCookie(res: ServerResponse, name: string, value: string, options: { maxAge?: number; httpOnly?: boolean; path?: string } = {}) {
   const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${options.path ?? '/'}`, 'SameSite=Lax']
+  // Secure wherever the deployment is served over TLS — which is every real
+  // one, since Caddy and Railway both terminate it. Left off on a plain
+  // localhost origin, where the browser would drop the cookie entirely.
+  if ((process.env.AMBORAS_PUBLIC_ORIGIN ?? '').startsWith('https://') || process.env.AMBORAS_STOREFRONT_HOST || process.env.RAILWAY_PUBLIC_DOMAIN) parts.push('Secure')
   if (options.httpOnly !== false) parts.push('HttpOnly')
   if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`)
   const existing = res.getHeader('Set-Cookie')
@@ -290,7 +296,7 @@ export async function send(res: ServerResponse, result: unknown, req?: IncomingM
   }
   if (result instanceof Raw) {
     const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, 'utf8')
-    writeBody(req, res, 200, body, { 'Content-Type': result.contentType, ...result.headers })
+    writeBody(req, res, result.status, body, { 'Content-Type': result.contentType, ...result.headers })
     return
   }
   if (result === undefined) {

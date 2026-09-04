@@ -551,6 +551,70 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     ALTER TABLE custom_blocks ADD COLUMN js TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    name: '012_ad_clicks',
+    sql: `
+    -- Revenue per session decides nothing on its own: the course compares it
+    -- against the cost of the click that produced it. Clicks live beside the
+    -- spend they were bought with so a CPC exists without a second source.
+    ALTER TABLE ad_spend ADD COLUMN clicks INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    name: '013_review_requested',
+    sql: `
+    -- "The review request goes out a week from now" was a sentence in the
+    -- admin and nothing else: there was no scheduler for it. The sweep needs
+    -- somewhere to record that it has asked, once, per order.
+    ALTER TABLE orders ADD COLUMN review_requested_at TEXT;
+    `,
+  },
+  {
+    name: '014_order_notes',
+    sql: `
+    -- Somewhere to record what the merchant needs to know about an order that
+    -- the line items cannot say: a charge that did not match the total,
+    -- because the price moved while the shopper was paying.
+    ALTER TABLE orders ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    name: '015_environment_brand',
+    sql: `
+    -- The draft/live split covered the theme and nothing else, so the brand —
+    -- name, slogan, palette, fonts, logo and the announcement bar — changed the
+    -- live storefront the moment the assistant touched it, while the composer
+    -- promised edits land on the draft. The live environment keeps its own
+    -- copy now; stores.brand is the draft, and publish copies it over.
+    ALTER TABLE store_environments ADD COLUMN brand TEXT NOT NULL DEFAULT '{}';
+    UPDATE store_environments SET brand = (SELECT brand FROM stores WHERE stores.id = store_environments.store_id);
+    `,
+  },
+  {
+    name: '016_drop_unused_tables',
+    sql: `
+    -- Two tables nothing ever read or wrote. \`experiments\` was a split-test
+    -- store from before page versions and funnel groups did that job with
+    -- their own weights, and \`geo_prompts\` was for tracking whether a model
+    -- cites the store, which nothing checks. A schema that describes features
+    -- the product does not have is a map of a place that is not there.
+    DROP TABLE IF EXISTS experiments;
+    DROP TABLE IF EXISTS geo_prompts;
+    `,
+  },
+  {
+    name: '017_password_resets',
+    sql: `
+    -- There was no way back into an account. A forgotten password meant the
+    -- store, its products, its orders and its domain were gone, with no
+    -- recovery short of editing the database by hand.
+    CREATE TABLE password_resets (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL,
+      used_at TEXT, created_at TEXT NOT NULL);
+    CREATE INDEX password_resets_user ON password_resets(user_id, created_at DESC);
+    `,
+  },
 ]
 
 function migrate(db: Db) {

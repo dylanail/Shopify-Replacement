@@ -16,8 +16,13 @@ export function themeCss(brand: Brand, theme: Theme): string {
   const ink = brand.ink ?? '#241a14'
   const display = brand.displayFont ?? "'Playfair Display', Georgia, serif"
   const body = brand.bodyFont ?? "'Inter', ui-sans-serif, system-ui, sans-serif"
-  const gap = theme.density === 'compact' ? '2.5rem' : '5rem'
   const gallery = theme.template === 'gallery'
+  // "Market" was a third option in the template picker and in edit_storefront's
+  // enum that rendered byte for byte like the atelier: the merchant chose it,
+  // saw no change, and reasonably concluded the picker was broken. It is a
+  // shop rather than a showroom now — denser, sans headings, filled buttons.
+  const market = theme.template === 'market'
+  const gap = theme.density === 'compact' ? '2.5rem' : market ? '3.4rem' : '5rem'
 
   return `
 :root{
@@ -267,6 +272,52 @@ footer .word{font-family:var(--display);font-size:1.8rem;letter-spacing:.1em;tex
   footer.site .wrap{grid-template-columns:1fr 1fr}
   nav.main{display:none}
 }
+
+/* Slots a plugin draws into. Four first-party plugins declared components with
+   no render function and were drawn by nothing; now that they draw themselves,
+   the theme has to have somewhere for them to land. */
+.plg-badge{display:flex;gap:.5rem;align-items:baseline;margin:.9rem 0;font-size:.95rem}
+.plg-badge span{color:var(--primary);letter-spacing:.08em}
+.plg-wall{display:grid;gap:.8rem;margin:1rem 0}
+.plg-wall article{border-top:1px solid var(--line);padding-top:.7rem}
+.plg-wall h4{margin:.3rem 0 .2rem;font-size:1rem}
+.plg-wall p{margin:0;font-size:.92rem}
+.plg-stars{color:var(--primary);letter-spacing:.08em;font-size:.85rem}
+.plg-who{display:block;margin-top:.35rem;font-size:.8rem;opacity:.7}
+.plg-fbt{border:1px solid var(--line);border-radius:var(--radius);padding:.8rem;margin:1rem 0;display:grid;gap:.5rem}
+.plg-fbt-head{font:500 .7rem/1 var(--body);letter-spacing:.16em;text-transform:uppercase;opacity:.65}
+.plg-fbt-item{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:inherit;font-size:.9rem}
+.plg-fbt-item img{width:38px;height:38px;object-fit:cover;border-radius:calc(var(--radius) / 1.5)}
+.plg-fbt-item b{margin-left:auto;font-weight:500}
+.plg-engrave{display:block;margin:.9rem 0;font-size:.9rem}
+.plg-engrave em{opacity:.65;font-style:normal}
+.plg-engrave input{width:100%;margin-top:.35rem;padding:.6rem .7rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);color:inherit;font:inherit}
+.plg-contact{display:grid;gap:.8rem;margin-top:1.2rem;max-width:34rem}
+.plg-contact label{display:grid;gap:.3rem;font-size:.85rem}
+.plg-contact .plg-row{display:grid;gap:.8rem;grid-template-columns:1fr 1fr}
+.plg-contact input,.plg-contact textarea{padding:.6rem .7rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);color:inherit;font:inherit}
+.plg-contact button{justify-self:start}
+@media (max-width:640px){.plg-contact .plg-row{grid-template-columns:1fr}}
+${market ? `
+/* Market: a shop, not a showroom. Sans headings at a smaller step, the primary
+   colour on the buttons rather than the ink, tighter cards and a shorter hero,
+   so more of the catalogue is above the fold. Everything still reads the same
+   tokens — this is a different arrangement of the brand, not a second brand. */
+h1,h2,h3{font-family:var(--body);font-weight:600;letter-spacing:-.02em;line-height:1.12}
+h1{font-size:clamp(1.9rem,4.4vw,3rem)}
+h2{font-size:clamp(1.35rem,2.6vw,1.95rem)}
+h3{font-size:1.05rem}
+.eyebrow{letter-spacing:.12em}
+.hero{min-height:52vh}
+.btn{background:var(--primary);border-color:var(--primary);color:#fff;text-transform:none;letter-spacing:.01em;font-weight:600;padding:.85rem 1.4rem}
+.btn:hover{background:var(--secondary);border-color:var(--secondary)}
+.btn--ghost{background:transparent;color:var(--primary);border-color:var(--primary)}
+.btn--ghost:hover{background:var(--primary);color:#fff}
+.grid{gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.card .title{font-family:var(--body);font-weight:600;font-size:1rem}
+.card .body{padding:.8rem .9rem 1rem}
+.card .price{font-weight:600}
+` : ''}
 `
 }
 

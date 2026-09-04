@@ -8,6 +8,12 @@ export type StoreEnvironment = {
   storeId: string
   kind: 'draft' | 'live'
   theme: Theme
+  /**
+   * The brand as this environment has it. `stores.brand` is the working copy
+   * every editor and tool writes; publishing copies it here, and the live
+   * storefront renders from this rather than from the row underneath it.
+   */
+  brand: Brand
   buildState: 'idle' | 'building' | 'ready' | 'failed'
   buildLog: Array<{ at: string; message: string; level: string }>
   version: number
@@ -147,6 +153,7 @@ function rowToEnvironment(row: Row): StoreEnvironment {
     kind: row.kind as 'draft' | 'live',
     theme: { ...DEFAULT_THEME, ...json(row.theme, {} as Theme) },
     buildState: row.build_state as StoreEnvironment['buildState'],
+    brand: json(row.brand, {} as Brand),
     buildLog: json(row.build_log, []),
     version: row.version as number,
     publishedAt: (row.published_at as string | null) ?? null,
@@ -187,9 +194,11 @@ export function publish(db: Db, storeId: string): StoreEnvironment {
   const draft = environment(db, storeId, 'draft')
   const live = environment(db, storeId, 'live')
   const timestamp = now()
+  const store = getStore(db, storeId)
   db.tx(() => {
     db.update('store_environments', live.id, {
       theme: draft.theme,
+      brand: store?.brand ?? live.brand,
       version: live.version + 1,
       build_state: 'ready',
       build_log: [...live.buildLog, { at: timestamp, message: `Published draft v${draft.version}`, level: 'info' }].slice(-40),
@@ -204,7 +213,12 @@ export function publish(db: Db, storeId: string): StoreEnvironment {
 export function rollback(db: Db, storeId: string): StoreEnvironment {
   const live = environment(db, storeId, 'live')
   const draft = environment(db, storeId, 'draft')
-  db.update('store_environments', draft.id, { theme: live.theme, updated_at: now() })
+  db.tx(() => {
+    db.update('store_environments', draft.id, { theme: live.theme, brand: live.brand, updated_at: now() })
+    // The brand goes back with the theme, or rolling back would restore a
+    // layout with the colours that broke it still in place.
+    if (Object.keys(live.brand).length) db.update('stores', storeId, { brand: live.brand })
+  })
   return environment(db, storeId, 'draft')
 }
 
@@ -221,7 +235,7 @@ export function publishState(db: Db, storeId: string): { label: string; ready: b
   const draft = environment(db, storeId, 'draft')
   const live = environment(db, storeId, 'live')
   if (store.status !== 'live') return { label: 'Publish store', ready: true, reason: 'Your storefront goes live at its address.' }
-  if (JSON.stringify(draft.theme) !== JSON.stringify(live.theme)) {
+  if (JSON.stringify(draft.theme) !== JSON.stringify(live.theme) || JSON.stringify(store.brand) !== JSON.stringify(live.brand)) {
     return { label: 'Publish changes', ready: true, reason: 'The draft has edits that are not live yet.' }
   }
   return { label: 'Store is live', ready: false, reason: `Live since ${live.publishedAt?.slice(0, 10) ?? 'today'}.` }
@@ -269,7 +283,7 @@ export function storeForHost(db: Db, hostname: string, rootDomain: string): Stor
   const bare = hostname.replace(/^www\./, '')
   const custom = db.one<{ store_id: string }>("SELECT store_id FROM domains WHERE hostname IN (?, ?, ?) AND status = 'verified' AND mode = 'host'", hostname, bare, `www.${bare}`)
   if (custom) return getStore(db, custom.store_id)
-  if (hostname.endsWith(`.${rootDomain}`)) {
+  if (rootDomain && hostname.endsWith(`.${rootDomain}`)) {
     return getStoreBySlug(db, hostname.slice(0, -(rootDomain.length + 1)))
   }
   return null
