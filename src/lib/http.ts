@@ -242,6 +242,10 @@ function parseCookies(header?: string): Record<string, string> {
 
 export function setCookie(res: ServerResponse, name: string, value: string, options: { maxAge?: number; httpOnly?: boolean; path?: string } = {}) {
   const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${options.path ?? '/'}`, 'SameSite=Lax']
+  // Secure wherever the deployment is served over TLS — which is every real
+  // one, since Caddy and Railway both terminate it. Left off on a plain
+  // localhost origin, where the browser would drop the cookie entirely.
+  if ((process.env.AMBORAS_PUBLIC_ORIGIN ?? '').startsWith('https://') || process.env.AMBORAS_STOREFRONT_HOST || process.env.RAILWAY_PUBLIC_DOMAIN) parts.push('Secure')
   if (options.httpOnly !== false) parts.push('HttpOnly')
   if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`)
   const existing = res.getHeader('Set-Cookie')

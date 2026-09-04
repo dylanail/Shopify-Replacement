@@ -63,6 +63,14 @@ function session(ctx: Ctx): Session {
   const stores = listStores(db, user.id)
   if (!stores.length) throw new NoStores()
   const wanted = ctx.query.get('storeId') ?? ctx.cookies[STORE_COOKIE]
+  // An id that is unknown, deleted, or someone else's used to fall through to
+  // whichever store happened to be newest — and /admin/switch then pinned the
+  // cookie to it. A stale bookmark quietly moved you into another store and
+  // kept you there. An unknown id from the URL is refused; a stale cookie just
+  // falls back, because that is a store that was deleted or handed over.
+  if (ctx.query.get('storeId') && !stores.some((entry) => entry.id === ctx.query.get('storeId'))) {
+    throw notFound('No store of yours with that id')
+  }
   const store = stores.find((entry) => entry.id === wanted) ?? (stores[0] as Store)
   requireRole(db, user.id, store.id)
   return { user, store, stores }
@@ -819,7 +827,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/theme', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     setTheme(db(), current.store.id, {
       template: String(body.template ?? 'atelier'),
@@ -832,7 +840,7 @@ export function adminRouter(): Router {
   })
 
   router.post('/admin/theme/code', async (ctx) => {
-    const current = session(ctx)
+    const current = adminSession(ctx)
     const body = await ctx.body()
     setTheme(db(), current.store.id, { customCss: String(body.customCss ?? ''), customJs: String(body.customJs ?? '') }, { build: 'Store-wide css and js edited' })
     return back(ctx, 'Custom code saved to the draft. Publish to make it live.')
