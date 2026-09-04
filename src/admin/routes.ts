@@ -42,7 +42,7 @@ import { authPage, buildingPage, onboardingPage } from './auth-pages.ts'
 import { accountShell, storesHub } from './account.ts'
 import * as plan from './plan-pages.ts'
 import { modeById, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, skipStep, type BuildMode } from '../control/build.ts'
-import { deleteDoc, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlanRow } from '../agent/market.ts'
+import { deleteDoc, latestDoc, planRowRequest, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type AdPlanRow } from '../agent/market.ts'
 import { deleteQueueItem, getQueueItem, labelShot, PAGE_GOALS, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, setQueueStatus, suggestBlocks, type PageGoal } from '../creative/briefs.ts'
 import { approveGif, makeProductGif } from '../creative/product-gif.ts'
 import { ripToPage } from '../pages/rip.ts'
@@ -1201,6 +1201,28 @@ export function adminRouter(): Router {
       return back(ctx, status === 'done' && !String(body.learnings ?? '').trim() ? 'Saved as learning: a row is not done until its learnings are written.' : 'Row saved.')
     } catch (error) {
       return back(ctx, `!${error instanceof Error ? error.message : 'Could not save'}`)
+    }
+  })
+
+  /* A plan row, run. The plan named the concept, the angle, the variations,
+     the format and the method, and then the owner retyped all of it into the
+     ad drafter by hand because nothing connected the two. */
+  router.post('/admin/market/plan/:index/ads', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const index = Number(ctx.params.index)
+    const doc = latestDoc<AdPlan>(db(), current.store.id, 'ad-plan')
+    const row = doc?.body.rows[index]
+    if (!row) return back(ctx, '!No such plan row')
+    const product = String(body.productId ?? '') || listProducts(db(), current.store.id, { status: 'published', limit: 1 })[0]?.id || ''
+    if (!product) return back(ctx, '!Publish a product first; an ad has to point at something.')
+    try {
+      const request = planRowRequest(row, listAvatars(db(), current.store.id))
+      const ads = await draftAds(db(), current.store, { productId: product, platform: String(body.platform ?? 'meta') as AdPlatform, ...request })
+      if (row.status === 'idea') updatePlanRow(db(), current.store.id, index, { status: 'working' })
+      return back(ctx, `${ads.length} ad${ads.length === 1 ? '' : 's'} drafted from "${row.concept}". The row is working now; write its learnings when the test is read.`)
+    } catch (error) {
+      return back(ctx, `!${error instanceof Error ? error.message : 'Could not draft the ads'}`)
     }
   })
 

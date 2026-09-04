@@ -80,6 +80,24 @@ export const DOORS: Array<{ id: FrontDoor; name: string; description: string }> 
   { id: 'quiz', name: 'Quiz', description: 'Three to six questions, one per screen, each answer a label the buyer uses for themselves; the result names them and shows the offer built for them.' },
 ]
 
+/**
+ * What happens after publish, which is where the order of work used to stop.
+ *
+ * A published store is not a launched one: it takes money only once Stripe is
+ * connected, it answers at its own address only once the domain is verified,
+ * and it sells nothing at all until an ad runs and the spend behind it is
+ * written down. The course's own order ends with reading the numbers against
+ * breakeven and deciding — so the build ends there too, rather than at a green
+ * "Published" and a shrug.
+ */
+export const LAUNCH_STEPS: BuildStep[] = [
+  { key: 'payments', label: 'Connect Stripe and put one order through', detail: 'Keys in, webhook set, one real order through the live checkout before a pound of ad spend. A store that cannot take money converts at zero.', href: '/settings/payments' },
+  { key: 'domain', label: 'Connect the domain', detail: 'The records for your registrar, verification, and SSL issued. Ads that land on a platform subdomain cost trust and, on some accounts, get rejected.', href: '/domains' },
+  { key: 'ads', label: 'Write the ads for the angle', detail: 'The plan names the concepts; the ad writer fills them in inside each platform\'s limits, quoting only approved reviews.', href: '/ads' },
+  { key: 'launch', label: 'Run the first test and record the spend', detail: 'Statics first as a marksman test across the sub-avatars, then a sniper video on what got traction. Record the spend each day: every number that follows is against it.', href: '/profit#spend' },
+  { key: 'read', label: 'Read it against breakeven and decide', detail: 'Breakeven ROAS is 1 ÷ gross margin, target is that plus one. Revenue per session against the cost per click says whether it is the page, the price or the traffic. Write the loop down: what is failing, what is working, what you will change.', href: '/market#loops' },
+]
+
 export const MODES: Array<{ id: BuildMode; name: string; description: string; steps: BuildStep[] }> = [
   {
     id: 'own-product',
@@ -100,6 +118,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the pages the shape needs', detail: 'The page plan lists every page the shape and the front door call for, which exist, and a template for each one missing.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell; the checkout reads them.', href: '/bundles' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Privacy and terms are generated; the popup is optional; behaviour tracking is on; then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
   {
@@ -115,6 +134,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the rest of the pages', detail: 'The page plan lists what the shape still needs beyond the pages you read: the front door, the checkout offers, the popup.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell.', href: '/funnels' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Generated legal pages, the optional popup, tracking on, then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
   {
@@ -132,6 +152,7 @@ export const MODES: Array<{ id: BuildMode; name: string; description: string; st
       { key: 'pages', label: 'Build the rest of the pages', detail: 'The page plan lists what the shape still needs beyond the pages you read.', href: '/build#pages' },
       { key: 'offer', label: 'Set the offer and the funnel', detail: 'Bundle tiers, the bump, the upsell, the downsell.', href: '/funnels' },
       { key: 'ship', label: 'Legal pages, popup, tracking, publish', detail: 'Generated legal pages, the optional popup, tracking on, then publish.', href: '/store' },
+      ...LAUNCH_STEPS,
     ],
   },
 ]
@@ -311,6 +332,14 @@ function worldFacts(db: Db, storeId: string, state: BuildState): Record<string, 
   const bundles = count("SELECT COUNT(*) c FROM bundles WHERE store_id = ? AND status = 'active'")
   const funnels = count('SELECT COUNT(*) c FROM funnels WHERE store_id = ?')
   const live = db.one<{ status: string }>('SELECT status FROM stores WHERE id = ?', storeId)?.status === 'live'
+  // After publish. A published store is not a launched one.
+  const stripeReady = count("SELECT COUNT(*) c FROM store_plugins WHERE store_id = ? AND plugin_id = 'stripe' AND enabled = 1") > 0
+  const paidOrders = count("SELECT COUNT(*) c FROM orders WHERE store_id = ? AND payment_status = 'paid'")
+  const verifiedDomains = count("SELECT COUNT(*) c FROM domains WHERE store_id = ? AND status = 'verified'")
+  const ads = count('SELECT COUNT(*) c FROM ads WHERE store_id = ?')
+  const spendCents = db.one<{ c: number }>('SELECT COALESCE(SUM(amount_cents), 0) c FROM ad_spend WHERE store_id = ?', storeId)?.c ?? 0
+  const spendDays = count('SELECT COUNT(DISTINCT day) c FROM ad_spend WHERE store_id = ?')
+  const loopsWithOutcome = count("SELECT COUNT(*) c FROM market_docs WHERE store_id = ? AND kind = 'loop' AND trim(COALESCE(json_extract(body, '$.outcome'), '')) != ''")
   // Answers, not keys: saveAnswers writes an entry for all eight questions on
   // every save, so counting keys made one submit of an empty form report
   // "8 of 8 questions answered".
@@ -345,6 +374,11 @@ function worldFacts(db: Db, storeId: string, state: BuildState): Record<string, 
     offer: { done: bundles > 0 || funnels > 0, why: bundles ? 'Bundle tiers set' : funnels ? 'A funnel exists' : 'No bundle or funnel yet' },
     rip: { done: ripped > 0, why: ripped ? `${ripped} page${ripped === 1 ? '' : 's'} read from a funnel` : 'Nothing read yet' },
     ship: { done: live, why: live ? 'Published' : 'Not published yet' },
+    payments: { done: stripeReady, why: stripeReady ? (paidOrders ? `Stripe connected, ${paidOrders} paid order${paidOrders === 1 ? '' : 's'} through it` : 'Stripe connected — put one order through before you spend on ads') : 'No payment provider connected; the checkout cannot take money' },
+    domain: { done: verifiedDomains > 0, why: verifiedDomains ? `${verifiedDomains} domain${verifiedDomains === 1 ? '' : 's'} verified` : 'Running on the platform address' },
+    ads: { done: ads > 0, why: ads ? `${ads} ad${ads === 1 ? '' : 's'} written` : 'No ads written yet' },
+    launch: { done: spendCents > 0, why: spendCents > 0 ? `${(spendCents / 100).toFixed(2)} of spend recorded across ${spendDays} day${spendDays === 1 ? '' : 's'}` : 'No spend recorded, so nothing can be measured against it' },
+    read: { done: loopsWithOutcome > 0, why: loopsWithOutcome ? `${loopsWithOutcome} loop${loopsWithOutcome === 1 ? '' : 's'} closed with an outcome` : spendCents > 0 ? 'Spend is running and no loop has been written yet' : 'Needs a test to read' },
   }
 }
 

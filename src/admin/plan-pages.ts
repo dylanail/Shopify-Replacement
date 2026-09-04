@@ -116,7 +116,7 @@ export function marketPage(ctx: Ctx): string {
   return `${flash(ctx)}<div class="head"><div><h1 class="serif">Market</h1><p class="muted" style="margin:.25rem 0 0">Planning, saved under this store: where the market sits, the product as the buyer sees it, the core avatar and its sub-avatars, and the ad plan that comes out of them.</p></div>
     <span class="tag">${e(month.month)}: ${e(month.theme)} — ${e(month.leadDesires.join(', '))}</span></div>
   ${analysisCard(ctx, research !== null, analysis)}
-  <div class="grid2"><div>${avatarTreeCard(ctx)}${adPlanCard(plan)}</div><div>${overviewCard(ctx, overviews)}${loopCard(loops)}</div></div>`
+  <div class="grid2"><div>${avatarTreeCard(ctx)}${adPlanCard(ctx, plan)}</div><div>${overviewCard(ctx, overviews)}${loopCard(loops)}</div></div>`
 }
 
 function analysisCard(ctx: Ctx, hasResearch: boolean, doc: ReturnType<typeof latestDoc<MarketAnalysis>>): string {
@@ -170,7 +170,7 @@ function overviewCard(ctx: Ctx, docs: Array<ReturnType<typeof latestDoc<ProductO
       <form method="post" action="/admin/market/docs/${e(doc.id)}/delete" style="margin-top:.4rem"><button class="btn" type="submit" style="font-size:11px">Delete</button></form></div></details>` }).join('')}</div>`
 }
 
-function adPlanCard(doc: ReturnType<typeof latestDoc<AdPlan>>): string {
+function adPlanCard(ctx: Ctx, doc: ReturnType<typeof latestDoc<AdPlan>>): string {
   const statuses = ['idea', 'working', 'learning', 'done'] as const
   return `<div class="card" id="plan"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Ad plan</h2><form method="post" action="/admin/market/plan"><button class="btn primary" type="submit">${doc ? 'Add the next tests' : 'Write the plan'}</button></form></div>
     <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">Concept → angle → variations → format → method. Statics first as marksman tests across sub-avatars; a sniper video on what wins. A row is done only when its learnings are written down.${doc ? ` ${doc.source === 'rules' ? 'Rules plan.' : `Written by ${e(doc.model)}.`}` : ''}</p>
@@ -184,12 +184,17 @@ function adPlanCard(doc: ReturnType<typeof latestDoc<AdPlan>>): string {
         <div class="row"><div class="field" style="flex:0 0 9rem"><label>Status</label><select name="status">${statuses.map((status) => `<option ${status === row.status ? 'selected' : ''}>${status}</option>`).join('')}</select></div>
           <div class="field" style="flex:1"><label>Result (spend share, KPI, winner or loser)</label><input name="result" value="${e(row.result)}"></div></div>
         <div class="field"><label>Learnings — the row is not done without them</label><textarea name="learnings" rows="2">${e(row.learnings)}</textarea></div>
-        <button class="btn" type="submit">Save row</button></form></details>`).join('') : '<p class="muted" style="font-size:12.5px">No plan yet. Turn on at least one avatar first.</p>'}</div>`
+        <button class="btn" type="submit">Save row</button></form>
+      <form method="post" action="/admin/market/plan/${index}/ads" class="row" style="gap:.4rem;align-items:flex-end;padding-bottom:.6rem">
+        <div class="field" style="flex:1;margin:0"><label>Draft this row as ads</label><select name="productId">${productOptions(ctx)}</select></div>
+        <div class="field" style="width:8rem;margin:0"><label>Platform</label><select name="platform"><option value="meta">Meta</option><option value="tiktok">TikTok</option><option value="google">Google</option><option value="youtube">YouTube</option></select></div>
+        <button class="btn primary" type="submit">Write them</button></form>
+      <p class="muted" style="font-size:11px;margin:0 0 .6rem">Its angle, its variations and its format go to the ad writer as they are — the row stops being a note you retype.</p></details>`).join('') : '<p class="muted" style="font-size:12.5px">No plan yet. Turn on at least one avatar first.</p>'}</div>`
 }
 
 function loopCard(loops: Array<ReturnType<typeof latestDoc<Loop>> & object>): string {
   return `<div class="card" id="loops"><h2>Feedback loops</h2>
-    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What keeps failing, what keeps working, the hypotheses ranked by confidence, the actions. Kept here so the planner and the writers can read them.</p>
+    <p class="muted" style="font-size:12px;margin:.3rem 0 .6rem">What keeps failing, what keeps working, the hypotheses ranked by confidence, the actions. The ad planner and the ad writer are handed the three most recent, so what this account has learned reaches what it writes next.</p>
     <form method="post" action="/admin/market/loop">
       <div class="field"><label>What keeps failing</label><input name="failing" placeholder="Statics get spend but no purchases"></div>
       <div class="field"><label>What keeps working</label><input name="working" placeholder="The comparison angle carries the account"></div>

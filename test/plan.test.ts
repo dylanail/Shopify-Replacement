@@ -7,13 +7,16 @@ import { createProduct, getProduct } from '../src/domain/catalog.ts'
 import { seedDefaultRegion } from '../src/domain/regions.ts'
 import { listTodos, refreshTodos, seedTodos } from '../src/control/todos.ts'
 import { adminRouter } from '../src/admin/routes.ts'
+import { install } from '../src/control/plugins.ts'
+import { addDomain, verifyDomain } from '../src/control/stores.ts'
+import { recordAdSpend } from '../src/domain/ops.ts'
 import { answersForPrompt, buildProgress, buildState, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, assumeAnswers, setBuildMode, setSiteShape, SHAPES, skipStep } from '../src/control/build.ts'
 import { knowledge, calendarMonth, TOPIC_NAMES } from '../src/agent/knowledge.ts'
 import { authorResearch, runResearch, rulesResearch } from '../src/agent/research.ts'
 import { readBrief } from '../src/agent/copy.ts'
 import { S, useModelTransport } from '../src/agent/models.ts'
 import { listAvatars, saveAvatar, avatarTree, suggestAvatars } from '../src/agent/avatars.ts'
-import { authorAnalysis, latestDoc, listDocs, rulesAnalysis, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../src/agent/market.ts'
+import { authorAnalysis, latestDoc, listDocs, loopBrief, planRowRequest, rulesAnalysis, runAdPlan, runAnalysis, runOverview, saveLoop, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../src/agent/market.ts'
 import { blocksFromOutline, outlinePage, ripHtml, ripToPage } from '../src/pages/rip.ts'
 import { listQueue, photoCoverage, PHOTO_BRIEFS, queuePhotoBriefs, queueUgcConcepts, rulesSuggestBlocks, setQueueStatus, suggestBlocks } from '../src/creative/briefs.ts'
 import { listReviews } from '../src/domain/reviews.ts'
@@ -152,6 +155,48 @@ test('a build mode has an ordered plan whose statuses come from the world, and "
   for (const mode of MODES) assert.ok(mode.steps.some((step) => step.key === 'shape') && mode.steps.some((step) => step.key === 'pages'), `${mode.id} decides the shape and builds its pages`)
 })
 
+test('the order of work carries past publish to a launch that has actually been read', () => {
+  // It used to stop at "publish". A published store takes no money without a
+  // provider, answers at a platform subdomain, and sells nothing until an ad
+  // runs and the spend behind it is written down.
+  const { db, store, product } = shop()
+  setBuildMode(db, store.id, 'own-product')
+  const keys = () => buildProgress(db, store.id).steps.map((step) => step.key)
+  assert.deepEqual(keys().slice(-5), ['payments', 'domain', 'ads', 'launch', 'read'], 'the last step is reading the numbers, not shipping')
+
+  const step = (key: string) => buildProgress(db, store.id).steps.find((entry) => entry.key === key)!
+  assert.equal(step('payments').status, 'waiting')
+  assert.match(step('payments').why, /cannot take money/)
+  install(db, store.id, 'stripe', { publishableKey: 'pk_test_abc', secretKey: 'sk_test_xyz' })
+  assert.match(step('payments').why, /put one order through/, 'connected is not the same as proven')
+
+  assert.match(step('domain').why, /platform address/)
+  addDomain(db, store.id, 'ironjaw.co')
+  verifyDomain(db, store.id, 'ironjaw.co')
+  assert.match(step('domain').why, /1 domain verified/)
+
+  assert.match(step('launch').why, /nothing can be measured against it/)
+  recordAdSpend(db, store.id, { day: '2026-01-02', platform: 'meta', amountCents: 12_000 })
+  assert.match(step('launch').why, /120\.00 of spend recorded/)
+
+  assert.match(step('read').why, /no loop has been written yet/)
+  saveLoop(db, store.id, { failing: 'Cold traffic bounces on the price', working: 'Retargeting converts', hypotheses: ['The offer is not built yet'], actions: ['Add the 2-for tier'], outcome: '' })
+  assert.equal(step('read').status, 'waiting', 'a loop with no outcome is a note, not a decision')
+  saveLoop(db, store.id, { failing: 'Cold traffic bounces on the price', working: 'Retargeting converts', hypotheses: ['The offer is not built yet'], actions: ['Add the 2-for tier'], outcome: 'ROAS 1.9 against a 1.6 breakeven; kept it running' })
+  assert.match(step('read').why, /1 loop closed with an outcome/)
+  void product
+})
+
+test('every step of every build mode links to a page this admin serves', () => {
+  const router = adminRouter()
+  for (const mode of MODES) {
+    for (const step of mode.steps) {
+      const [path = ''] = `/admin${step.href}`.split('#')
+      assert.ok(router.match('GET', path), `${mode.id}/${step.key} links /admin${step.href}, which no route answers`)
+    }
+  }
+})
+
 test('the shape decides the page plan, and every page on it reads its status from the store', () => {
   const { db, store, product } = shop()
   assert.equal(SHAPES.length, 2)
@@ -278,6 +323,22 @@ test('the product overview, the ad plan and feedback loops are saved under the s
   assert.equal(listDocs(db, store.id).length, 3)
   const kinds = listDocs(db, store.id).map((doc) => doc.kind).sort()
   assert.deepEqual(kinds, ['ad-plan', 'loop', 'product-overview'])
+
+  // The loop card said the planner and the writers read these; nothing did.
+  const brief = loopBrief(db, store.id)
+  assert.match(brief, /keeps failing: Statics get no purchases/)
+  assert.match(brief, /keeps working: Comparison angle/)
+  assert.match(brief, /outcome: not recorded yet/)
+  assert.equal(loopBrief(db, createStore(db, store.ownerId, { name: 'Empty' }).id), '', 'a store with no loops adds nothing to the prompt')
+
+  // A plan row is a request the ad writer can take, not a note to retype.
+  const request = planRowRequest(plan.body.rows[0]!, listAvatars(db, store.id))
+  assert.match(request.direction, /for The day sleeper/)
+  assert.match(request.direction, /focus on sleep at noon like midnight/)
+  assert.match(request.direction, /"Sleep at noon like it is midnight\."/, 'its variations become the hooks the ad must say')
+  assert.equal(request.avatarId, listAvatars(db, store.id).find((avatar) => avatar.name === 'The day sleeper')?.id)
+  assert.deepEqual(request.formats, ['static'], 'the plan\'s format maps onto an ad format that exists')
+  assert.deepEqual(planRowRequest(plan.body.rows[1]!, listAvatars(db, store.id)).formats, ['ugc-script'], 'a subtitled b-roll row is a video script')
 })
 
 test('sub-avatars hang under a core avatar, keep its desire and add a category each', async () => {

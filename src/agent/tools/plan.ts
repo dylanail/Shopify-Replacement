@@ -1,9 +1,10 @@
 import { getStore } from '../../control/stores.ts'
 import { buildProgress, DOORS, MODES, pagePlan, QUESTIONS, saveAnswers, setBuildMode, setSiteShape, SHAPES, type BuildMode } from '../../control/build.ts'
-import { getProduct } from '../../domain/catalog.ts'
+import { getProduct, listProducts } from '../../domain/catalog.ts'
 import { latestResearch } from '../research.ts'
 import { getAvatar, listAvatars } from '../avatars.ts'
-import { latestDoc, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, type MarketAnalysis } from '../market.ts'
+import { latestDoc, planRowRequest, runAdPlan, runAnalysis, runOverview, suggestSubAvatars, updatePlanRow, type AdPlan, type MarketAnalysis } from '../market.ts'
+import { draftAds } from '../ads.ts'
 import { modelFor } from '../models.ts'
 import { ripToPage } from '../../pages/rip.ts'
 import { createPage, newBlock } from '../../pages/store.ts'
@@ -137,6 +138,33 @@ export const planTools: Tool[] = defineTools([
     async handler(_args, ctx) {
       const doc = await runAdPlan(ctx.db, ctx.storeId)
       return { summary: `Ad plan: ${doc.body.rows.length} rows. ${doc.body.note}`, artifacts: [{ type: 'table', columns: ['Concept', 'Angle', 'Method', 'Format'], rows: doc.body.rows.map((row) => [row.concept, row.angle, row.method, row.format]) }, { type: 'link', href: '/admin/market#plan', label: 'Open the plan' }] }
+    },
+  },
+  {
+    name: 'draft_ads_from_plan',
+    area: 'ads',
+    description: 'Take a row of the ad plan and write it as ads: its angle, its variations and its format go to the ad writer as they are, and the row moves to "working". Rows are numbered from 0 in the order write_ad_plan returned them.',
+    schema: {
+      row: { type: 'number', integer: true, min: 0, required: true, help: 'Which plan row, from 0.' },
+      productId: { type: 'string', help: 'Defaults to the first published product.' },
+      platform: { type: 'string', enum: ['meta', 'tiktok', 'google', 'youtube'], default: 'meta' },
+    },
+    async handler(args, ctx) {
+      const store = getStore(ctx.db, ctx.storeId)
+      if (!store) throw new Error('No store')
+      const doc = latestDoc<AdPlan>(ctx.db, ctx.storeId, 'ad-plan')
+      const index = args.row as number
+      const row = doc?.body.rows[index]
+      if (!row) throw new Error(doc ? `The plan has ${doc.body.rows.length} rows; there is no row ${index}.` : 'No ad plan yet — write_ad_plan first.')
+      const productId = (args.productId as string) || listProducts(ctx.db, ctx.storeId, { status: 'published', limit: 1 })[0]?.id
+      if (!productId) throw new Error('Publish a product first; an ad has to point at something.')
+      const request = planRowRequest(row, listAvatars(ctx.db, ctx.storeId))
+      const ads = await draftAds(ctx.db, store, { productId, platform: args.platform as 'meta', ...request })
+      if (row.status === 'idea') updatePlanRow(ctx.db, ctx.storeId, index, { status: 'working' })
+      return {
+        summary: `${ads.length} ad${ads.length === 1 ? '' : 's'} drafted from "${row.concept}" (${row.method}, ${row.format}). The row is working; its learnings are what finishes it.`,
+        artifacts: [{ type: 'table', columns: ['Ad', 'Format', 'Hook'], rows: ads.map((ad) => [ad.name, ad.format, ad.body.hooks[0] ?? '']) }, { type: 'link', href: '/admin/ads', label: 'Open the ads' }],
+      }
     },
   },
   {
