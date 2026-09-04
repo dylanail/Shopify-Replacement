@@ -4,32 +4,73 @@ import type { Todo } from '../control/todos.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 import { SUGGESTIONS } from '../agent/chat.ts'
 import type { Artifact } from '../agent/registry.ts'
+import type { AssistantRequest } from '../agent/queue.ts'
 
-export type NavItem = { key: string; href: string; label: string; glyph: string; area?: string }
+export type IconName = 'home' | 'sparkles' | 'orders' | 'products' | 'customers' | 'store' | 'pages' | 'collections' | 'funnel' | 'bundle' | 'marketing' | 'discount' | 'ads' | 'analytics' | 'experiment' | 'profit' | 'build' | 'research' | 'creative' | 'settings' | 'mic' | 'send' | 'menu' | 'chevron'
+export type NavItem = { key: string; href: string; label: string; icon: IconName; area?: string }
 
-/** The rail, in the order the screenshot shows it. */
+export function uiIcon(name: IconName, size = 18): string {
+  const paths: Record<IconName, string> = {
+    home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5M9 21v-7h6v7"/>',
+    sparkles: '<path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/>',
+    orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6M9 12h6"/>',
+    products: '<path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+    customers: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+    store: '<path d="M3 9 5 3h14l2 6"/><path d="M5 13v8h14v-8M9 21v-6h6v6"/><path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/>',
+    pages: '<path d="M6 2h9l5 5v15H6V2Z"/><path d="M14 2v6h6M9 13h8M9 17h6"/>',
+    collections: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    funnel: '<path d="M3 4h18l-7 8v6l-4 2v-8L3 4Z"/>',
+    bundle: '<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M7.5 8C5 8 4 6.8 4 5.3S5.2 3 6.6 3C9 3 12 8 12 8m4.5 0C19 8 20 6.8 20 5.3S18.8 3 17.4 3C15 3 12 8 12 8"/>',
+    marketing: '<path d="m3 11 18-5v12L3 13v-2Z"/><path d="M7 14v5a2 2 0 0 0 2 2h2v-6"/>',
+    discount: '<path d="M20 13 13 20a2 2 0 0 1-2.8 0L4 13.8V4h9.8L20 10.2a2 2 0 0 1 0 2.8Z"/><circle cx="9" cy="9" r="1"/>',
+    ads: '<path d="M3 11v2h4l9 5V6L7 11H3Z"/><path d="M7 13v6h4"/><path d="M20 9v6"/>',
+    analytics: '<path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/>',
+    experiment: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M8 15h8"/>',
+    profit: '<circle cx="12" cy="12" r="9"/><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8M12 6v12"/>',
+    build: '<path d="m14.7 6.3 3-3a2.1 2.1 0 0 1 3 3l-3 3M13 8l3 3-8.5 8.5a2.1 2.1 0 0 1-3-3L13 8Z"/><path d="m4 4 4 4"/>',
+    research: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/>',
+    creative: '<path d="M12 3a9 9 0 1 0 9 9c0-1.1-.9-2-2-2h-2.2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2Z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="10" cy="7" r="1"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+    mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
+    send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
+    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    chevron: '<path d="m9 18 6-6-6-6"/>',
+  }
+  return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`
+}
+
 export const NAV: NavItem[] = [
-  { key: 'dashboard', href: '/admin', label: 'Dashboard', glyph: '▦' },
-  { key: 'ai', href: '/admin/ai', label: 'Assistant', glyph: '◮' },
-  { key: 'orders', href: '/admin/orders', label: 'Orders', glyph: '▤', area: 'orders' },
-  { key: 'products', href: '/admin/products', label: 'Products', glyph: '◫', area: 'products' },
-  { key: 'build', href: '/admin/build', label: 'Build', glyph: '⚒', area: 'store' },
-  { key: 'research', href: '/admin/research', label: 'Research & avatars', glyph: '◎', area: 'products' },
-  { key: 'market', href: '/admin/market', label: 'Market', glyph: '◐', area: 'products' },
-  { key: 'creative', href: '/admin/creative', label: 'Creative', glyph: '◧', area: 'products' },
-  { key: 'ads', href: '/admin/ads', label: 'Ads', glyph: '◭', area: 'ads' },
-  { key: 'collections', href: '/admin/collections', label: 'Collections', glyph: '◇', area: 'organization' },
-  { key: 'customers', href: '/admin/customers', label: 'Customers', glyph: '▣', area: 'customers' },
-  { key: 'promotions', href: '/admin/promotions', label: 'Promotions', glyph: '◈', area: 'promotions' },
-  { key: 'analytics', href: '/admin/analytics', label: 'Analytics', glyph: '▥', area: 'analytics' },
-  { key: 'cro', href: '/admin/cro', label: 'Experiments', glyph: '◒', area: 'analytics' },
-  { key: 'pages', href: '/admin/pages', label: 'Pages & funnels', glyph: '▤', area: 'store' },
-  { key: 'funnels', href: '/admin/funnels', label: 'Funnels', glyph: '⏷', area: 'store' },
-  { key: 'bundles', href: '/admin/bundles', label: 'Bundles', glyph: '⧉', area: 'promotions' },
-  { key: 'profit', href: '/admin/profit', label: 'Profit', glyph: '$', area: 'analytics' },
-  { key: 'store', href: '/admin/store', label: 'Store designer', glyph: '◔', area: 'store' },
-  { key: 'marketing', href: '/admin/marketing', label: 'Email & SEO', glyph: '⚌', area: 'emails' },
-  { key: 'settings', href: '/admin/settings', label: 'Settings', glyph: '⚏', area: 'setup' },
+  { key: 'dashboard', href: '/admin', label: 'Home', icon: 'home' },
+  { key: 'ai', href: '/admin/ai', label: 'Assistant', icon: 'sparkles' },
+  { key: 'orders', href: '/admin/orders', label: 'Orders', icon: 'orders', area: 'orders' },
+  { key: 'products', href: '/admin/products', label: 'Products', icon: 'products', area: 'products' },
+  { key: 'customers', href: '/admin/customers', label: 'Customers', icon: 'customers', area: 'customers' },
+]
+
+const GROUPS: Array<{ label: string; icon: IconName; children: NavItem[] }> = [
+  { label: 'Sales channels', icon: 'store', children: [
+    { key: 'store', href: '/admin/store', label: 'Online store', icon: 'store', area: 'store' },
+    { key: 'pages', href: '/admin/pages', label: 'Pages', icon: 'pages', area: 'store' },
+    { key: 'collections', href: '/admin/collections', label: 'Collections', icon: 'collections', area: 'organization' },
+    { key: 'funnels', href: '/admin/funnels', label: 'Funnels', icon: 'funnel', area: 'store' },
+    { key: 'bundles', href: '/admin/bundles', label: 'Bundles', icon: 'bundle', area: 'promotions' },
+  ] },
+  { label: 'Marketing', icon: 'marketing', children: [
+    { key: 'marketing', href: '/admin/marketing', label: 'Campaigns & flows', icon: 'marketing', area: 'emails' },
+    { key: 'promotions', href: '/admin/promotions', label: 'Discounts', icon: 'discount', area: 'promotions' },
+    { key: 'ads', href: '/admin/ads', label: 'Ads', icon: 'ads', area: 'ads' },
+  ] },
+  { label: 'Insights', icon: 'analytics', children: [
+    { key: 'analytics', href: '/admin/analytics', label: 'Analytics & attribution', icon: 'analytics', area: 'analytics' },
+    { key: 'cro', href: '/admin/cro', label: 'Experiments', icon: 'experiment', area: 'analytics' },
+    { key: 'profit', href: '/admin/profit', label: 'Profit', icon: 'profit', area: 'analytics' },
+  ] },
+  { label: 'Create', icon: 'build', children: [
+    { key: 'build', href: '/admin/build', label: 'Build store', icon: 'build', area: 'store' },
+    { key: 'research', href: '/admin/research', label: 'Research & avatars', icon: 'research', area: 'products' },
+    { key: 'market', href: '/admin/market', label: 'Market strategy', icon: 'analytics', area: 'products' },
+    { key: 'creative', href: '/admin/creative', label: 'Creative', icon: 'creative', area: 'products' },
+  ] },
 ]
 
 export type ShellInput = {
@@ -40,6 +81,7 @@ export type ShellInput = {
   body: string
   todos: Todo[]
   messages: ChatMessage[]
+  queue: AssistantRequest[]
   publish: { label: string; ready: boolean; reason: string }
   userName: string
   storeUrl: string
@@ -66,7 +108,8 @@ export function shell(input: ShellInput): string {
 <style>${css(brand.primary ?? '#7a4a2b')}</style>
 </head><body>
 <div class="top">
-  <div class="logo">◮ <strong>Amboras</strong></div>
+  <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation">${uiIcon('menu')}</button>
+  <div class="logo"><span class="logo-mark">${uiIcon('store', 17)}</span><strong>Amboras</strong></div>
   <form method="get" action="/admin/switch" class="switcher">
     <select name="storeId" onchange="this.form.submit()" aria-label="Store">
       ${input.stores.map((store) => `<option value="${escapeHtml(store.id)}" ${store.id === input.store.id ? 'selected' : ''}>${escapeHtml(store.name)}</option>`).join('')}
@@ -82,30 +125,33 @@ export function shell(input: ShellInput): string {
 </div>
 <div class="frame">
   <nav class="rail" aria-label="Sections">
-    ${NAV.map(
-      (item) => `<a href="${item.href}" class="${item.key === input.active ? 'on' : ''}" title="${escapeHtml(item.label)}"
-        data-area="${item.area ?? ''}"><span>${item.glyph}</span><b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`,
-    ).join('')}
-    <div class="rail-foot"><span class="avatar">${escapeHtml(input.userName.slice(0, 1).toUpperCase())}</span></div>
+    <div class="nav-main">${NAV.map((item) => navLink(item, input.active)).join('')}</div>
+    ${GROUPS.map((group, index) => {
+      const active = group.children.some((item) => item.key === input.active)
+      return `<details class="nav-tree ${active ? 'active' : ''}" ${active || index < 2 ? 'open' : ''}><summary>${uiIcon(group.icon)}<b>${escapeHtml(group.label)}</b>${uiIcon('chevron', 14)}</summary><div>${group.children.map((item) => navLink(item, input.active, true)).join('')}</div></details>`
+    }).join('')}
+    <div class="rail-foot"><a href="/admin/settings" class="${input.active === 'settings' ? 'on' : ''}">${uiIcon('settings')}<b>Settings</b></a><span class="avatar">${escapeHtml(input.userName.slice(0, 1).toUpperCase())}</span></div>
   </nav>
   <main class="page">${input.body}</main>
   <aside class="panel">
     <header>
-      <div class="panel-title">◮ Amboras Business Assistant <span class="beta">Beta</span></div>
-      <p class="muted">It runs the tools. It does not tell you where to click.${input.modelLabel ? ` ${escapeHtml(input.modelLabel)}.` : ''}</p>
+      <div class="panel-title">${uiIcon('sparkles', 16)} Amboras Business Assistant <span class="beta">Beta</span></div>
+      <p class="muted">Typed and voice requests run in order.${input.modelLabel ? ` ${escapeHtml(input.modelLabel)}.` : ''}</p>
     </header>
     <div class="thread" id="thread">
       ${input.messages.length
         ? input.messages.map(bubble).join('')
         : `<div class="empty"><p class="muted">Ask for something. It will do it and tell you what changed.</p></div>`}
     </div>
-    ${input.messages.length ? '' : `<div class="suggestions">${SUGGESTIONS.map((suggestion) => `<button type="button" onclick="askThis(${escapeHtml(JSON.stringify(suggestion.prompt))})"><span>◔</span> ${escapeHtml(suggestion.label)}</button>`).join('')}</div>`}
+    ${input.messages.length ? '' : `<div class="suggestions">${SUGGESTIONS.map((suggestion) => `<button type="button" onclick="askThis(${escapeHtml(JSON.stringify(suggestion.prompt))})">${uiIcon('sparkles', 14)} ${escapeHtml(suggestion.label)}</button>`).join('')}</div>`}
+    ${input.queue.some((request) => request.status === 'queued' || request.status === 'running') ? `<div class="assistant-queue"><div class="eyebrow">Request queue</div>${input.queue.filter((request) => request.status === 'queued' || request.status === 'running').reverse().map((request) => `<div class="queue-item"><span><b>${escapeHtml(request.status)}</b><small>${escapeHtml(request.text)}</small></span>${request.status === 'queued' ? `<form method="post" action="/admin/assistant/queue/${escapeHtml(request.id)}/cancel"><button type="submit" aria-label="Cancel request">×</button></form>` : '<i class="queue-spin"></i>'}</div>`).join('')}</div>` : ''}
     <form class="composer" method="post" action="/admin/ask" id="composer">
       <input type="hidden" name="page" value="${escapeHtml(input.active)}">
       <textarea name="text" id="ask" rows="2" placeholder="Ask a question, or tell it what to change…" required></textarea>
       <div class="composer-row">
         <span class="confirm">Edits land on the draft; publish when it looks right.</span>
-        <button class="send" type="submit" aria-label="Send">▶</button>
+        <button class="voice" id="voice" type="button" aria-label="Dictate request">${uiIcon('mic', 16)}</button>
+        <button class="send" type="submit" aria-label="Send">${uiIcon('send', 15)}</button>
       </div>
     </form>
     <div class="next">
@@ -117,6 +163,7 @@ export function shell(input: ShellInput): string {
 <script>
 function askThis(prompt){ var box = document.getElementById('ask'); box.value = prompt; box.focus(); }
 (function(){
+  var navToggle=document.getElementById('nav-toggle');navToggle&&navToggle.addEventListener('click',function(){document.body.classList.toggle('nav-open')});
   var thread = document.getElementById('thread'); if (thread) thread.scrollTop = thread.scrollHeight;
   var form = document.getElementById('composer');
   form && form.addEventListener('submit', function(){
@@ -125,6 +172,8 @@ function askThis(prompt){ var box = document.getElementById('ask'); box.value = 
   document.getElementById('ask') && document.getElementById('ask').addEventListener('keydown', function(event){
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') form.requestSubmit();
   });
+  var voice=document.getElementById('voice');var Speech=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(voice){if(!Speech){voice.disabled=true;voice.title='Voice input is not supported in this browser'}else{voice.addEventListener('click',function(){var recognition=new Speech();recognition.lang=document.documentElement.lang||'en-US';recognition.interimResults=false;voice.classList.add('listening');recognition.onresult=function(event){var box=document.getElementById('ask');box.value=(box.value+' '+event.results[0][0].transcript).trim();box.focus()};recognition.onend=function(){voice.classList.remove('listening')};recognition.onerror=recognition.onend;recognition.start()})}}
   // Activity dots: the rail lights up the area a tool is touching, live.
   try {
     var stream = new EventSource('/admin/activity');
@@ -141,6 +190,10 @@ function askThis(prompt){ var box = document.getElementById('ask'); box.value = 
 })();
 </script>
 </body></html>`
+}
+
+function navLink(item: NavItem, active: string, child = false): string {
+  return `<a href="${item.href}" class="${item.key === active ? 'on' : ''}${child ? ' child' : ''}" title="${escapeHtml(item.label)}" data-area="${item.area ?? ''}">${uiIcon(item.icon)}<b>${escapeHtml(item.label)}</b><i class="dot"></i></a>`
 }
 
 function bubble(message: ChatMessage): string {
@@ -299,5 +352,23 @@ input[type=checkbox],input[type=radio]{width:auto;padding:0}
 @media (max-width:1120px){.frame{grid-template-columns:var(--rail) minmax(0,1fr)}.panel{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
 @media (max-width:820px){:root{--rail:48px}.rail{padding:.55rem .35rem}.rail a{justify-content:center;padding:.3rem}.rail a b{display:none}.rail a.on{box-shadow:none}.page{padding:1rem}.top .chip:not(:last-of-type){display:none}.commerce-kpis{grid-template-columns:repeat(2,1fr)}.dashboard-grid,.dash-row{grid-template-columns:1fr}.cro-metrics{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:600px){.top{gap:.4rem;padding:0 .55rem}.top .logo strong{display:none}.dash-head{align-items:flex-start;flex-direction:column}.dash-actions{display:grid;grid-template-columns:1fr 1fr auto;width:100%}.dash-actions .btn{justify-content:center}.commerce-kpis{gap:.65rem}.metric-card{padding:.75rem .8rem}.metric-card .value{font-size:1.3rem}}
+/* Shopify-like operator frame: conventional icons, grouped trees and a quiet
+   neutral canvas. These rules intentionally sit last so the shell remains
+   compatible with older page components while the frame is fully replaced. */
+:root{--paper:#f1f1f1;--card:#fff;--ink:#202223;--muted:#6d7175;--line:#dfe3e8;--accent:#008060;--ok:#008060;--rail:240px;--panel:330px}
+body{font-size:13px}.icon{display:block;flex:0 0 auto}.serif,.head h1{font-family:'Inter',ui-sans-serif,system-ui,sans-serif;font-weight:600;letter-spacing:-.025em}.head h1{font-size:1.55rem}
+.top{height:56px;background:#1a1a1a;border-bottom-color:#303030;padding:0 1rem;gap:.55rem;box-shadow:0 1px 4px #0003}.top .logo{display:flex;align-items:center;gap:.5rem;min-width:150px}.logo-mark{width:28px;height:28px;border-radius:7px;background:#95bf47;color:#132b1f;display:grid;place-items:center}.switcher select,.chip{background:#303030;border-color:#454545;border-radius:7px}.publish{border-radius:7px}.nav-toggle{display:none;border:0;background:transparent;color:#fff;padding:.4rem}
+.frame{grid-template-columns:var(--rail) minmax(0,1fr);min-height:calc(100vh - 56px)}
+.rail{top:56px;height:calc(100vh - 56px);background:#f6f6f7;border-right:1px solid #d9d9dc;padding:.7rem .65rem;gap:.25rem;box-shadow:none}
+.nav-main{display:grid;gap:.12rem;border-bottom:1px solid #e2e2e4;padding-bottom:.5rem;margin-bottom:.15rem}.rail a{min-height:34px;border-radius:7px;padding:.4rem .55rem;gap:.7rem;color:#44474a}.rail a .icon{width:17px;height:17px;color:#5c5f62}.rail a b{font-size:12.5px;font-weight:500}.rail a:hover{background:#e9e9eb}.rail a.on{background:#e0e0e2;color:#202223;box-shadow:none;font-weight:600}.rail a.on .icon{color:#202223}
+.nav-tree{margin:.05rem 0}.nav-tree summary{list-style:none;display:flex;align-items:center;gap:.7rem;min-height:34px;padding:.4rem .55rem;border-radius:7px;cursor:pointer;color:#44474a}.nav-tree summary::-webkit-details-marker{display:none}.nav-tree summary:hover{background:#e9e9eb}.nav-tree summary b{font-size:12.5px;font-weight:550;flex:1}.nav-tree summary .icon{width:17px;height:17px}.nav-tree summary .icon:last-child{width:13px;height:13px;transition:transform .15s;color:#8c9196}.nav-tree[open] summary .icon:last-child{transform:rotate(90deg)}.nav-tree.active>summary{color:#202223;font-weight:600}.nav-tree>div{border-left:1px solid #cfd2d4;margin:.1rem 0 .25rem 1.05rem;padding-left:.5rem}.rail a.child{min-height:31px;padding-left:.55rem}.rail a.child .icon{width:15px;height:15px}
+.rail-foot{display:flex;align-items:center;gap:.35rem;border-top:1px solid #e2e2e4;padding:.55rem 0 0;margin-top:auto}.rail-foot a{flex:1}.rail-foot .avatar{margin-right:.4rem}.page{max-width:1260px;padding:1.65rem 2rem 4rem}.panel{display:none;top:56px;height:calc(100vh - 56px)}
+.card,.metric-card{border-color:#e1e3e5;border-radius:12px;box-shadow:0 1px 3px #0000000a}.btn{border-color:#c9cccf;border-radius:7px;box-shadow:0 1px 0 #0000000d}.btn.primary{background:#008060;border-color:#008060}.btn.primary:hover{background:#006e52}.pulse-card{background:linear-gradient(145deg,#102f25,#174c3b)}
+.voice,.send{display:grid;place-items:center;border:0;border-radius:8px;width:34px;height:32px;cursor:pointer}.voice{background:#eef0f1;color:#4f5559}.voice.listening{color:#fff;background:#b3261e;animation:pulse 1s infinite}.voice:disabled{opacity:.35;cursor:not-allowed}.send{margin-left:0;background:#202223;color:#fff}.send:disabled{opacity:.5}
+.assistant-queue{border-top:1px solid var(--line);padding:.65rem .8rem;max-height:150px;overflow:auto}.queue-item{display:flex;align-items:center;gap:.45rem;justify-content:space-between;padding:.4rem 0;border-top:1px solid #eef0f1}.queue-item:first-of-type{margin-top:.35rem}.queue-item span{min-width:0}.queue-item b{font-size:10px;text-transform:uppercase;color:var(--ok)}.queue-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);max-width:230px}.queue-item button{border:0;background:none;color:var(--muted);cursor:pointer}.queue-spin{width:12px;height:12px;border:2px solid #d9ddda;border-top-color:var(--ok);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.create-panel>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none}.create-panel>summary::-webkit-details-marker{display:none}.flow-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;margin-bottom:1rem}.flow-card{margin:0}.flow-card>summary{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:.7rem;cursor:pointer;list-style:none}.flow-card>summary::-webkit-details-marker{display:none}.flow-card summary small{display:block;color:var(--muted);font-size:11px}.flow-icon{width:32px;height:32px;border-radius:9px;background:#e3f1eb;color:#007a5c;display:grid;place-items:center;font-size:10px;font-weight:700}.section-title{display:flex;justify-content:space-between;align-items:flex-end;margin:.2rem 0 .7rem}.section-title h2{font-size:1rem}.section-title p{font-size:11.5px;margin:.15rem 0 0}.check{display:flex;align-items:center;gap:.35rem;font-size:12px;color:var(--muted)}
+@media (min-width:1560px){.frame{grid-template-columns:var(--rail) minmax(0,1fr) var(--panel)}.panel{display:flex}.page{padding-left:2.2rem;padding-right:2.2rem}}
+@media (min-width:901px) and (max-width:1559px){:root{--rail:240px}.frame{grid-template-columns:var(--rail) minmax(0,1fr)}}
+@media (max-width:900px){:root{--rail:240px}.nav-toggle{display:grid;place-items:center}.frame{display:block}.rail{position:fixed;z-index:60;left:-260px;top:56px;width:240px;transition:left .2s;box-shadow:10px 0 28px #0002}.nav-open .rail{left:0}.rail a{justify-content:flex-start}.rail a b{display:block}.page{padding:1rem}.flow-grid{grid-template-columns:1fr}.top .logo{min-width:0}.top .chip{display:none}}
 `
 }

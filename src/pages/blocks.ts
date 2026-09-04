@@ -772,7 +772,7 @@ export const BLOCKS: BlockDefinition[] = [
     group: 'Social proof',
     icon: '💳',
     description: 'The row of card and wallet marks that says "this is a real shop".',
-    schema: { methods: { type: 'string', label: 'Methods (one per line)', multiline: true, default: 'VISA\nMastercard\nAMEX\nApple Pay\nGoogle Pay\nPayPal\nKlarna' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
+    schema: { methods: { type: 'string', label: 'Methods (one per line)', multiline: true, default: 'VISA\nMastercard\nAMEX\nApple Pay\nGoogle Pay\nLink\nKlarna' }, ...COMMON, padding: { ...(COMMON.padding as object), default: 'small' } as never, align: { ...(COMMON.align as object), default: 'center' } as never },
     render: (settings, _context, block) => wrap(settings, block, `<div class="payicons">${list(settings.methods).map((method) => `<i>${e(method)}</i>`).join('')}</div>`),
   },
   {

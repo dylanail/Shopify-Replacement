@@ -1,7 +1,7 @@
 import { getDb } from '../lib/db.ts'
 import { badRequest, escapeHtml, html, notFound, redirect, Raw, Router, setCookie, type Ctx } from '../lib/http.ts'
-import { addToCart, applyCode, attachPaymentIntent, createCart, getCart, saveCheckoutDraft, setQuantity, setShipping, totals } from '../domain/cart.ts'
-import { getRegion, defaultRegion } from '../domain/regions.ts'
+import { addToCart, applyCode, attachPaymentIntent, createCart, getCart, saveCheckoutDraft, setCartRegion, setQuantity, setShipping, totals } from '../domain/cart.ts'
+import { convertCents, getRegion, defaultRegion, listRegions, regionForCountry, toBaseCents, type Region } from '../domain/regions.ts'
 import { orderByPaymentIntent, recordUpsell, setPaymentStatus } from '../domain/orders.ts'
 import { getPage, homePage, liveCheckoutPage } from '../pages/store.ts'
 import { stripeFor, verifyWebhookSignature } from '../payments/stripe.ts'
@@ -20,7 +20,8 @@ import { CheckoutError, completeCart, getOrder } from '../domain/orders.ts'
 import { createReview, listReviews, statsFor } from '../domain/reviews.ts'
 import { environment, getStore, type Store } from '../control/stores.ts'
 import { activeStorefrontConfig } from '../control/plugins.ts'
-import { companionsFor, sessionFor as analyticsSession, track } from '../analytics/events.ts'
+import { attributeOrder, captureAttribution, companionsFor, sessionFor as analyticsSession, track } from '../analytics/events.ts'
+import { queueServerEvents } from '../analytics/server-events.ts'
 import { orderContext, sendEmail } from '../email/send.ts'
 import { findRedirect, llmsTxt, robots, sitemap } from '../seo/schema.ts'
 import * as view from './render.ts'
@@ -29,6 +30,7 @@ import { atomFeed, rssFeed } from './feeds.ts'
 import { syncOrderTracking } from '../shipping/seventeen-track.ts'
 
 const CART_COOKIE = 'amboras_cart'
+const REGION_COOKIE = 'amboras_region'
 const log = logger('checkout')
 
 /**
@@ -41,6 +43,13 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
   const env = environment(db, store.id, opts.preview ? 'draft' : store.status === 'live' ? 'live' : 'draft')
   const cartId = ctx.cookies[`${CART_COOKIE}_${store.id}`]
   const cart = cartId ? getCart(db, store.id, cartId) : null
+  const regionCookie = ctx.cookies[`${REGION_COOKIE}_${store.id}`]
+  const country = String(ctx.req.headers['cf-ipcountry'] ?? ctx.req.headers['x-vercel-ip-country'] ?? '')
+  const regions = listRegions(db, store.id)
+  const region = (cart?.regionId ? getRegion(db, store.id, cart.regionId) : null)
+    ?? (regionCookie ? getRegion(db, store.id, regionCookie) : null)
+    ?? (country ? regionForCountry(db, store.id, country) : null)
+    ?? defaultRegion(db, store.id)
   const base = process.env.AMBORAS_STOREFRONT_HOST && !opts.preview ? '' : `${opts.preview ? '/preview' : '/s'}/${store.slug}`
   return {
     db,
@@ -50,30 +59,58 @@ export function storeViewFor(ctx: Ctx, store: Store, opts: { preview?: boolean }
     preview: opts.preview ?? false,
     cart: cart && !cart.orderId ? cart : null,
     totals: null,
+    region,
+    regions,
   }
 }
 
 function withTotals(current: StoreView): StoreView {
-  const cart = current.cart ?? createCart(current.db, current.store.id)
+  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id)
   return { ...current, cart, totals: totals(current.db, current.store.id, cart) }
 }
 
 function ensureCart(ctx: Ctx, current: StoreView) {
-  const cart = current.cart ?? createCart(current.db, current.store.id)
+  const cart = current.cart ?? createCart(current.db, current.store.id, current.region?.id)
   if (!current.cart) {
     setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
   }
   return cart
 }
 
-function record(ctx: Ctx, current: StoreView, type: Parameters<typeof track>[3], detail: Parameters<typeof track>[4] = {}) {
+function record(ctx: Ctx, current: StoreView, type: Parameters<typeof track>[3], detail: Parameters<typeof track>[4] & { email?: string; phone?: string; externalId?: string } = {}) {
   if (current.preview) return
+  const referrer = String(ctx.req.headers.referer ?? '')
   const session = analyticsSession(current.db, current.store.id, {
     ip: ctx.ip,
     userAgent: String(ctx.req.headers['user-agent'] ?? ''),
-    referrer: String(ctx.req.headers.referer ?? ''),
+    referrer,
+    touch: captureAttribution(ctx.url, referrer),
   })
-  track(current.db, current.store.id, session, type, { path: ctx.url.pathname, ...detail })
+  const rawValue = detail.amountCents
+  const analyticsValue = rawValue === undefined
+    ? undefined
+    : type === 'checkout.start' || type === 'checkout.complete'
+      ? toBaseCents(rawValue, current.region, current.store.currency)
+      : rawValue
+  const eventId = track(current.db, current.store.id, session, type, {
+    path: ctx.url.pathname, ...detail, ...(analyticsValue === undefined ? {} : { amountCents: analyticsValue }),
+  })
+  const valueCents = rawValue === undefined ? undefined : type === 'cart.add' ? convertCents(rawValue, current.region, current.store.currency) : rawValue
+  const fbclid = ctx.url.searchParams.get('fbclid') ?? undefined
+  queueServerEvents(current.db, current.store.id, {
+    eventId: type === 'checkout.complete' && detail.externalId ? detail.externalId : eventId,
+    type, url: ctx.url.toString(), referrer, ip: ctx.ip, userAgent: String(ctx.req.headers['user-agent'] ?? ''),
+    currency: current.totals?.currency ?? current.region?.currency ?? current.store.currency,
+    ...(valueCents === undefined ? {} : { valueCents }),
+    ...(detail.productId ? { productId: detail.productId } : {}),
+    ...(detail.email ? { email: detail.email } : {}), ...(detail.phone ? { phone: detail.phone } : {}),
+    ...(detail.externalId ? { externalId: detail.externalId } : {}),
+    ...(ctx.cookies._fbp ? { fbp: ctx.cookies._fbp } : {}),
+    ...(ctx.cookies._fbc ? { fbc: ctx.cookies._fbc } : fbclid ? { fbc: `fb.1.${Date.now()}.${fbclid}` } : {}),
+    ...(ctx.cookies._ttp ? { ttp: ctx.cookies._ttp } : {}),
+    ...(ctx.url.searchParams.get('ttclid') ? { ttclid: ctx.url.searchParams.get('ttclid') as string } : {}),
+  })
+  return { sessionId: session, eventId }
 }
 
 export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview: boolean } | null): Router {
@@ -84,6 +121,18 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!resolved) throw notFound('No store at this address')
     return storeViewFor(ctx, resolved.store, { preview: resolved.preview })
   }
+
+  router.post('/localize', async (ctx) => {
+    const current = open(ctx)
+    const body = await ctx.body()
+    const regionId = String(body.regionId ?? '')
+    const region = getRegion(current.db, current.store.id, regionId)
+    if (!region) throw badRequest('Unknown country or currency')
+    setCookie(ctx.res, `${REGION_COOKIE}_${current.store.id}`, region.id, { maxAge: 60 * 60 * 24 * 365 })
+    const cart = ensureCart(ctx, current)
+    setCartRegion(current.db, current.store.id, cart.id, region.id)
+    return redirect(`${current.base}${String(body.returnTo ?? '') || '/'}`)
+  })
 
   router.get('/', (ctx) => {
     const current = withTotals(open(ctx))
@@ -270,7 +319,6 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const { upsertCustomer } = await import('../domain/customers.ts')
     upsertCustomer(current.db, current.store.id, { email, marketing: true })
     record(ctx, current, 'signup')
-    void sendEmail(current.db, current.store.id, { template: 'welcome', to: email, context: { storeUrl: `${ctx.url.origin}${current.base}` } }).catch(() => undefined)
     return html(view.simplePage(current, 'You are on the list', '<p>One email when there is something to say. Nothing else.</p>'))
   })
 
@@ -398,7 +446,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
   router.post('/checkout/buy', async (ctx) => {
     const current = open(ctx)
     const body = await ctx.body()
-    const cart = createCart(current.db, current.store.id)
+    const cart = createCart(current.db, current.store.id, current.region?.id)
     setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, cart.id, { maxAge: 60 * 60 * 24 * 30 })
     addToCart(current.db, current.store.id, cart.id, String(body.variantId ?? ''), Math.max(1, Number(body.quantity ?? 1)), 'buy-now')
     const line = getCart(current.db, current.store.id, cart.id)?.items[0]
@@ -527,7 +575,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const funnel = funnelForProducts(current.db, current.store.id, order.items.map((item) => item.productId))
     const offer = resolveOffer(current.db, current.store.id, funnel?.upsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 20)
     if (!offer) return redirect(`${current.base}/orders/${order.id}`)
-    return html(view.offerPage(current, order, offer, 'upsell'))
+    return html(view.offerPage({ ...current, region: regionForOrder(current, order.id) }, order, offer, 'upsell'))
   })
 
   router.get('/orders/:id/downsell', (ctx) => {
@@ -539,7 +587,7 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     if (!funnel?.downsell || (!funnel.downsell.variantId && !funnel.downsell.discountPercent)) return redirect(`${current.base}/orders/${order.id}`)
     const offer = resolveOffer(current.db, current.store.id, funnel.downsell, () => { const picked = pickOffer(current, order); return picked ? { product: picked.product, variantId: picked.variantId } : null }, 35)
     if (!offer) return redirect(`${current.base}/orders/${order.id}`)
-    return html(view.offerPage(current, order, offer, 'downsell'))
+    return html(view.offerPage({ ...current, region: regionForOrder(current, order.id) }, order, offer, 'downsell'))
   })
 
   router.post('/orders/:id/downsell', async (ctx) => {
@@ -554,15 +602,17 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       recordDownsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}`)
     }
-    const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+    const basePrice = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+    const region = regionForOrder(current, order.id)
+    const price = convertCents(basePrice, region, current.store.currency)
     const paid = await chargeSaved(current, order, price, { downsell: 'true' })
     if (!paid.ok) {
       recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
       return redirect(`${current.base}/orders/${order.id}?offer=failed`)
     }
     const variant = offer.product.variants.find((entry) => entry.id === offer.variantId)!
-    recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line: { variantId: variant.id, productId: offer.product.id, title: offer.product.title, variantTitle: variant.title, image: variant.image || offer.product.heroImage, unitCents: price, quantity: 1, source: 'downsell' }, amountCents: price })
-    record(ctx, current, 'checkout.complete', { productId: offer.product.id, amountCents: price, meta: { downsell: true } })
+    recordDownsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line: { variantId: variant.id, productId: offer.product.id, title: offer.product.title, variantTitle: variant.title, image: variant.image || offer.product.heroImage, unitCents: price, quantity: 1, source: 'downsell' }, amountCents: price, baseAmountCents: basePrice })
+    record(ctx, { ...current, region }, 'checkout.complete', { productId: offer.product.id, amountCents: price, meta: { downsell: true } })
     return redirect(`${current.base}/orders/${order.id}`)
   })
 
@@ -578,7 +628,9 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
       recordUpsell(current.db, current.store.id, order.id, { offered: offer?.variantId ?? 'none', accepted: false })
       return redirect(`${current.base}/orders/${order.id}/downsell`)
     }
-    const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+    const basePrice = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+    const region = regionForOrder(current, order.id)
+    const price = convertCents(basePrice, region, current.store.currency)
     const paid = await chargeSaved(current, order, price, { upsell: 'true' })
     if (!paid.ok) {
       recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: false })
@@ -587,8 +639,8 @@ export function storefrontRouter(resolve: (ctx: Ctx) => { store: Store; preview:
     const paymentIntentId = paid.intentId
     const variant = offer.product.variants.find((entry) => entry.id === offer.variantId)!
     const line: LineItem = { variantId: variant.id, productId: offer.product.id, title: offer.product.title, variantTitle: variant.title, image: variant.image || offer.product.heroImage, unitCents: price, quantity: 1, source: 'post-purchase' }
-    recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line, amountCents: price, ...(paymentIntentId ? { paymentIntentId } : {}) })
-    record(ctx, current, 'checkout.complete', { productId: offer.product.id, amountCents: price, meta: { upsell: true } })
+    recordUpsell(current.db, current.store.id, order.id, { offered: offer.variantId, accepted: true, line, amountCents: price, baseAmountCents: basePrice, ...(paymentIntentId ? { paymentIntentId } : {}) })
+    record(ctx, { ...current, region }, 'checkout.complete', { productId: offer.product.id, amountCents: price, meta: { upsell: true } })
     return redirect(`${current.base}/orders/${order.id}`)
   })
 
@@ -666,8 +718,17 @@ function regionOf(current: StoreView) {
   return current.cart?.regionId ? getRegion(current.db, current.store.id, current.cart.regionId) : defaultRegion(current.db, current.store.id)
 }
 
+function regionForOrder(current: StoreView, orderId: string): Region | null {
+  const row = current.db.one<{ region_id: string | null }>('SELECT region_id FROM carts WHERE store_id = ? AND order_id = ?', current.store.id, orderId)
+  return row?.region_id ? getRegion(current.db, current.store.id, row.region_id) : current.region ?? null
+}
+
 function afterOrder(ctx: Ctx, current: StoreView, order: ReturnType<typeof completeCart>) {
-  record(ctx, current, 'checkout.complete', { amountCents: order.totalCents })
+  const event = record(ctx, current, 'checkout.complete', {
+    amountCents: order.totalCents, email: order.email, phone: order.address.phone,
+    externalId: order.id, meta: { orderId: order.id },
+  })
+  if (event) attributeOrder(current.db, current.store.id, order.id, event.sessionId)
   setCookie(ctx.res, `${CART_COOKIE}_${current.store.id}`, '', { maxAge: 0 })
   // The receipt is not allowed to fail the checkout: the order is already
   // written and paid for by the time this runs.

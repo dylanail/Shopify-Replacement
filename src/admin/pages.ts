@@ -12,7 +12,7 @@ import { listAudit, listTodos } from '../control/todos.ts'
 import { allPlugins, pluginCategories } from '../control/catalog-plugins.ts'
 import { listInstalled } from '../control/plugins.ts'
 import { catalog, resolvedModels } from '../agent/models.ts'
-import { BENCHMARK, funnel, kpis, liveVisitors, recentEvents, revenueSeries } from '../analytics/events.ts'
+import { attributionReport, BENCHMARK, funnel, kpis, liveVisitors, recentEvents, revenueSeries } from '../analytics/events.ts'
 import { listSends } from '../email/send.ts'
 import { TEMPLATES } from '../email/templates.ts'
 import { listSeoPages } from '../seo/schema.ts'
@@ -29,13 +29,16 @@ import { listExperiments, type Experiment } from '../analytics/experiments.ts'
 import { ADVERTORIAL_FORMATS, PDP_FORMATS } from '../agent/directions.ts'
 import { salesSummary } from '../domain/orders.ts'
 import { listTools, toolCountsByArea } from '../agent/registry.ts'
-import { renderArtifact } from './shell.ts'
+import { renderArtifact, uiIcon, type IconName } from './shell.ts'
 import { avatarOptions, avatarsCard, competitorsCard, regenerateCard } from './growth-pages.ts'
 import { behaviourCard, funnelTestCard, healthCard, legalCard, popupCard, ripCard, suggestCard } from './plan-pages.ts'
 import { listCustomBlocks } from '../pages/custom-blocks.ts'
 import type { ChatMessage } from '../agent/chat.ts'
 import { seventeenTrackConfigured } from '../shipping/seventeen-track.ts'
 import { domainsFor } from '../control/domains.ts'
+import { listFlows, recentFlowDeliveries } from '../email/flows.ts'
+import { serverEventSummary } from '../analytics/server-events.ts'
+import { listAssistantQueue } from '../agent/queue.ts'
 
 type Ctx = { db: Db; store: Store; userName: string; storeUrl: string; flash?: string }
 
@@ -83,12 +86,12 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
   const runningExperiments = listExperiments(ctx.db, ctx.store.id).filter((entry) => ['running', 'ready', 'paused'].includes(entry.status))
   const todos = listTodos(ctx.db, ctx.store.id).filter((entry) => entry.status !== 'done').slice(0, 4)
   const pendingOrders = allOrders.filter((order) => order.status !== 'cancelled' && order.fulfillmentStatus === 'unfulfilled').length
-  const tiles: Array<[string, string, number, string]> = [
-    ['Total sales', format(stats.revenueCents, ctx.store.currency), stats.deltas.revenueCents ?? 0, '↗'],
-    ['Orders', String(stats.orders), stats.deltas.orders ?? 0, '▤'],
-    ['Visitors', String(stats.sessions), stats.deltas.sessions ?? 0, '◎'],
-    ['Conversion rate', `${(stats.conversionRate * 100).toFixed(2)}%`, stats.deltas.conversionRate ?? 0, '◒'],
-    ['Average order', format(stats.aovCents, ctx.store.currency), stats.deltas.aovCents ?? 0, '$'],
+  const tiles: Array<[string, string, number, IconName]> = [
+    ['Total sales', format(stats.revenueCents, ctx.store.currency), stats.deltas.revenueCents ?? 0, 'profit'],
+    ['Orders', String(stats.orders), stats.deltas.orders ?? 0, 'orders'],
+    ['Visitors', String(stats.sessions), stats.deltas.sessions ?? 0, 'customers'],
+    ['Conversion rate', `${(stats.conversionRate * 100).toFixed(2)}%`, stats.deltas.conversionRate ?? 0, 'funnel'],
+    ['Average order', format(stats.aovCents, ctx.store.currency), stats.deltas.aovCents ?? 0, 'analytics'],
   ]
   return `${flash(ctx)}
   <div class="dash-head"><div><div class="store-state"><i></i>${ctx.store.status === 'live' ? 'Store is live' : 'Draft storefront'}</div><h1>Hello ${escapeHtml(ctx.userName)} — here’s what’s happening.</h1>
@@ -96,13 +99,13 @@ export function dashboard(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): string
     <div class="dash-actions"><a class="btn" href="/admin/store">Customize store</a><a class="btn" href="${escapeHtml(ctx.storeUrl)}" target="_blank" rel="noopener">View store ↗</a><form method="get"><select name="range" onchange="this.form.submit()" aria-label="Reporting range">
       ${(['24h', '7d', '30d', '90d'] as const).map((option) => `<option value="${option}" ${option === range ? 'selected' : ''}>Last ${option}</option>`).join('')}
     </select></form></div></div>
-  <div class="commerce-kpis">${tiles.map(([label, value, delta, glyph]) => `<div class="metric-card"><div class="label"><span>${label}</span><span>${glyph}</span></div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
+  <div class="commerce-kpis">${tiles.map(([label, value, delta, icon]) => `<div class="metric-card"><div class="label"><span>${label}</span>${uiIcon(icon, 16)}</div><div class="value">${escapeHtml(value)}</div><div class="delta ${delta < 0 ? 'neg' : ''}">${pct(delta)} vs previous period</div></div>`).join('')}</div>
   <div class="dashboard-grid"><div class="card dash-card"><div class="dash-card-head"><div><h2>Total sales</h2><div class="dash-total">${format(stats.revenueCents, ctx.store.currency)}</div><div class="muted" style="font-size:11px">${stats.orders} orders · net profit ${format(profit.profitCents, ctx.store.currency)}</div></div><a class="btn" href="/admin/analytics">View report</a></div>${salesChart(series)}<div class="chart-labels"><span>${series[0]?.day ?? ''}</span><span>${series[Math.floor(series.length / 2)]?.day ?? ''}</span><span>${series.at(-1)?.day ?? ''}</span></div></div>
-    <div class="card dash-card pulse-card"><div class="eyebrow" style="color:#a9c9b3">Store pulse</div><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:.75rem"><div><div class="pulse-number">${live.length}</div><div class="muted">visitors right now</div></div><span style="font-size:1.4rem">◉</span></div><div class="pulse-list"><a href="/admin/orders"><span>Orders to fulfill</span><strong>${pendingOrders}</strong></a><a href="/admin/cro"><span>Active experiments</span><strong>${runningExperiments.length}</strong></a><a href="/admin/products"><span>Low-stock variants</span><strong>${low.length}</strong></a></div></div></div>
+    <div class="card dash-card pulse-card"><div class="eyebrow" style="color:#a9c9b3">Store pulse</div><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:.75rem"><div><div class="pulse-number">${live.length}</div><div class="muted">visitors right now</div></div>${uiIcon('analytics', 23)}</div><div class="pulse-list"><a href="/admin/orders"><span>Orders to fulfill</span><strong>${pendingOrders}</strong></a><a href="/admin/cro"><span>Active experiments</span><strong>${runningExperiments.length}</strong></a><a href="/admin/products"><span>Low-stock variants</span><strong>${low.length}</strong></a></div></div></div>
   <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><div><h2>Conversion funnel</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">From first visit through purchase</p></div><a class="btn" href="/admin/cro">Run an experiment</a></div><div class="funnel-compact">${stages.map((stage) => `<div class="funnel-line"><span>${escapeHtml(stage.stage)}</span><div class="track"><i style="width:${Math.max(stage.count ? 2 : 0, stage.share * 100)}%"></i></div><strong>${stage.count}</strong></div>`).join('')}</div></div>
     <div class="card dash-card"><div class="dash-card-head"><h2>Next things to do</h2><a href="/admin/build" class="muted" style="font-size:11px">See plan</a></div><div class="pulse-list" style="margin-top:.55rem">${todos.length ? todos.map((todo) => `<a href="/admin${escapeHtml(todo.href)}" style="background:#fafbf9;color:var(--ink);border-color:var(--line)"><span>${escapeHtml(todo.label)}</span><strong>→</strong></a>`).join('') : '<div class="dash-empty">Setup is clear. Keep an eye on orders and experiments.</div>'}</div></div></div>
   <div class="dash-row"><div class="card dash-card"><div class="dash-card-head"><h2>Recent orders</h2><a class="btn" href="/admin/orders">View all</a></div><div class="order-list">${orders.length ? orders.slice(0, 6).map((order) => `<a class="order-item" href="/admin/orders/${escapeHtml(order.id)}"><span class="order-badge">#${order.displayId}</span><span><strong>${escapeHtml(order.email)}</strong><small>${order.items.length} item${order.items.length === 1 ? '' : 's'} · ${order.createdAt.slice(0, 10)}</small></span><span style="text-align:right"><strong>${format(order.totalCents, order.currency)}</strong><small>${escapeHtml(order.fulfillmentStatus)}</small></span></a>`).join('') : '<div class="dash-empty">No orders yet. Your first one will appear here.</div>'}</div></div>
-    <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products"><span>＋</span><strong>Add product</strong></a><a href="/admin/pages"><span>▤</span><strong>Build page</strong></a><a href="/admin/ads"><span>◭</span><strong>Draft ads</strong></a><a href="/admin/cro"><span>◒</span><strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
+    <div class="card dash-card"><h2>Quick actions</h2><div class="quick-grid"><a href="/admin/products">${uiIcon('products', 17)}<strong>Add product</strong></a><a href="/admin/pages">${uiIcon('pages', 17)}<strong>Build page</strong></a><a href="/admin/ads">${uiIcon('ads', 17)}<strong>Draft ads</strong></a><a href="/admin/cro">${uiIcon('experiment', 17)}<strong>Test pages</strong></a></div>${runningExperiments[0] ? `<div class="notice" style="margin-top:.75rem"><strong>${escapeHtml(runningExperiments[0].name)}</strong><div class="muted" style="font-size:11px">${escapeHtml(runningExperiments[0].results.reason ?? 'Collecting evidence')}</div></div>` : ''}</div></div>
   <div class="card dash-card" style="margin-top:.85rem"><div class="dash-card-head"><div><h2>Storefront preview</h2><p class="muted" style="font-size:11.5px;margin:.2rem 0 0">The currently selected ${ctx.store.status === 'live' ? 'live' : 'draft'} storefront.</p></div><a class="btn" href="/admin/store">Open designer</a></div><div class="preview preview-mini" style="margin-top:.75rem"><div class="chrome"><i></i><i></i><i></i><span class="url">${escapeHtml(ctx.storeUrl)}</span></div><iframe src="${escapeHtml(ctx.storeUrl)}" title="Storefront preview" loading="lazy"></iframe></div></div>`
 }
 
@@ -377,11 +380,20 @@ export function collectionsPage(ctx: Ctx): string {
 
 export function promotionsPage(ctx: Ctx): string {
   const promotions = listPromotions(ctx.db, ctx.store.id)
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Promotions</h1></div>
+  const products = listProducts(ctx.db, ctx.store.id, { limit: 200 })
+  const regions = listRegions(ctx.db, ctx.store.id)
+  const productIds = products.map((product) => `${product.title}: ${product.id}`).join(' · ')
+  return `${flash(ctx)}<div class="head"><div><h1>Discounts</h1><p class="muted" style="margin:.25rem 0 0">Codes, automatic offers, cross-product BOGO, mix-and-match and fixed-price bundles.</p></div></div>
+  <details class="card create-panel"><summary><strong>Create promotion</strong><span class="muted">Advanced rules</span></summary><form method="post" action="/admin/promotions" style="margin-top:1rem">
+    <div class="row"><div class="field" style="flex:2"><label>Name</label><input name="title" required placeholder="Build your own kit"></div><div class="field" style="flex:1"><label>Type</label><select name="kind"><option value="percentage">Percentage off</option><option value="fixed">Fixed amount off</option><option value="free_shipping">Free shipping</option><option value="bogo">Buy X, get Y</option><option value="mix_match">Mix and match</option><option value="fixed_bundle">Fixed-price bundle</option><option value="tiered">Quantity tiers</option></select></div><div class="field" style="width:120px"><label>Value</label><input type="number" min="0" name="value" value="10"></div></div>
+    <div class="row"><div class="field" style="flex:1"><label>Code (blank for automatic)</label><input name="code" placeholder="KIT20"></div><label class="check"><input type="checkbox" name="automatic" value="true"> Automatic</label><label class="check"><input type="checkbox" name="combinable" value="true"> Can combine</label><label class="check"><input type="checkbox" name="firstOrderOnly" value="true"> First order only</label></div>
+    <div class="row"><div class="field" style="flex:1"><label>Eligible product IDs</label><input name="productIds" placeholder="Comma separated"></div><div class="field" style="flex:1"><label>Buy product IDs</label><input name="buyProductIds" placeholder="For cross-product BOGO"></div><div class="field" style="flex:1"><label>Get product IDs</label><input name="getProductIds" placeholder="Reward products"></div></div>
+    <div class="row"><div class="field"><label>Minimum subtotal</label><input type="number" min="0" name="minSubtotalCents" placeholder="10000"></div><div class="field"><label>Minimum quantity</label><input type="number" min="0" name="minQuantity"></div><div class="field"><label>Buy qty</label><input type="number" min="1" name="buyQuantity"></div><div class="field"><label>Get qty</label><input type="number" min="1" name="getQuantity"></div><div class="field"><label>Distinct products</label><input type="number" min="1" name="requiredDistinctProducts"></div><div class="field"><label>Bundle price</label><input type="number" min="0" name="bundlePriceCents"></div><div class="field"><label>Use limit</label><input type="number" min="1" name="maxUses"></div><div class="field"><label>Market</label><select name="regionId"><option value="">All markets</option>${regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.name)}</option>`).join('')}</select></div></div>
+    <p class="muted" style="font-size:11px">Product reference: ${escapeHtml(productIds || 'Add products first.')}</p><button class="btn primary" type="submit">Create promotion</button></form></details>
   <div class="card" style="padding:0"><table class="data"><thead><tr><th>Promotion</th><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Used</th><th></th></tr></thead><tbody>
   ${promotions.length ? promotions.map((promotion) => `<tr><td>${escapeHtml(promotion.title)}</td>
     <td class="muted">${escapeHtml(promotion.code || 'automatic')}</td><td>${promotion.kind}</td>
-    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : `${promotion.value}%`}</td>
+    <td>${promotion.kind === 'fixed' ? format(promotion.value, ctx.store.currency) : promotion.kind === 'fixed_bundle' ? format(promotion.rules.bundlePriceCents ?? promotion.value, ctx.store.currency) : promotion.kind === 'free_shipping' ? '—' : promotion.kind === 'tiered' ? `${promotion.rules.tiers?.length ?? 0} tiers` : `${promotion.value}%`}</td>
     <td><span class="tag ${promotion.status === 'active' ? 'ok' : ''}">${promotion.status}</span></td><td>${promotion.usageCount}</td>
     <td style="text-align:right">${promotion.status === 'active' ? `<form method="post" action="/admin/promotions/${escapeHtml(promotion.id)}/disable"><button class="btn">Disable</button></form>` : ''}</td></tr>`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:1.4rem">No promotions. Ask for "a 10% welcome code" and one appears.</td></tr>'}
@@ -395,8 +407,10 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
   const visitors = liveVisitors(ctx.db, ctx.store.id) as Array<{ city: string; country: string; path: string; last_seen: string }>
   const events = recentEvents(ctx.db, ctx.store.id, 14) as Array<{ type: string; path: string; amount_cents: number; city: string; created_at: string }>
   const purchase = stages.at(-1)?.share ?? 0
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Analytics</h1>
-    <p class="muted" style="margin:.25rem 0 0">First-party. No cookie, no pixel, no third party — sessions are an HMAC of address and agent that rotates daily.</p></div>
+  const attribution = attributionReport(ctx.db, ctx.store.id, range, 'last')
+  const serverEvents = serverEventSummary(ctx.db, ctx.store.id)
+  return `${flash(ctx)}<div class="head"><div><h1>Analytics</h1>
+    <p class="muted" style="margin:.25rem 0 0">First-party sessions, last-touch revenue attribution and server-event delivery health.</p></div>
     <form method="get"><select name="range" onchange="this.form.submit()">${(['24h', '7d', '30d', '90d'] as const)
       .map((option) => `<option ${option === range ? 'selected' : ''}>${option}</option>`)
       .join('')}</select></form></div>
@@ -418,6 +432,8 @@ export function analyticsPage(ctx: Ctx, range: '24h' | '7d' | '30d' | '90d'): st
       <td>${event.amount_cents ? format(event.amount_cents, ctx.store.currency) : '—'}</td><td class="muted">${escapeHtml(event.city || '—')}</td>
       <td class="muted">${event.created_at.slice(11, 19)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1.2rem">No traffic recorded yet.</td></tr>'}
     </tbody></table></div>
+  <div class="grid2" id="attribution"><div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Revenue by last touch</h2><p class="muted" style="font-size:11px;margin:.2rem 0 0">UTMs, click IDs and referrers captured on the storefront.</p></div><table class="data"><thead><tr><th>Channel</th><th>Campaign</th><th>Orders</th><th>Revenue</th><th>ROAS</th></tr></thead><tbody>${attribution.map((row) => `<tr><td><strong>${escapeHtml(row.channel)}</strong></td><td class="muted">${escapeHtml(row.campaign)}</td><td>${row.orders}</td><td>${format(row.revenueCents, ctx.store.currency)}</td><td>${row.roas === null ? '—' : `${row.roas}×`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:1rem">Attribution appears with the next order.</td></tr>'}</tbody></table></div>
+    <div class="card"><h2>Server-side event delivery</h2><p class="muted" style="font-size:11.5px">Meta CAPI and TikTok Events API are retried from a durable outbox.</p>${serverEvents.map((row) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.55rem 0"><span><strong>${escapeHtml(row.provider)}</strong> · ${escapeHtml(row.status)}</span><span class="tag ${row.status === 'sent' ? 'ok' : row.status === 'failed' ? 'bad' : 'warn'}">${row.count}</span></div>`).join('') || '<div class="notice" style="margin-top:.8rem">Connect a pixel and server token in Settings to start delivery.</div>'}</div></div>
   ${behaviourCard(ctx, range)}`
 }
 
@@ -496,7 +512,13 @@ export function storePage(ctx: Ctx, messages: ChatMessage[], health = false): st
 export function marketingPage(ctx: Ctx): string {
   const sends = listSends(ctx.db, ctx.store.id, 12) as Array<{ id: string; template: string; recipient: string; subject: string; status: string }>
   const pages = listSeoPages(ctx.db, ctx.store.id) as Array<{ path: string; title: string; description: string; keyword: string }>
-  return `${flash(ctx)}<div class="head"><h1 class="serif">Email &amp; search</h1></div>
+  const flows = listFlows(ctx.db, ctx.store.id)
+  const deliveries = recentFlowDeliveries(ctx.db, ctx.store.id, 12)
+  return `${flash(ctx)}<div class="head"><div><h1>Marketing</h1><p class="muted" style="margin:.25rem 0 0">Lifecycle flows, customer messaging and search visibility.</p></div></div>
+  <div class="section-title"><div><h2>Automations</h2><p class="muted">Consent-aware and idempotent: each trigger sends once.</p></div></div>
+  <div class="flow-grid">${flows.map((flow) => `<details class="card flow-card"><summary><span class="flow-icon">${flow.trigger === 'welcome' ? '01' : flow.trigger === 'abandoned_cart' ? '02' : flow.trigger === 'post_purchase' ? '03' : '04'}</span><span><strong>${escapeHtml(flow.name)}</strong><small>${escapeHtml(flow.trigger.replaceAll('_', ' '))} · ${flow.delayHours ? `${flow.delayHours}h delay` : 'immediately'}</small></span><span class="tag ${flow.status === 'active' ? 'ok' : ''}">${flow.status}</span></summary>
+    <form method="post" action="/admin/marketing/flows/${escapeHtml(flow.id)}" style="margin-top:1rem"><input type="hidden" name="name" value="${escapeHtml(flow.name)}"><div class="row"><div class="field" style="width:110px"><label>Delay hours</label><input type="number" min="0" name="delayHours" value="${flow.delayHours}"></div><div class="field" style="flex:1"><label>Status</label><select name="status"><option value="active" ${flow.status === 'active' ? 'selected' : ''}>Active</option><option value="paused" ${flow.status === 'paused' ? 'selected' : ''}>Paused</option></select></div></div><div class="field"><label>Subject</label><input name="subject" value="${escapeHtml(flow.subject)}" required></div><div class="field"><label>Email body</label><textarea name="body" rows="6" required>${escapeHtml(flow.body)}</textarea></div><div class="row"><button class="btn primary" type="submit">Save flow</button><span class="muted" style="font-size:11px">${flow.sentCount} sent</span></div></form>
+    <form method="post" action="/admin/marketing/flows/${escapeHtml(flow.id)}/run" style="margin-top:.5rem"><button class="btn" type="submit">Run eligible customers now</button></form></details>`).join('')}</div>
   <div class="grid2"><div>
     <div class="card" style="padding:0"><div style="padding:1rem 1.1rem"><h2>Send log</h2></div>
       <table class="data"><thead><tr><th>Template</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
@@ -512,6 +534,7 @@ export function marketingPage(ctx: Ctx): string {
         || '<tr><td colspan="4" class="muted" style="padding:1.2rem">No pages tracked yet.</td></tr>'}</tbody></table></div>
   </div>
   <div>
+    <div class="card"><h2>Flow activity</h2>${deliveries.map((delivery) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.45rem 0"><span><strong style="font-size:12px">${escapeHtml(delivery.flow_name)}</strong><small class="muted" style="display:block">${escapeHtml(delivery.recipient)}</small></span><span class="tag ${delivery.status === 'sent' ? 'ok' : delivery.status === 'failed' ? 'bad' : ''}">${delivery.status}</span></div>`).join('') || '<p class="muted" style="font-size:12px">No flow messages yet.</p>'}</div>
     <div class="card"><h2>Transactional templates</h2>
       ${TEMPLATES.map((template) => `<div class="row" style="justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--line)">
         <span style="font-size:12.5px">${escapeHtml(template.name)}</span>
@@ -592,11 +615,10 @@ export function settingsPage(ctx: Ctx): string {
     <div class="card"><div class="row" style="justify-content:space-between"><div><h2>Tracking &amp; backup</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Customer tracking pages use cached 17TRACK carrier events. Export a complete store backup whenever you want.</p></div><span class="tag ${seventeenTrackConfigured() ? 'ok' : 'warn'}">17TRACK ${seventeenTrackConfigured() ? 'connected' : 'needs key'}</span></div>
       <div class="row" style="margin-top:.8rem"><a class="btn primary" href="/admin/settings/export">Download JSON backup</a><span class="muted" style="font-size:11.5px">Products, orders, pages, analytics, experiments and settings; login sessions excluded.</span></div>
       ${seventeenTrackConfigured() ? '' : '<p class="muted" style="font-size:11.5px;margin:.6rem 0 0">Set AMBORAS_17TRACK_API_KEY on the server. Carrier links and estimated delivery still work without it.</p>'}</div>
-    <div class="card"><h2>Regions and shipping</h2>
-      ${regions.map((region) => `<div style="border-top:1px solid var(--line);padding:.6rem 0">
-        <strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span>
-        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency)}` : ''}</div>`).join('')}
-      </div>`).join('')}</div>
+    <div class="card"><h2>Markets, languages &amp; currencies</h2><p class="muted" style="font-size:12px">Product prices are stored in ${escapeHtml(ctx.store.currency)} and converted at checkout with the rate you control.</p>
+      ${regions.map((region) => `<details style="border-top:1px solid var(--line);padding:.6rem 0"><summary class="row" style="justify-content:space-between;cursor:pointer"><span><strong>${escapeHtml(region.name)}</strong> <span class="muted">${escapeHtml(region.locale)} · ${escapeHtml(region.currency)} · ${escapeHtml(region.countries.join(', '))}</span></span><span class="tag ${region.isDefault ? 'ok' : ''}">${region.isDefault ? 'default' : `× ${region.exchangeRate}`}</span></summary><form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" value="${escapeHtml(region.name)}"></div><div class="field"><label>Countries</label><input name="countries" value="${escapeHtml(region.countries.join(', '))}"></div><div class="field"><label>Locale</label><input name="locale" value="${escapeHtml(region.locale)}"></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="${escapeHtml(region.currency)}"></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" min="0.000001" value="${region.exchangeRate}"></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="${region.taxRate * 100}"></div></div><label class="check"><input type="checkbox" name="isDefault" value="true" ${region.isDefault ? 'checked' : ''}> Default market</label><button class="btn primary" type="submit">Save market</button></form>
+        ${region.shipping.map((option) => `<div class="muted" style="font-size:12px">${escapeHtml(option.name)} — ${format(option.amountCents, region.currency, region.locale)}${option.freeAboveCents ? `, free over ${format(option.freeAboveCents, region.currency, region.locale)}` : ''}</div>`).join('')}<form method="post" action="/admin/settings/regions/${escapeHtml(region.id)}/shipping" class="row" style="margin-top:.65rem"><div class="field" style="flex:1;margin:0"><label>Shipping option</label><input name="name" placeholder="Standard shipping" required></div><div class="field" style="width:110px;margin:0"><label>Charge</label><input type="number" min="0" name="amountCents" placeholder="900" required></div><div class="field" style="width:120px;margin:0"><label>Free over</label><input type="number" min="0" name="freeAboveCents" placeholder="20000"></div><button class="btn" type="submit">Add rate</button></form></details>`).join('')}
+      <details class="create-panel" style="margin-top:.5rem"><summary><strong>Add market</strong></summary><form method="post" action="/admin/settings/regions" style="margin-top:.7rem"><div class="row"><div class="field"><label>Name</label><input name="name" placeholder="Europe" required></div><div class="field"><label>Countries</label><input name="countries" placeholder="DE, FR, ES" required></div><div class="field"><label>Locale</label><input name="locale" value="de-DE" required></div><div class="field" style="width:90px"><label>Currency</label><input name="currency" value="EUR" required></div><div class="field" style="width:100px"><label>Rate</label><input name="exchangeRate" type="number" step="0.000001" value="0.92" required></div><div class="field" style="width:90px"><label>Tax %</label><input name="taxRate" type="number" step="0.01" value="0"></div></div><button class="btn primary" type="submit">Add market</button></form></details></div>
   </div>
   <div>
     ${domains.length ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Existing domains</h2><a class="btn" href="/admin/domains">Manage</a></div>${domains.map((domain) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.5rem 0;margin-top:.5rem"><span>${escapeHtml(domain.hostname)}</span><span class="tag ${domain.status === 'verified' ? 'ok' : 'warn'}">${domain.status}</span></div>`).join('')}</div>` : ''}
@@ -610,11 +632,14 @@ export function settingsPage(ctx: Ctx): string {
 
 function pixelsCard(ctx: Ctx): string {
   const pixels = [
-    { id: 'ga4', name: 'Google Analytics 4', key: 'measurementId', label: 'Measurement ID', placeholder: 'G-ABC123', current: getInstalled(ctx.db, ctx.store.id, 'ga4')?.settings.measurementId },
-    { id: 'meta-pixel', name: 'Meta Pixel', key: 'pixelId', label: 'Pixel ID', placeholder: '123456789012345', current: getInstalled(ctx.db, ctx.store.id, 'meta-pixel')?.settings.pixelId },
-    { id: 'tiktok-pixel', name: 'TikTok Pixel', key: 'pixelId', label: 'Pixel ID', placeholder: 'CABC123456789', current: getInstalled(ctx.db, ctx.store.id, 'tiktok-pixel')?.settings.pixelId },
+    { id: 'ga4', name: 'Google Analytics 4', key: 'measurementId', label: 'Measurement ID', placeholder: 'G-ABC123', current: getInstalled(ctx.db, ctx.store.id, 'ga4')?.settings.measurementId, server: false },
+    { id: 'meta-pixel', name: 'Meta Pixel + CAPI', key: 'pixelId', label: 'Pixel ID', placeholder: '123456789012345', current: getInstalled(ctx.db, ctx.store.id, 'meta-pixel')?.settings.pixelId, server: true },
+    { id: 'tiktok-pixel', name: 'TikTok Pixel + Events API', key: 'pixelId', label: 'Pixel ID', placeholder: 'CABC123456789', current: getInstalled(ctx.db, ctx.store.id, 'tiktok-pixel')?.settings.pixelId, server: true },
   ]
-  return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Customer event pixels</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Page views, add-to-cart and purchases. Pixels never fire in your admin preview.</p></div><span class="tag">${pixels.filter((pixel) => pixel.current).length}/3 connected</span></div>${pixels.map((pixel) => `<form method="post" action="/admin/settings/pixels/${pixel.id}" class="row" style="border-top:1px solid var(--line);padding:.6rem 0;align-items:flex-end"><div style="width:150px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current ? 'ok' : ''}" style="margin-top:.25rem">${pixel.current ? 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div><button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></form>`).join('')}</div>`
+  return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Customer event pixels &amp; server APIs</h2><p class="muted" style="font-size:12px;margin:.25rem 0 0">Browser pixels plus retried server events. Meta and TikTok share purchase event IDs with the browser for deduplication.</p></div><span class="tag">${pixels.filter((pixel) => pixel.current).length}/3 connected</span></div>${pixels.map((pixel) => {
+    const serverConnected = pixel.server && hasCredentials(ctx.db, ctx.store.id, pixel.id)
+    return `<form method="post" action="/admin/settings/pixels/${pixel.id}" style="border-top:1px solid var(--line);padding:.7rem 0"><div class="row" style="align-items:flex-end"><div style="width:170px"><strong style="font-size:12.5px">${pixel.name}</strong><div class="tag ${pixel.current && (!pixel.server || serverConnected) ? 'ok' : pixel.current ? 'warn' : ''}" style="margin-top:.25rem">${pixel.current ? pixel.server ? serverConnected ? 'browser + server' : 'browser only' : 'connected' : 'not connected'}</div></div><div class="field" style="flex:1;margin:0"><label>${pixel.label}</label><input name="${pixel.key}" value="${escapeHtml(pixel.current ?? '')}" placeholder="${pixel.placeholder}" required></div>${pixel.server ? `<div class="field" style="flex:1;margin:0"><label>Server API token</label><input type="password" name="accessToken" value="" placeholder="${serverConnected ? 'Saved — leave blank to keep' : 'Paste access token'}"></div>` : ''}<button class="btn primary" type="submit">${pixel.current ? 'Update' : 'Connect'}</button></div></form>`
+  }).join('')}</div>`
 }
 
 /** Which model writes what for this store. */
@@ -873,10 +898,13 @@ export function researchPage(ctx: Ctx): string {
 export function aiPage(ctx: Ctx, messages: ChatMessage[]): string {
   const runs = listRuns(ctx.db, ctx.store.id, 8)
   const counts = toolCountsByArea()
-  return `${flash(ctx)}<div class="head"><div><h1 class="serif">Assistant</h1>
+  const queue = listAssistantQueue(ctx.db, ctx.store.id, 20)
+  return `${flash(ctx)}<div class="head"><div><h1>Assistant</h1>
     <p class="muted" style="margin:.25rem 0 0">${listTools().length} tools across ${Object.keys(counts).length} areas. Every call is validated against its schema and audited; it edits the draft, and publishing is yours.</p></div></div>
   <div class="grid2"><div>
-    <form class="card" method="post" action="/admin/ask"><div class="eyebrow">Ask Amboras</div><input type="hidden" name="page" value="ai"><textarea name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">It can operate the store, not just explain it.</span><button class="btn primary" type="submit">Send →</button></div></form>
+    <form class="card" method="post" action="/admin/ask" id="ai-composer"><div class="eyebrow">Ask Amboras</div><input type="hidden" name="page" value="ai"><textarea id="ai-ask" name="text" rows="3" required autofocus placeholder="What should I build, change, or check?"></textarea><div class="row" style="justify-content:space-between;margin-top:.55rem"><span class="muted" style="font-size:11.5px">Requests run in order, so you can queue the next job while one is working.</span><div class="row"><button class="btn" id="ai-voice" type="button">${uiIcon('mic', 15)} Dictate</button><button class="btn primary" type="submit">${uiIcon('send', 14)} Queue request</button></div></div></form>
+    <script>(function(){var button=document.getElementById('ai-voice');var Speech=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Speech){button.disabled=true;button.title='Voice input is not supported in this browser';return}button.addEventListener('click',function(){var r=new Speech();r.lang='en-US';button.textContent='Listening…';r.onresult=function(e){var box=document.getElementById('ai-ask');box.value=(box.value+' '+e.results[0][0].transcript).trim()};r.onend=function(){button.textContent='Dictate'};r.onerror=r.onend;r.start()})})();</script>
+    ${queue.length ? `<div class="card"><h2>Request queue</h2>${queue.map((request) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:.55rem 0"><span style="min-width:0"><strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${escapeHtml(request.text)}</strong><small class="muted">${request.createdAt.slice(11, 19)} · ${escapeHtml(request.page || 'global')}</small></span><span class="row"><span class="tag ${request.status === 'completed' ? 'ok' : request.status === 'failed' ? 'bad' : request.status === 'running' ? 'warn' : ''}">${request.status}</span>${request.status === 'queued' ? `<form method="post" action="/admin/assistant/queue/${escapeHtml(request.id)}/cancel"><button class="btn" type="submit">Cancel</button></form>` : ''}</span></div>`).join('')}</div>` : ''}
     <div class="card" style="max-height:56vh;overflow:auto">
       ${messages.length ? messages.map((message) => `<div style="margin-bottom:1rem">
         <div class="eyebrow">${message.role === 'user' ? 'You' : 'Assistant'}${message.page ? ` · ${escapeHtml(message.page)}` : ''}</div>

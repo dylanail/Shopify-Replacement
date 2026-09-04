@@ -2,12 +2,13 @@
 export type Cents = number
 
 const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK'])
+export const minorDigits = (currency: string) => ZERO_DECIMAL.has(currency.toUpperCase()) ? 0 : 2
 
-export function format(cents: Cents, currency = 'USD'): string {
-  const minor = ZERO_DECIMAL.has(currency) ? 0 : 2
+export function format(cents: Cents, currency = 'USD', locale = 'en-US'): string {
+  const minor = minorDigits(currency)
   const value = cents / 10 ** minor
   try {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(locale, {
       style: 'currency',
       currency,
       minimumFractionDigits: minor,

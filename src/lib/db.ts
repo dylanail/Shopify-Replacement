@@ -567,6 +567,75 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
     CREATE INDEX tracking_order ON tracking_snapshots(store_id, order_id);
     `,
   },
+  {
+    name: '013_growth_automation',
+    sql: `
+    -- Localized storefronts keep product prices in the store's base currency
+    -- and convert once, at the cart boundary. Rates are deliberately owned by
+    -- the operator rather than fetched during checkout.
+    ALTER TABLE regions ADD COLUMN locale TEXT NOT NULL DEFAULT 'en-US';
+    ALTER TABLE regions ADD COLUMN exchange_rate REAL NOT NULL DEFAULT 1;
+
+    -- First/last touch lives with the anonymous first-party session; the order
+    -- snapshot is immutable so reports do not change when a visitor returns.
+    ALTER TABLE sessions_analytics ADD COLUMN attribution TEXT NOT NULL DEFAULT '{}';
+    CREATE TABLE order_attribution (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL, first_touch TEXT NOT NULL DEFAULT '{}',
+      last_touch TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+      UNIQUE (store_id, order_id));
+    CREATE INDEX order_attribution_store ON order_attribution(store_id, created_at DESC);
+
+    -- Meta CAPI and TikTok Events API are delivered from a durable outbox.
+    -- A shared event id is also handed to browser pixels for deduplication.
+    CREATE TABLE server_event_deliveries (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL, event_id TEXT NOT NULL, event_name TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
+      attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, sent_at TEXT, UNIQUE (store_id, provider, event_id));
+    CREATE INDEX server_events_store ON server_event_deliveries(store_id, status, created_at);
+
+    -- Native lifecycle flows and their idempotent delivery ledger.
+    CREATE TABLE marketing_flows (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, trigger_kind TEXT NOT NULL, delay_hours INTEGER NOT NULL DEFAULT 0,
+      subject TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+      sent_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (store_id, trigger_kind));
+    CREATE TABLE marketing_flow_deliveries (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      flow_id TEXT NOT NULL REFERENCES marketing_flows(id) ON DELETE CASCADE,
+      event_key TEXT NOT NULL, recipient TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+      email_send_id TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, sent_at TEXT,
+      UNIQUE (flow_id, event_key));
+    CREATE INDEX marketing_flow_store ON marketing_flow_deliveries(store_id, created_at DESC);
+
+    -- Requests are queued independently of the chat/run ledger so several
+    -- voice or typed jobs can wait while the current agent run is executing.
+    CREATE TABLE assistant_queue (
+      id TEXT PRIMARY KEY, store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL, text TEXT NOT NULL, page TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'queued', run_id TEXT, error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT);
+    CREATE INDEX assistant_queue_store ON assistant_queue(store_id, status, created_at);
+    `,
+  },
+  {
+    name: '014_server_event_backoff',
+    sql: `
+    ALTER TABLE server_event_deliveries ADD COLUMN next_attempt_at TEXT;
+    `,
+  },
+  {
+    name: '015_base_order_totals',
+    sql: `
+    -- A charged order keeps its regional currency, while this immutable base
+    -- snapshot makes dashboard, profit and attribution totals comparable.
+    ALTER TABLE orders ADD COLUMN base_total_cents INTEGER;
+    `,
+  },
 ]
 
 function migrate(db: Db) {

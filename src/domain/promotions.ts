@@ -106,12 +106,16 @@ export function applyPromotions(
   db: Db,
   storeId: string,
   items: LineItem[],
-  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean } = { subtotalCents: 0 },
+  opts: { code?: string; subtotalCents: number; isFirstOrder?: boolean; regionId?: string; currencyRate?: number } = { subtotalCents: 0 },
 ): PromotionOutcome {
   const at = now()
   const all = listPromotions(db, storeId).filter((promotion) => isLive(promotion, at))
   const code = (opts.code ?? '').trim().toUpperCase()
-  const candidates = all.filter((promotion) => (promotion.automatic && !promotion.code) || (code && promotion.code === code))
+  const candidates = all
+    .filter((promotion) => (promotion.automatic && !promotion.code) || (code && promotion.code === code))
+    .filter((promotion) => !promotion.rules.maxUses || promotion.usageCount < promotion.rules.maxUses)
+    .filter((promotion) => !promotion.rules.regionIds?.length || Boolean(opts.regionId && promotion.rules.regionIds.includes(opts.regionId)))
+    .sort((a, b) => (b.rules.priority ?? 0) - (a.rules.priority ?? 0))
 
   const collectionsByProduct = new Map<string, string[]>()
   if (items.length) {
@@ -128,7 +132,7 @@ export function applyPromotions(
 
   const outcome: PromotionOutcome = { discountCents: 0, freeShipping: false, applied: [] }
   for (const promotion of candidates) {
-    if (promotion.rules.minSubtotalCents && opts.subtotalCents < promotion.rules.minSubtotalCents) continue
+    if (promotion.rules.minSubtotalCents && opts.subtotalCents < Math.round(promotion.rules.minSubtotalCents * (opts.currencyRate ?? 1))) continue
     if (promotion.rules.firstOrderOnly && opts.isFirstOrder === false) continue
     const eligible = eligibleItems(promotion, items, collectionsByProduct).filter((item) => !item.giftOf)
     if (!eligible.length && promotion.kind !== 'free_shipping') continue
@@ -142,7 +146,7 @@ export function applyPromotions(
         amount = percentOf(eligibleTotal, promotion.value)
         break
       case 'fixed':
-        amount = Math.min(promotion.value, eligibleTotal)
+        amount = Math.min(Math.round(promotion.value * (opts.currencyRate ?? 1)), eligibleTotal)
         break
       case 'free_shipping':
         outcome.freeShipping = true
@@ -160,13 +164,31 @@ export function applyPromotions(
       case 'bogo': {
         const buy = promotion.rules.buyQuantity ?? 1
         const free = promotion.rules.getQuantity ?? 1
-        const sets = Math.floor(units / (buy + free))
+        const buying = promotion.rules.buyProductIds?.length
+          ? items.filter((item) => promotion.rules.buyProductIds?.includes(item.productId) && !item.giftOf)
+          : eligible
+        const rewards = promotion.rules.getProductIds?.length
+          ? items.filter((item) => promotion.rules.getProductIds?.includes(item.productId) && !item.giftOf)
+          : eligible
+        const buyUnits = buying.reduce((sum, item) => sum + item.quantity, 0)
+        const sets = promotion.rules.getProductIds?.length ? Math.floor(buyUnits / buy) : Math.floor(buyUnits / (buy + free))
         if (sets > 0) {
-          const unitPrices = eligible
+          const unitPrices = rewards
             .flatMap((item) => Array.from({ length: item.quantity }, () => item.unitCents))
             .sort((a, b) => a - b)
-          amount = unitPrices.slice(0, sets * free).reduce((sum, price) => sum + price, 0)
+          amount = percentOf(unitPrices.slice(0, sets * free).reduce((sum, price) => sum + price, 0), promotion.value || 100)
         }
+        break
+      }
+      case 'mix_match': {
+        const distinct = new Set(eligible.map((item) => item.productId)).size
+        if (distinct >= (promotion.rules.requiredDistinctProducts ?? 2)) amount = percentOf(eligibleTotal, promotion.value)
+        break
+      }
+      case 'fixed_bundle': {
+        const required = promotion.rules.minQuantity ?? promotion.rules.buyQuantity ?? 2
+        const target = Math.round((promotion.rules.bundlePriceCents ?? promotion.value) * (opts.currencyRate ?? 1))
+        if (units >= required && target >= 0) amount = Math.max(0, eligibleTotal - target)
         break
       }
     }
@@ -174,13 +196,14 @@ export function applyPromotions(
     if (amount > 0 || (promotion.kind === 'free_shipping' && outcome.freeShipping)) {
       outcome.discountCents += amount
       outcome.applied.push({ id: promotion.id, title: promotion.title, code: promotion.code, amountCents: amount })
+      if (promotion.rules.combinable === false) break
     }
   }
 
   // Quantity discounts do not stack. A store-wide "buy two, save 15%" and a
   // product's own bundle tiers are two answers to the same question; the
   // customer gets the better one, not both.
-  const quantityKinds = new Set(['bundle', 'tiered'])
+  const quantityKinds = new Set(['bundle', 'tiered', 'mix_match', 'fixed_bundle'])
   const quantity = outcome.applied.filter((entry) => quantityKinds.has(all.find((promotion) => promotion.id === entry.id)?.kind ?? ''))
   if (quantity.length > 1) {
     const best = quantity.reduce((top, entry) => (entry.amountCents > top.amountCents ? entry : top))

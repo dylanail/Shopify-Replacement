@@ -65,19 +65,21 @@ export function profitReport(db: Db, storeId: string, days = 30): ProfitReport {
   let fees = 0
   const byDay = new Map<string, { revenue: number; spend: number; profit: number }>()
   for (const order of orders) {
-    revenue += order.totalCents
-    const refunded = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
+    const baseTotal = order.baseTotalCents
+    revenue += baseTotal
+    const refundedCharged = order.refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
+    const refunded = order.totalCents ? Math.round(refundedCharged * baseTotal / order.totalCents) : refundedCharged
     refunds += refunded
     const orderCogs = order.supplierOrder.costCents ?? order.items.reduce((sum, item) => sum + (products.get(item.productId)?.supplier.costCents ?? 0) * item.quantity, 0)
     const orderShip = order.supplierOrder.shippingCents ?? order.items.reduce((sum, item) => sum + (products.get(item.productId)?.supplier.shippingCents ?? 0), 0)
-    const orderFees = Math.round(order.totalCents * 0.029) + 30
+    const orderFees = Math.round(baseTotal * 0.029) + 30
     cogs += orderCogs
     supplierShipping += orderShip
     fees += orderFees
     const day = order.createdAt.slice(0, 10)
     const entry = byDay.get(day) ?? { revenue: 0, spend: 0, profit: 0 }
-    entry.revenue += order.totalCents
-    entry.profit += order.totalCents - refunded - orderCogs - orderShip - orderFees
+    entry.revenue += baseTotal
+    entry.profit += baseTotal - refunded - orderCogs - orderShip - orderFees
     byDay.set(day, entry)
   }
   let adSpend = 0

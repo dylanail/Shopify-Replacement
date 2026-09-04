@@ -1,5 +1,5 @@
 import { escapeHtml } from '../lib/http.ts'
-import { format } from '../lib/money.ts'
+import { format, minorDigits } from '../lib/money.ts'
 import type { Db } from '../lib/db.ts'
 import type { Collection } from '../domain/catalog.ts'
 import type { Product } from '../domain/types.ts'
@@ -8,7 +8,7 @@ import type { Totals } from '../domain/types.ts'
 import type { Order } from '../domain/types.ts'
 import { listReviews, statsFor, type Review, type ReviewStats } from '../domain/reviews.ts'
 import { BUNDLE_CSS, bundleFor, renderBundleWidget } from '../domain/bundles.ts'
-import type { Region } from '../domain/regions.ts'
+import { convertCents, type Region } from '../domain/regions.ts'
 import { renderSlot } from '../control/plugins.ts'
 import { PAGE_CSS, blockContextFor, renderPageBody, type Page } from '../pages/store.ts'
 import type { BlockContext } from '../pages/blocks.ts'
@@ -29,9 +29,18 @@ export type StoreView = {
   preview: boolean
   cart: Cart | null
   totals: Totals | null
+  region?: Region | null
+  regions?: Region[]
 }
 
-const money = (cents: number, view: StoreView) => format(cents, view.totals?.currency ?? view.store.currency)
+const money = (cents: number, view: StoreView) => format(cents, view.totals?.currency ?? view.region?.currency ?? view.store.currency, view.region?.locale)
+const baseMoney = (cents: number, view: StoreView) => money(convertCents(cents, view.region, view.store.currency), view)
+const CHROME: Record<string, Record<string, string>> = {
+  es: { cart: 'Carrito', shop: 'Tienda', help: 'Ayuda', add: 'Añadir al carrito', checkout: 'Pagar', subtotal: 'Subtotal', shipping: 'Envío', tax: 'Impuestos', total: 'Total', apply: 'Aplicar', discount: 'Código de descuento', contact: 'Contacto', delivery: 'Entrega', payment: 'Pago', pay: 'Pagar ahora' },
+  fr: { cart: 'Panier', shop: 'Boutique', help: 'Aide', add: 'Ajouter au panier', checkout: 'Paiement', subtotal: 'Sous-total', shipping: 'Livraison', tax: 'Taxes', total: 'Total', apply: 'Appliquer', discount: 'Code de réduction', contact: 'Contact', delivery: 'Livraison', payment: 'Paiement', pay: 'Payer maintenant' },
+  de: { cart: 'Warenkorb', shop: 'Shop', help: 'Hilfe', add: 'In den Warenkorb', checkout: 'Kasse', subtotal: 'Zwischensumme', shipping: 'Versand', tax: 'Steuern', total: 'Gesamt', apply: 'Anwenden', discount: 'Rabattcode', contact: 'Kontakt', delivery: 'Lieferung', payment: 'Zahlung', pay: 'Jetzt bezahlen' },
+}
+const t = (view: StoreView, key: string, fallback: string) => CHROME[(view.region?.locale ?? 'en').split('-')[0] ?? '']?.[key] ?? fallback
 
 function stars(rating: number): string {
   const full = Math.round(rating)
@@ -48,7 +57,7 @@ export function layout(
   const brand = store.brand
   const cartCount = view.cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0
   const nav = env.theme.nav.length ? env.theme.nav : [{ label: 'Shop', href: '/collections/all' }]
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="${escapeHtml(view.region?.locale ?? 'en-US')}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 ${metaTags({ title: page.title, description: page.description, url: page.canonical ?? view.base, ...(page.image ? { image: page.image } : {}) })}
 ${fontLink(brand)}
@@ -68,7 +77,7 @@ ${renderSlot(view.db, store.id, 'announcementBar', {}, { preview: view.preview }
     <span><span class="name">${escapeHtml(store.name)}</span>${brand.slogan ? `<br><span class="sub">${escapeHtml(brand.slogan)}</span>` : ''}</span>
   </a>
   <nav class="main" aria-label="Main">${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</nav>
-  <div class="tools"><a href="${view.base}/cart" style="text-decoration:none">Cart (${cartCount})</a></div>
+  <div class="tools">${(view.regions?.length ?? 0) > 1 ? `<form method="post" action="${view.base}/localize"><select name="regionId" aria-label="Country and currency" onchange="this.form.submit()">${(view.regions ?? []).map((region) => `<option value="${escapeHtml(region.id)}" ${region.id === view.region?.id ? 'selected' : ''}>${escapeHtml(region.countries[0] ?? region.name)} · ${escapeHtml(region.currency)}</option>`).join('')}</select></form>` : ''}<a href="${view.base}/cart" style="text-decoration:none">${t(view, 'cart', 'Cart')} (${cartCount})</a></div>
 </div></header>`}
 <main id="main" tabindex="-1">${page.body}</main>
 ${page.bare ? '' : `<footer class="site"><div class="wrap">
@@ -76,8 +85,8 @@ ${page.bare ? '' : `<footer class="site"><div class="wrap">
     <div class="word">${escapeHtml(store.name)}</div>
     <p style="opacity:.75;margin-top:.8rem;max-width:34ch">${escapeHtml(brand.description ?? '')}</p>
   </div>
-  <div><div class="eyebrow" style="color:inherit;opacity:.6">Shop</div>${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</div>
-  <div><div class="eyebrow" style="color:inherit;opacity:.6">Help</div>
+  <div><div class="eyebrow" style="color:inherit;opacity:.6">${t(view, 'shop', 'Shop')}</div>${nav.map((entry) => `<a href="${view.base}${escapeHtml(entry.href)}">${escapeHtml(entry.label)}</a>`).join('')}</div>
+  <div><div class="eyebrow" style="color:inherit;opacity:.6">${t(view, 'help', 'Help')}</div>
     <a href="${view.base}/pages/shipping">Shipping &amp; returns</a>
     <a href="${view.base}/pages/about">About</a>
     <a href="${view.base}/pages/privacy">Privacy</a>
@@ -95,7 +104,7 @@ ${renderSlot(view.db, store.id, 'bodyEnd', {}, { preview: view.preview })}
 
 /** A built page. Block pages bring their own header and footer; the theme supplies tokens and the cart. */
 export function blockPage(view: StoreView, page: Page): string {
-  const context = blockContextFor(view.db, view.store, view.base)
+  const context = blockContextFor(view.db, view.store, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined)
   return layout(view, {
     title: page.seo.title || `${page.title} — ${view.store.name}`,
     description: page.seo.description || page.title,
@@ -175,7 +184,7 @@ export function productCard(view: StoreView, product: Product): string {
     <figure>${product.heroImage ? `<img src="${escapeHtml(product.heroImage)}" alt="${escapeHtml(product.title)}" loading="lazy">` : ''}</figure>
     <div class="body"><div class="title">${escapeHtml(product.title)}</div>
       <div class="sub">${escapeHtml(product.subtitle || '')}</div>
-      <div class="price">${money(from, view)}</div></div></a>`
+      <div class="price">${baseMoney(from, view)}</div></div></a>`
 }
 
 /* ---------------------------------------------------------------- collections */
@@ -225,12 +234,14 @@ export function productPage(
   // The build-option cards are the platform's variant/upsell hybrid: the same
   // product, two ways to buy it, with the difference priced honestly.
   const bundle = bundleFor(view.db, view.store.id, product.id)
-  const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.store.currency, { variantPriceCents: cheapest.priceCents }) : ''
+  const bundleWidget = bundle ? renderBundleWidget(bundle, product, view.totals?.currency ?? view.region?.currency ?? view.store.currency, {
+    variantPriceCents: convertCents(cheapest.priceCents, view.region, view.store.currency), locale: view.region?.locale,
+  }) : ''
   const buildOptions = bundle ? '' : `<div class="buildopts">
     <label class="buildopt" data-selected="true"><input type="radio" name="build" value="stock" checked>
-      <span><strong>Stock build</strong><small>Ships in 14 days &middot; ${money(cheapest.priceCents, view)}</small></span></label>
+      <span><strong>Stock build</strong><small>Ships in 14 days &middot; ${baseMoney(cheapest.priceCents, view)}</small></span></label>
     <label class="buildopt"><input type="radio" name="build" value="custom">
-      <span><strong>Custom stitched</strong><small>Your initials, 21 days &middot; ${money(Math.round(cheapest.priceCents * 1.13), view)}</small></span></label>
+      <span><strong>Custom stitched</strong><small>Your initials, 21 days &middot; ${baseMoney(Math.round(cheapest.priceCents * 1.13), view)}</small></span></label>
   </div>`
 
   const body = `<div class="wrap pdp">
@@ -245,21 +256,21 @@ export function productPage(
     ${stats.count ? `<div class="rating"><span class="stars">${stars(stats.average)}</span> ${stats.average} &middot; ${stats.count} reviews</div>` : ''}
     ${product.subtitle ? `<div class="eyebrow">${escapeHtml(product.subtitle)}</div>` : ''}
     <h1 style="font-size:clamp(2rem,4vw,3rem)">${escapeHtml(product.title)}</h1>
-    <div class="price-row"><div class="price-lg" id="pdp-price">${money(cheapest.priceCents, view)}</div>${cheapest.compareAtCents && cheapest.compareAtCents > cheapest.priceCents ? `<s class="compare-at">${money(cheapest.compareAtCents, view)}</s><span class="off">−${Math.round((1 - cheapest.priceCents / cheapest.compareAtCents) * 100)}%</span>` : ''}</div>
+    <div class="price-row"><div class="price-lg" id="pdp-price">${baseMoney(cheapest.priceCents, view)}</div>${cheapest.compareAtCents && cheapest.compareAtCents > cheapest.priceCents ? `<s class="compare-at">${baseMoney(cheapest.compareAtCents, view)}</s><span class="off">−${Math.round((1 - cheapest.priceCents / cheapest.compareAtCents) * 100)}%</span>` : ''}</div>
     ${pdpSignals(view, product)}
     ${optionBlocks}
     ${buildOptions}
     <form method="post" action="${view.base}/cart/add" class="buyform" id="pdp-form">
       <input type="hidden" name="variantId" id="pdp-variant" value="${escapeHtml(cheapest.id)}">
       ${bundleWidget || '<input type="hidden" name="quantity" value="1">'}
-      <button class="btn btn--wide" type="submit" id="pdp-cta">Add to cart — <span data-total>${money(cheapest.priceCents, view)}</span></button>
+      <button class="btn btn--wide" type="submit" id="pdp-cta">${t(view, 'add', 'Add to cart')} — <span data-total>${baseMoney(cheapest.priceCents, view)}</span></button>
       <button class="btn btn--wide btn--ghost" type="submit" formaction="${view.base}/checkout/buy">Buy it now</button>
     </form>
     <p class="micro">${escapeHtml(product.variants.some((variant) => variant.inventory > 0) ? 'In stock and built to order. Free returns for 30 days.' : 'Made to order. Ships in 14 days.')}</p>
     ${content.benefits?.length ? `<ul class="benefits">${content.benefits.slice(0, 4).map((benefit) => `<li><strong>${escapeHtml(benefit.title)}</strong></li>`).join('')}</ul>` : ''}
     <div class="trust">${(content.trust?.length ? content.trust : [product.tags[0] ?? 'Made in small runs', 'Repaired in-house', 'Free shipping over 200']).map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>
     ${content.guarantee ? `<div class="guarantee"><span class="badge">30</span><div><strong>Thirty-day guarantee</strong><p class="micro" style="margin:.2rem 0 0">${escapeHtml(content.guarantee)}</p></div></div>` : ''}
-    <div class="payicons small"><i>VISA</i><i>MC</i><i>AMEX</i><i>Apple Pay</i><i>Google Pay</i><i>PayPal</i></div>
+    <div class="payicons small"><i>VISA</i><i>MC</i><i>AMEX</i><i>Apple Pay</i><i>Google Pay</i><i>Link</i></div>
     ${product.variants.every((variant) => variant.inventory <= 0 && !variant.allowBackorder) ? `<form method="post" action="${view.base}/products/${escapeHtml(product.handle)}/notify" class="notify"><div class="eyebrow">Sold out — get notified</div><div class="row" style="gap:.5rem"><input name="email" type="email" required placeholder="you@example.com" aria-label="Email"><input type="hidden" name="variantId" value="${escapeHtml(cheapest.id)}"><button class="btn btn--ghost" type="submit">Notify me</button></div></form>` : ''}
     ${renderSlot(view.db, view.store.id, 'pdpBelowAddToCart', { productId: product.id }, { preview: view.preview })}
     ${companions.length ? upsellWidget(view, companions) : ''}
@@ -277,17 +288,22 @@ ${conversionSections(view, product, content)}
 ${reviewsSection(view, product, stats, reviews)}
 ${qaSection(view, product)}
 <div class="stickybar" id="stickybar">
-  <div><div class="t">${escapeHtml(product.title)}</div><div class="p" id="sticky-price">${money(cheapest.priceCents, view)}</div></div>
-  <button class="btn" type="button" aria-label="Add to cart" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">Add to cart</button>
+  <div><div class="t">${escapeHtml(product.title)}</div><div class="p" id="sticky-price">${baseMoney(cheapest.priceCents, view)}</div></div>
+  <button class="btn" type="button" aria-label="Add to cart" onclick="document.getElementById('pdp-cta').closest('form').requestSubmit()">${t(view, 'add', 'Add to cart')}</button>
 </div>
 <script>
 (function(){
   var variants = ${JSON.stringify(
     product.variants.map((variant) => ({ id: variant.id, price: variant.priceCents, values: Object.values(variant.optionValues), stock: variant.inventory })),
   )};
-  var fmt = ${JSON.stringify({ currency: view.totals?.currency ?? view.store.currency })};
+  var fmt = ${JSON.stringify({
+    currency: view.totals?.currency ?? view.region?.currency ?? view.store.currency,
+    locale: view.region?.locale ?? 'en-US',
+    factor: convertCents(100, view.region, view.store.currency) / 100,
+    minor: minorDigits(view.totals?.currency ?? view.region?.currency ?? view.store.currency),
+  })};
   var chosen = variants[0] ? variants[0].values.slice() : [];
-  function money(cents){ try { return new Intl.NumberFormat('en-US',{style:'currency',currency:fmt.currency}).format(cents/100) } catch(e){ return (cents/100).toFixed(2) } }
+  function money(cents){ cents=Math.round(cents*fmt.factor);var value=cents/Math.pow(10,fmt.minor);try { return new Intl.NumberFormat(fmt.locale,{style:'currency',currency:fmt.currency}).format(value) } catch(e){ return value.toFixed(fmt.minor) } }
   function sync(){
     var match = variants.find(function(v){ return chosen.every(function(value,index){ return v.values[index] === undefined || v.values[index] === value }) }) || variants[0];
     if(!match) return;
@@ -421,19 +437,21 @@ export function trackPage(view: StoreView, input: { tracking?: TrackingView | nu
 export function bumpHtml(view: StoreView, bump: ResolvedBump | null): string {
   if (!bump) return ''
   return `<label class="bump"><input type="checkbox" name="bumpVariantId" value="${escapeHtml(bump.variantId)}" ${bump.product.metadata.kind === 'shipping-protection' ? 'checked' : ''}>
-    <span><strong>${escapeHtml(bump.label)} — ${money(bump.priceCents, view)}</strong><span class="micro" style="display:block">${escapeHtml(bump.text)}</span></span></label>`
+    <span><strong>${escapeHtml(bump.label)} — ${baseMoney(bump.priceCents, view)}</strong><span class="micro" style="display:block">${escapeHtml(bump.text)}</span></span></label>`
 }
 
 export function offerPage(view: StoreView, order: Order, offer: ResolvedOffer, step: 'upsell' | 'downsell'): string {
-  const price = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+  const basePrice = Math.round(offer.priceCents * (1 - offer.discountPercent / 100))
+  const price = convertCents(basePrice, view.region, view.store.currency)
+  const compareAt = convertCents(offer.priceCents, view.region, view.store.currency)
   const body = `<section class="wrap upsell-page">
     <div class="eyebrow">Order #${order.displayId} confirmed — ${step === 'downsell' ? 'one last thing' : 'one more thing'}</div>
     <h1 style="font-size:clamp(1.8rem,4vw,2.8rem);margin:.6rem 0 1.2rem">${escapeHtml(offer.headline)}</h1>
     <div class="upsell-card"><img src="${escapeHtml(offer.product.heroImage)}" alt="${escapeHtml(offer.product.title)}">
       <div><p class="lead" style="margin:0 0 .6rem">${escapeHtml(offer.text)}</p>
-        <div class="price-lg">${format(price, order.currency)} ${offer.discountPercent ? `<s class="micro">${format(offer.priceCents, order.currency)}</s>` : ''}</div>
+        <div class="price-lg">${format(price, order.currency, view.region?.locale)} ${offer.discountPercent ? `<s class="micro">${format(compareAt, order.currency, view.region?.locale)}</s>` : ''}</div>
         <p class="micro">Ships with your order. ${order.paymentProvider === 'stripe' ? 'Charged to the card you just used — no form.' : 'Added to your order in one click.'}</p>
-        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency)}</button></form>
+        <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" class="row" style="gap:.6rem;margin-top:1rem"><input type="hidden" name="accept" value="yes"><button class="btn" type="submit">Yes, add it — ${format(price, order.currency, view.region?.locale)}</button></form>
         <form method="post" action="${view.base}/orders/${escapeHtml(order.id)}/${step}" style="margin-top:.6rem"><input type="hidden" name="accept" value="no"><button class="btn btn--ghost" type="submit" style="border:0;padding:.5rem 0">No thanks${step === 'upsell' ? '' : ', take me to my order'}</button></form>
       </div></div></section>`
   return layout(view, { title: `One more thing — ${view.store.name}`, description: 'Your order', body, bare: true })
@@ -446,7 +464,7 @@ function upsellWidget(view: StoreView, companions: Product[]): string {
         const variant = product.variants[0]
         if (!variant) return ''
         return `<div class="row"><img src="${escapeHtml(product.heroImage)}" alt="">
-          <div><div style="font-size:.95rem">${escapeHtml(product.title)}</div><div class="micro">${money(variant.priceCents, view)}</div></div>
+          <div><div style="font-size:.95rem">${escapeHtml(product.title)}</div><div class="micro">${baseMoney(variant.priceCents, view)}</div></div>
           <form method="post" action="${view.base}/cart/add">
             <input type="hidden" name="variantId" value="${escapeHtml(variant.id)}">
             <input type="hidden" name="source" value="upsell-pdp">
@@ -496,7 +514,7 @@ export function cartPage(view: StoreView, totals: Totals): string {
   const cart = view.cart
   const items = cart?.items ?? []
   const gap = totals.freeShippingGapCents
-  const body = `<section class="wrap"><div class="section-head"><h2>Your cart</h2><span class="eyebrow">${items.length} lines</span></div>
+  const body = `<section class="wrap"><div class="section-head"><h2>${t(view, 'cart', 'Your cart')}</h2><span class="eyebrow">${items.length} lines</span></div>
   ${items.length
       ? `<div style="display:grid;gap:3rem;grid-template-columns:1.4fr .8fr;align-items:start">
     <table class="lines">${items
@@ -507,17 +525,17 @@ export function cartPage(view: StoreView, totals: Totals): string {
           <input type="hidden" name="variantId" value="${escapeHtml(item.variantId)}">
           <input name="quantity" type="number" min="0" value="${item.quantity}" style="width:72px" aria-label="Quantity">
           <button class="btn btn--ghost" style="padding:.5rem .7rem;font-size:11px" type="submit">Set</button></form></td>
-        <td style="width:110px;text-align:right">${money(item.unitCents * item.quantity, view)}</td></tr>`,
+        <td style="width:110px;text-align:right">${baseMoney(item.unitCents * item.quantity, view)}</td></tr>`,
       )
       .join('')}</table>
     <div>
       ${gap !== null && gap > 0 ? `<div class="notice" style="margin-bottom:1rem"><div class="gap"><span>${money(gap, view)} to free shipping</span></div>
         <div class="gap" style="margin-top:.5rem"><span class="track"><span class="fill" style="width:${Math.min(100, (1 - gap / 20000) * 100)}%"></span></span></div></div>` : ''}
       <form method="post" action="${view.base}/cart/code" style="display:flex;gap:.5rem;margin-bottom:1.2rem">
-        <input name="code" placeholder="Discount code" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code">
-        <button class="btn btn--ghost" type="submit">Apply</button></form>
+        <input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code">
+        <button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
       ${totalsBlock(view, totals)}
-      <a class="btn btn--wide" style="margin-top:1rem" href="${view.base}/checkout">Checkout</a>
+      <a class="btn btn--wide" style="margin-top:1rem" href="${view.base}/checkout">${t(view, 'checkout', 'Checkout')}</a>
       ${renderSlot(view.db, view.store.id, 'cartDrawer', {}, { preview: view.preview })}
     </div></div>`
       : `<p class="micro">Your cart is empty. <a href="${view.base}/collections/all">Have a look around</a>.</p>`}
@@ -527,13 +545,13 @@ export function cartPage(view: StoreView, totals: Totals): string {
 
 export function totalsBlock(view: StoreView, totals: Totals): string {
   return `<div class="totals">
-    <div><span>Subtotal</span><span>${money(totals.subtotalCents, view)}</span></div>
+    <div><span>${t(view, 'subtotal', 'Subtotal')}</span><span>${money(totals.subtotalCents, view)}</span></div>
     ${totals.appliedPromotions
       .map((promotion) => `<div><span>${escapeHtml(promotion.title)}${promotion.code ? ` (${escapeHtml(promotion.code)})` : ''}</span><span>${promotion.amountCents ? `-${money(promotion.amountCents, view)}` : 'applied'}</span></div>`)
       .join('')}
-    <div><span>Shipping</span><span>${totals.shippingCents ? money(totals.shippingCents, view) : 'Free'}</span></div>
-    ${totals.taxCents ? `<div><span>Tax</span><span>${money(totals.taxCents, view)}</span></div>` : ''}
-    <div class="grand"><span>Total</span><span>${money(totals.totalCents, view)}</span></div>
+    <div><span>${t(view, 'shipping', 'Shipping')}</span><span>${totals.shippingCents ? money(totals.shippingCents, view) : 'Free'}</span></div>
+    ${totals.taxCents ? `<div><span>${t(view, 'tax', 'Tax')}</span><span>${money(totals.taxCents, view)}</span></div>` : ''}
+    <div class="grand"><span>${t(view, 'total', 'Total')}</span><span>${money(totals.totalCents, view)}</span></div>
   </div>`
 }
 
@@ -580,16 +598,16 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const summary = `<div class="summary-body">
     <table class="lines">${items.map((item) => `<tr><td style="width:64px"><span class="thumb"><img src="${escapeHtml(item.image)}" alt=""><b>${item.quantity}</b></span></td>
       <td><div>${escapeHtml(item.title)}</div><div class="micro">${escapeHtml(item.variantTitle)}</div></td>
-      <td style="text-align:right">${item.unitCents ? money(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
-    <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="Discount code" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">Apply</button></form>
+      <td style="text-align:right">${item.unitCents ? baseMoney(item.unitCents * item.quantity, view) : 'Free'}</td></tr>`).join('')}</table>
+    <form method="post" action="${view.base}/cart/code" class="code"><input name="code" placeholder="${t(view, 'discount', 'Discount code')}" value="${escapeHtml(cart?.discountCode ?? '')}" aria-label="Discount code"><button class="btn btn--ghost" type="submit">${t(view, 'apply', 'Apply')}</button></form>
     ${totalsBlock(view, totals)}</div>`
   const bump = input.bump && !items.some((item) => item.variantId === input.bump?.variantId) ? `<section class="co-block">${bumpHtml(view, input.bump)}</section>` : ''
   const express = input.stripe ? `<div class="express"><div class="eyebrow">Express checkout</div><div id="express-element"></div><div class="or"><span>or</span></div></div>` : ''
   const form = `<form method="post" action="${view.base}/checkout" id="checkout-form" novalidate>
-      <section class="co-block"><h2>Contact</h2>
+      <section class="co-block"><h2>${t(view, 'contact', 'Contact')}</h2>
         <div class="field"><input name="email" type="email" required autocomplete="email" placeholder="Email" value="${escapeHtml(draft.email ?? '')}" aria-label="Email"></div>
         <label class="micro check"><input type="checkbox" name="marketing" value="true" ${draft.marketing ? 'checked' : ''}> Email me with news and offers</label></section>
-      <section class="co-block"><h2>Delivery</h2>
+      <section class="co-block"><h2>${t(view, 'delivery', 'Delivery')}</h2>
         <div class="field"><select name="country" autocomplete="country" aria-label="Country">${(region?.countries.length ? region.countries : ['US']).map((country) => `<option value="${escapeHtml(country)}" ${draft.address?.country === country ? 'selected' : ''}>${escapeHtml(countryName(country))}</option>`).join('')}</select></div>
         <div class="two"><div class="field"><input name="firstName" required autocomplete="given-name" placeholder="First name" value="${escapeHtml((draft.name ?? '').split(' ')[0] ?? '')}" aria-label="First name"></div>
           <div class="field"><input name="lastName" required autocomplete="family-name" placeholder="Last name" value="${escapeHtml((draft.name ?? '').split(' ').slice(1).join(' '))}" aria-label="Last name"></div></div>
@@ -600,7 +618,7 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
       <section class="co-block"><h2>Shipping method</h2>${arrival ? `<p class="micro" style="margin-top:-.4rem">🚚 Arrives ${escapeHtml(arrival.from)}–${escapeHtml(arrival.to)}</p>` : ''}
         <div class="methods" id="methods">${shipping.length ? shipping.map((option) => `<label class="method"><input type="radio" name="shippingOptionId" value="${escapeHtml(option.id)}" ${option.selected ? 'checked' : ''} data-amount="${option.amountCents}"><span>${escapeHtml(option.name)}</span><b>${option.amountCents ? money(option.amountCents, view) : option.listCents ? `<s class="micro">${money(option.listCents, view)}</s> Free` : 'Free'}</b></label>`).join('') : '<p class="micro">Enter your address to see shipping.</p>'}</div></section>
       <!--bump-->
-      <section class="co-block"><h2>Payment</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
+      <section class="co-block"><h2>${t(view, 'payment', 'Payment')}</h2><p class="micro" style="margin-top:-.4rem">All transactions are secure and encrypted.</p>
         ${input.stripe ? '<div id="payment-element" class="pay-el"></div><div id="payment-error" class="micro" style="color:#b3261e"></div>' : `<div class="pay-demo"><div class="row"><strong>Card</strong><span class="cards"><i>VISA</i><i>MC</i><i>AMEX</i></span></div>
           <p class="micro">No payment provider is connected on this store, so the order is placed without a charge. Connect Stripe in the admin and this block becomes the card form, Apple Pay, Google Pay and Link.</p></div>`}
         <label class="micro check" style="margin-top:.8rem"><input type="checkbox" name="billingSame" value="true" checked> Billing address same as shipping</label></section>
@@ -609,8 +627,8 @@ export function checkoutParts(view: StoreView, input: CheckoutInput): { summary:
   const script = `<script>
 (function(){
   var base = ${JSON.stringify(view.base)};
-  var fmt = ${JSON.stringify({ currency: totals.currency })};
-  function money(c){ try { return new Intl.NumberFormat('en-US',{style:'currency',currency:fmt.currency}).format(c/100) } catch(e){ return (c/100).toFixed(2) } }
+  var fmt = ${JSON.stringify({ currency: totals.currency, minor: minorDigits(totals.currency) })};
+  function money(c){ var value=c/Math.pow(10,fmt.minor);try { return new Intl.NumberFormat(${JSON.stringify(view.region?.locale ?? 'en-US')},{style:'currency',currency:fmt.currency}).format(value) } catch(e){ return value.toFixed(fmt.minor) } }
   function refresh(t){
     document.querySelectorAll('[data-pay-total], .co-summary-mobile summary b').forEach(function(el){ el.textContent = money(t.totalCents) });
     document.querySelectorAll('.totals').forEach(function(el){ el.outerHTML = t.totalsHtml });
@@ -655,7 +673,7 @@ export function checkoutPage(view: StoreView, input: CheckoutInput): string {
     ${input.error ? `<div class="notice" style="border-left-color:#b3261e;margin-bottom:1.2rem">${escapeHtml(input.error)}</div>` : ''}
     <details class="co-summary-mobile"><summary><span>Show order summary</span><b>${money(totals.totalCents, view)}</b></summary>${parts.summary}</details>
     ${parts.express}
-    ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', 'Pay now')}
+    ${parts.form.replace('<!--bump-->', parts.bump).replace('<!--pay-label-->', t(view, 'pay', 'Pay now'))}
     <p class="micro center">${parts.note}</p>
     ${parts.proof}
   </div>
@@ -675,7 +693,7 @@ ${parts.script}`
 export function checkoutBlockPage(view: StoreView, page: Page, input: CheckoutInput, opts: { sample?: boolean } = {}): string {
   const parts = checkoutParts(view, input)
   const context: BlockContext = {
-    ...blockContextFor(view.db, view.store, view.base),
+    ...blockContextFor(view.db, view.store, view.base, view.region ? { currency: view.region.currency, exchangeRate: view.region.exchangeRate, locale: view.region.locale } : undefined),
     checkout: {
       formHtml: parts.form,
       summaryHtml: parts.summary,

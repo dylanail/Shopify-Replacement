@@ -156,7 +156,7 @@ export const FIRST_PARTY: Plugin[] = [
     category: 'Marketing & Email',
     source: 'first-party',
     regions: [],
-    description: 'Browser pixel plus server-side conversions, deduplicated on one event id.',
+    description: 'Browser pixel plus durable server-side conversions; purchases share one event id for deduplication.',
     manifest: {
       kind: 'integration',
       admin: {
@@ -188,28 +188,33 @@ export const FIRST_PARTY: Plugin[] = [
   },
   {
     id: 'tiktok-pixel',
-    name: 'TikTok Pixel',
-    version: '1.0.0',
+    name: 'TikTok Pixel + Events API',
+    version: '1.1.0',
     npmPackage: '@amboras/tiktok-ads',
     category: 'Marketing & Email',
     source: 'first-party',
     regions: [],
-    description: 'Page views, add-to-cart and purchases to TikTok Ads.',
+    description: 'Browser pixel plus durable server-side web events; purchases share one event id for deduplication.',
     manifest: {
-      kind: 'ux_module',
+      kind: 'integration',
       admin: {
         hasSettings: true,
         settingsRoute: '/plugins/tiktok-pixel/settings',
-        settingsSchema: { pixelId: { type: 'string', label: 'Pixel ID', pattern: '^[A-Z0-9]{10,30}$', required: true } },
-        aiTools: [{ name: 'connect_tiktok_pixel', description: 'Install the TikTok pixel.', schema: { pixelId: { type: 'string', required: true } }, example: "connect_tiktok_pixel({ pixelId: 'CABC123…' })" }],
+        settingsSchema: {
+          pixelId: { type: 'string', label: 'Pixel ID', pattern: '^[A-Z0-9]{10,30}$', required: true },
+          accessToken: { type: 'string', label: 'Events API access token', help: 'Sealed at rest. Without it only the browser pixel fires.' },
+        },
+        secretFields: ['accessToken'],
+        aiTools: [{ name: 'connect_tiktok_pixel', description: 'Install the TikTok pixel and, if a token is given, the Events API.', schema: { pixelId: { type: 'string', required: true }, accessToken: { type: 'string' } }, example: "connect_tiktok_pixel({ pixelId: 'CABC123…' })" }],
       },
       storefront: {
         components: [
           { id: 'TikTokPixel', slot: 'headEnd', placement: 'fixed', render: ({ settings }) => `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]=n||{};var o=document.createElement("script");o.type="text/javascript";o.async=!0;o.src=i+"?sdkid="+e+"&lib="+t;var a=document.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load('${escapeHtml(settings.pixelId)}');ttq.page();}(window,document,'ttq');</script>` },
-          { id: 'TikTokPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('CompletePayment',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}',content_id:'${escapeHtml(context.orderId ?? '')}'})</script>` },
+          { id: 'TikTokPurchase', slot: 'orderConfirmed', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('CompletePayment',{value:${Number(context.total ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}',content_id:'${escapeHtml(context.orderId ?? '')}'},{event_id:'${escapeHtml(context.orderId ?? '')}'})</script>` },
           { id: 'TikTokAddToCart', slot: 'cartUpdate', placement: 'fixed', render: ({ context }) => `<script>window.ttq&&ttq.track('AddToCart',{value:${Number(context.amount ?? 0) / 100},currency:'${escapeHtml(context.currency ?? 'USD')}'})</script>` },
         ],
       },
+      capabilities: [{ id: 'tiktok', type: 'analytics_sink', label: 'TikTok Events API' }],
       disableInPreview: true,
     },
   },

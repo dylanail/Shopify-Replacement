@@ -12,10 +12,11 @@ import { catalog, modelFor, parseChoice, TASKS, type Task } from '../agent/model
 import { listTodos, recordAudit, refreshTodos, seedTodos } from '../control/todos.ts'
 import { createCollection, listProducts, updateProduct, updateVariant } from '../domain/catalog.ts'
 import { fulfillOrder, refundOrder } from '../domain/orders.ts'
-import { setPromotionStatus } from '../domain/promotions.ts'
+import { createPromotion, setPromotionStatus } from '../domain/promotions.ts'
 import { moderate } from '../domain/reviews.ts'
 import { getSend } from '../email/send.ts'
-import { ask, history } from '../agent/chat.ts'
+import { history } from '../agent/chat.ts'
+import { cancelAssistantRequest, drainAssistantQueue, enqueueAssistantRequest, listAssistantQueue } from '../agent/queue.ts'
 import { execute } from '../agent/registry.ts'
 import { saveUpload, UploadError } from '../lib/uploads.ts'
 import { createPage, deletePage, duplicatePage, getPage, pageTemplate, updatePage } from '../pages/store.ts'
@@ -51,6 +52,8 @@ import { listAvatars, getAvatar } from '../agent/avatars.ts'
 import { saveLegal } from '../storefront/legal.ts'
 import { registerOrderTracking } from '../shipping/seventeen-track.ts'
 import { exportStore } from '../control/export.ts'
+import { addShippingOption, createRegion, getRegion, updateRegion } from '../domain/regions.ts'
+import { listFlows, runFlow, updateFlow } from '../email/flows.ts'
 
 const STORE_COOKIE = 'amboras_store'
 
@@ -82,6 +85,7 @@ function page(ctx: Ctx, current: Session, active: string, title: string, body: s
       body,
       todos: listTodos(db, current.store.id),
       messages: history(db, current.store.id, 20),
+      queue: listAssistantQueue(db, current.store.id, 8),
       publish: publishState(db, current.store.id),
       userName: current.user.name || current.user.email.split('@')[0] || 'there',
       storeUrl: storeUrl(ctx, current.store),
@@ -763,6 +767,35 @@ export function adminRouter(): Router {
     return back(ctx, 'Promotion disabled.')
   })
 
+  router.post('/admin/promotions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const requestedKind = String(body.kind ?? 'percentage')
+    const allowedKinds: Array<Parameters<typeof createPromotion>[2]['kind']> = ['percentage', 'fixed', 'free_shipping', 'bundle', 'tiered', 'bogo', 'mix_match', 'fixed_bundle']
+    if (!allowedKinds.includes(requestedKind as Parameters<typeof createPromotion>[2]['kind'])) return badRequest('Unsupported promotion type.')
+    const kind = requestedKind as Parameters<typeof createPromotion>[2]['kind']
+    const productIds = String(body.productIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    const buyProductIds = String(body.buyProductIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    const getProductIds = String(body.getProductIds ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
+    createPromotion(db(), current.store.id, {
+      title: String(body.title ?? 'New promotion'), kind,
+      value: Math.max(0, Number(body.value ?? 0)), code: String(body.code ?? ''), automatic: body.automatic === 'true',
+      rules: {
+        ...(productIds.length ? { productIds } : {}), ...(buyProductIds.length ? { buyProductIds } : {}), ...(getProductIds.length ? { getProductIds } : {}),
+        ...(body.minSubtotalCents ? { minSubtotalCents: Number(body.minSubtotalCents) } : {}),
+        ...(body.minQuantity ? { minQuantity: Number(body.minQuantity) } : {}),
+        ...(body.buyQuantity ? { buyQuantity: Number(body.buyQuantity) } : {}),
+        ...(body.getQuantity ? { getQuantity: Number(body.getQuantity) } : {}),
+        ...(body.requiredDistinctProducts ? { requiredDistinctProducts: Number(body.requiredDistinctProducts) } : {}),
+        ...(body.bundlePriceCents ? { bundlePriceCents: Number(body.bundlePriceCents) } : {}),
+        ...(body.maxUses ? { maxUses: Number(body.maxUses) } : {}),
+        ...(body.regionId ? { regionIds: [String(body.regionId)] } : {}),
+        priority: Number(body.priority ?? 0), combinable: body.combinable === 'true', firstOrderOnly: body.firstOrderOnly === 'true',
+      },
+    })
+    return back(ctx, 'Promotion created.')
+  })
+
   router.get('/admin/analytics', (ctx) => {
     const current = session(ctx)
     return page(ctx, current, 'analytics', 'Analytics', pages.analyticsPage(ctxFor(current, ctx), range(ctx)))
@@ -863,6 +896,59 @@ export function adminRouter(): Router {
   router.get('/admin/settings', (ctx) => {
     const current = session(ctx)
     return page(ctx, current, 'settings', 'Settings', pages.settingsPage(ctxFor(current, ctx)))
+  })
+
+  router.post('/admin/settings/regions', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    createRegion(db(), current.store.id, {
+      name: String(body.name ?? 'Region'), currency: String(body.currency ?? current.store.currency),
+      locale: String(body.locale ?? 'en-US'), exchangeRate: Number(body.exchangeRate ?? 1),
+      countries: String(body.countries ?? '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean),
+      taxRate: Number(body.taxRate ?? 0) / 100,
+    })
+    return back(ctx, 'Market added.')
+  })
+
+  router.post('/admin/settings/regions/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    updateRegion(db(), current.store.id, ctx.params.id as string, {
+      name: String(body.name ?? ''), currency: String(body.currency ?? current.store.currency), locale: String(body.locale ?? 'en-US'),
+      exchangeRate: Number(body.exchangeRate ?? 1), countries: String(body.countries ?? '').split(',').map((entry) => entry.trim().toUpperCase()).filter(Boolean),
+      taxRate: Number(body.taxRate ?? 0) / 100, isDefault: body.isDefault === 'true',
+    })
+    return back(ctx, 'Market saved.')
+  })
+
+  router.post('/admin/settings/regions/:id/shipping', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    const region = getRegion(db(), current.store.id, ctx.params.id as string)
+    if (!region) throw notFound('No such market')
+    addShippingOption(db(), region.id, {
+      name: String(body.name ?? 'Standard shipping'), amountCents: Math.max(0, Number(body.amountCents ?? 0)),
+      freeAboveCents: body.freeAboveCents ? Math.max(0, Number(body.freeAboveCents)) : null,
+    })
+    return back(ctx, 'Shipping option added.')
+  })
+
+  router.post('/admin/marketing/flows/:id', async (ctx) => {
+    const current = session(ctx)
+    const body = await ctx.body()
+    updateFlow(db(), current.store.id, ctx.params.id as string, {
+      name: String(body.name ?? ''), delayHours: Number(body.delayHours ?? 0), subject: String(body.subject ?? ''),
+      body: String(body.body ?? ''), status: body.status === 'paused' ? 'paused' : 'active',
+    })
+    return back(ctx, 'Flow saved.')
+  })
+
+  router.post('/admin/marketing/flows/:id/run', async (ctx) => {
+    const current = session(ctx)
+    const flow = listFlows(db(), current.store.id).find((entry) => entry.id === ctx.params.id)
+    if (!flow) throw notFound('No such flow')
+    const sent = await runFlow(db(), flow, process.env.AMBORAS_PUBLIC_ORIGIN ?? ctx.url.origin)
+    return back(ctx, sent ? `Sent ${sent} message${sent === 1 ? '' : 's'}.` : 'No eligible unsent customers right now.')
   })
 
   router.get('/admin/settings/export', (ctx) => {
@@ -1449,13 +1535,20 @@ export function adminRouter(): Router {
     const body = await ctx.body()
     const text = String(body.text ?? '').trim()
     if (!text) return back(ctx)
-    const result = await ask(db(), {
+    const request = enqueueAssistantRequest(db(), {
       storeId: current.store.id,
       userId: current.user.id,
       text,
       page: String(body.page ?? ''),
     })
-    return back(ctx, result.failures.length ? `!${result.failures[0]}` : undefined)
+    queueMicrotask(() => void drainAssistantQueue(db(), current.store.id).catch(() => undefined))
+    return back(ctx, `Request ${request.id.slice(-6)} queued.`)
+  })
+
+  router.post('/admin/assistant/queue/:id/cancel', (ctx) => {
+    const current = session(ctx)
+    const cancelled = cancelAssistantRequest(db(), current.store.id, ctx.params.id as string)
+    return back(ctx, cancelled ? 'Queued request cancelled.' : '!Only waiting requests can be cancelled.')
   })
 
   /** The live activity stream behind the rail dots. */

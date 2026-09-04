@@ -1,5 +1,6 @@
 import { bool, json, type Db, type Row } from '../lib/db.ts'
 import { id } from '../lib/ids.ts'
+import { minorDigits } from '../lib/money.ts'
 
 export type ShippingOption = {
   id: string
@@ -15,6 +16,8 @@ export type Region = {
   storeId: string
   name: string
   currency: string
+  locale: string
+  exchangeRate: number
   countries: string[]
   taxRate: number
   isDefault: boolean
@@ -38,6 +41,8 @@ export function listRegions(db: Db, storeId: string): Region[] {
     storeId,
     name: row.name as string,
     currency: row.currency as string,
+    locale: (row.locale as string) || 'en-US',
+    exchangeRate: Number(row.exchange_rate ?? 1),
     countries: json(row.countries, [] as string[]),
     taxRate: row.tax_rate as number,
     isDefault: bool(row.is_default),
@@ -57,7 +62,7 @@ export function getRegion(db: Db, storeId: string, regionId: string): Region | n
 export function createRegion(
   db: Db,
   storeId: string,
-  input: { name: string; currency: string; countries: string[]; taxRate?: number; isDefault?: boolean },
+  input: { name: string; currency: string; countries: string[]; locale?: string; exchangeRate?: number; taxRate?: number; isDefault?: boolean },
 ): Region {
   const regionId = id('reg')
   db.tx(() => {
@@ -68,12 +73,55 @@ export function createRegion(
       store_id: storeId,
       name: input.name,
       currency: input.currency.toUpperCase(),
+      locale: input.locale ?? 'en-US',
+      exchange_rate: Math.max(0.000001, input.exchangeRate ?? 1),
       countries: input.countries,
       tax_rate: input.taxRate ?? 0,
       is_default: input.isDefault ?? existing === 0,
     })
   })
   return getRegion(db, storeId, regionId) as Region
+}
+
+export function updateRegion(
+  db: Db,
+  storeId: string,
+  regionId: string,
+  input: { name?: string; currency?: string; countries?: string[]; locale?: string; exchangeRate?: number; taxRate?: number; isDefault?: boolean },
+): Region {
+  const region = getRegion(db, storeId, regionId)
+  if (!region) throw new Error('No such region')
+  if (input.isDefault) db.run('UPDATE regions SET is_default = 0 WHERE store_id = ?', storeId)
+  db.update('regions', regionId, {
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.currency !== undefined ? { currency: input.currency.toUpperCase() } : {}),
+    ...(input.countries !== undefined ? { countries: input.countries } : {}),
+    ...(input.locale !== undefined ? { locale: input.locale } : {}),
+    ...(input.exchangeRate !== undefined ? { exchange_rate: Math.max(0.000001, input.exchangeRate) } : {}),
+    ...(input.taxRate !== undefined ? { tax_rate: input.taxRate } : {}),
+    ...(input.isDefault !== undefined ? { is_default: input.isDefault } : {}),
+  })
+  return getRegion(db, storeId, regionId) as Region
+}
+
+export function regionForCountry(db: Db, storeId: string, country: string): Region | null {
+  const normalized = country.trim().toUpperCase()
+  return listRegions(db, storeId).find((region) => region.countries.map((entry) => entry.toUpperCase()).includes(normalized)) ?? defaultRegion(db, storeId)
+}
+
+export function convertCents(cents: number, region: Region | null | undefined, sourceCurrency = 'USD'): number {
+  if (!region) return cents
+  const sourceScale = 10 ** minorDigits(sourceCurrency)
+  const targetScale = 10 ** minorDigits(region.currency)
+  return Math.round((cents / sourceScale) * region.exchangeRate * targetScale)
+}
+
+/** Reverse a charged regional amount into the store's base minor unit. */
+export function toBaseCents(cents: number, region: Region | null | undefined, baseCurrency = 'USD'): number {
+  if (!region) return cents
+  const targetScale = 10 ** minorDigits(region.currency)
+  const baseScale = 10 ** minorDigits(baseCurrency)
+  return Math.round((cents / targetScale / region.exchangeRate) * baseScale)
 }
 
 export function addShippingOption(
@@ -119,6 +167,8 @@ export function seedDefaultRegion(db: Db, storeId: string, currency: string): Re
   const region = createRegion(db, storeId, {
     name: 'United States',
     currency,
+    locale: 'en-US',
+    exchangeRate: 1,
     countries: ['US'],
     taxRate: 0,
     isDefault: true,

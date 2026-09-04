@@ -124,6 +124,8 @@ export type Order = {
   shippingCents: Cents
   taxCents: Cents
   totalCents: Cents
+  /** Total converted back to the store currency at checkout time. */
+  baseTotalCents: Cents
   discountCode: string
   status: 'pending' | 'completed' | 'cancelled'
   paymentStatus: 'awaiting' | 'captured' | 'refunded' | 'partially_refunded'
@@ -151,6 +153,8 @@ export type PromotionKind =
   | 'bogo'
   | 'bundle'
   | 'tiered'
+  | 'mix_match'
+  | 'fixed_bundle'
 
 export type Promotion = {
   id: string
@@ -167,11 +171,18 @@ export type Promotion = {
     collectionIds?: string[]
     buyQuantity?: number
     getQuantity?: number
+    buyProductIds?: string[]
+    getProductIds?: string[]
+    requiredDistinctProducts?: number
+    bundlePriceCents?: number
     tiers?: Array<{ quantity: number; percent: number }>
     regionIds?: string[]
     firstOrderOnly?: boolean
     /** Minimum eligible units before the promotion pays out (bundle tiers). */
     minQuantity?: number
+    maxUses?: number
+    priority?: number
+    combinable?: boolean
   }
   automatic: boolean
   status: 'active' | 'scheduled' | 'disabled' | 'expired'
